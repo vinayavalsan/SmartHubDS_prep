@@ -1,0 +1,7 @@
+pandas
+pyarrow
+streamlit
+plotly
+python-dotenv
+sshtunnel
+redshift-connector
