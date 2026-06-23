@@ -1,7 +1,7 @@
 # SmartHub Anton
 
 ## SmartHub Anton Prep
-The prep folder repository contains two scripts for pulling lead data and visualizing it in a Streamlit dashboard.
+The prep folder in this repository contains two scripts for pulling lead data and visualizing it in a Streamlit dashboard.
 
 ### Files
 
