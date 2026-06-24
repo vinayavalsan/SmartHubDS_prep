@@ -1,0 +1,11 @@
+.git
+.idea
+.venv
+venv
+__pycache__
+*.pyc
+.env
+*.parquet
+tests
+.pytest_cache
+.flake8
