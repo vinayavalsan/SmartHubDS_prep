@@ -22,6 +22,8 @@ LEGEND_WHITELIST = [
     "state",
     "campaign_id",
     "lead_type_id",
+    "account_id",
+    "bidding_strategy_id",
     "insured",
     "home_owner",
     "dui",

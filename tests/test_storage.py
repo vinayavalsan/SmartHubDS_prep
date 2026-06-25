@@ -1,0 +1,138 @@
+"""Tests for the DuckDB + partitioned-Parquet storage backends."""
+
+import pandas as pd
+import pytest
+
+from smarthub import storage
+from smarthub.config import StorageSettings
+
+
+def _frame(ids, won, updated):
+    n = len(ids)
+    return pd.DataFrame(
+        {
+            "id": ids,
+            "won": won,
+            "updated_at": pd.to_datetime(updated),
+            "created_at": pd.to_datetime(["2026-06-20 01:00"] * n),
+            "pst_date": pd.to_datetime(["2026-06-20"] * n),
+        }
+    )
+
+
+# --- DuckDB ---
+
+
+def test_duckdb_upsert_updates_in_place(tmp_path):
+    db = tmp_path / "s.duckdb"
+    first = _frame([1, 2], ["false", "false"], ["2026-06-20 02:00", "2026-06-20 02:00"])
+    assert storage.append_duckdb(first, path=db) == 2
+
+    # re-pull id=1 with a resolved outcome -> should update, not duplicate
+    second = _frame([1, 3], ["true", "false"], ["2026-06-20 05:00", "2026-06-20 05:00"])
+    assert storage.append_duckdb(second, path=db) == 3  # ids 1,2,3
+
+    out = storage.read_duckdb_table(path=db).set_index("id")
+    assert out.loc[1, "won"] == "true"  # updated
+    assert len(out) == 3
+
+
+def test_duckdb_window(tmp_path):
+    db = tmp_path / "s.duckdb"
+    df = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "created_at": pd.to_datetime(
+                ["2026-06-01 00:00", "2026-06-19 00:00", "2026-06-20 00:00"]
+            ),
+        }
+    )
+    storage.append_duckdb(df, path=db)
+    recent = storage.read_duckdb_window(7, path=db)  # anchored on max = 06-20
+    assert set(recent["id"]) == {2, 3}
+
+
+def test_duckdb_adds_new_columns(tmp_path):
+    # Schema evolution: a later pull with extra columns should ALTER the table,
+    # not error. Existing rows get NULL for the new column.
+    db = tmp_path / "s.duckdb"
+    storage.append_duckdb(_frame([1], ["false"], ["2026-06-20 02:00"]), path=db)
+    extra = _frame([2], ["false"], ["2026-06-20 02:00"]).assign(expected_revenue=9.5)
+    storage.append_duckdb(extra, path=db)
+
+    out = storage.read_duckdb_table(path=db).set_index("id")
+    assert "expected_revenue" in out.columns
+    assert out.loc[2, "expected_revenue"] == 9.5
+    assert pd.isna(out.loc[1, "expected_revenue"])  # backfilled NULL
+
+
+# --- Partitioned Parquet ---
+
+
+def test_parquet_partition_layout_and_dedupe(tmp_path):
+    root = tmp_path / "leads"
+    first = _frame([1, 2], ["false", "false"], ["2026-06-20 02:00", "2026-06-20 02:00"])
+    storage.append_parquet(first, root)
+
+    expected = root / "2026" / "06" / "20-06-2026.parquet"
+    assert expected.exists()
+
+    # same-day re-pull with id=1 resolved -> merged + deduped (latest wins)
+    second = _frame([1], ["true"], ["2026-06-20 06:00"])
+    storage.append_parquet(second, root)
+
+    out = pd.read_parquet(expected).set_index("id")
+    assert len(out) == 2
+    assert out.loc[1, "won"] == "true"
+
+
+def test_parquet_splits_by_day(tmp_path):
+    root = tmp_path / "leads"
+    df = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "won": ["false", "false"],
+            "updated_at": pd.to_datetime(["2026-06-20 02:00", "2026-06-21 02:00"]),
+            "created_at": pd.to_datetime(["2026-06-20 02:00", "2026-06-21 02:00"]),
+            "pst_date": pd.to_datetime(["2026-06-20", "2026-06-21"]),
+        }
+    )
+    storage.append_parquet(df, root)
+    assert (root / "2026" / "06" / "20-06-2026.parquet").exists()
+    assert (root / "2026" / "06" / "21-06-2026.parquet").exists()
+    assert len(storage.read_parquet_dataset(root)) == 2
+
+
+def test_parquet_falls_back_to_created_at_when_date_col_missing(tmp_path):
+    root = tmp_path / "leads"
+    df = pd.DataFrame(
+        {"id": [1], "created_at": pd.to_datetime(["2026-06-20 02:00"])}
+    )
+    storage.append_parquet(df, root, date_col="pst_date")
+    assert (root / "2026" / "06" / "20-06-2026.parquet").exists()
+
+
+# --- Settings facade ---
+
+
+def test_save_pull_both_backends(tmp_path, monkeypatch):
+    monkeypatch.setenv("STORAGE_BACKEND", "both")
+    monkeypatch.setenv("DUCKDB_PATH", str(tmp_path / "s.duckdb"))
+    monkeypatch.setenv("PARQUET_DIR", str(tmp_path / "leads"))
+    monkeypatch.setenv("PARTITION_DATE_COL", "pst_date")
+    settings = StorageSettings.from_env()
+
+    df = _frame([1, 2], ["false", "true"], ["2026-06-20 02:00", "2026-06-20 02:00"])
+    results = storage.save_pull(df, settings)
+    assert results == {"duckdb_rows": 2, "parquet_rows": 2}
+
+    loaded = storage.load_leads_raw(settings)
+    assert len(loaded) == 2
+
+
+def test_storage_settings_invalid_backend(monkeypatch):
+    monkeypatch.setenv("STORAGE_BACKEND", "mongodb")
+    from smarthub.config import ConfigError
+
+    with pytest.raises(ConfigError):
+        StorageSettings.from_env()

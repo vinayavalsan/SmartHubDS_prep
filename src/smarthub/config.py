@@ -37,17 +37,20 @@ class SSHSettings:
     user: str
     private_key_path: Path
     port: int = 22
+    private_key_password: str | None = None
 
     @classmethod
     def from_env(cls) -> "SSHSettings":
         key_path = Path(os.path.expanduser(_require("SSH_PRIVATE_KEY_PATH")))
         if not key_path.exists():
             raise ConfigError(f"SSH private key not found at: {key_path}")
+        passphrase = os.getenv("SSH_PRIVATE_KEY_PASSWORD") or None
         return cls(
             host=_require("SSH_HOST"),
             user=_require("SSH_USER"),
             private_key_path=key_path,
             port=int(os.getenv("SSH_PORT", "22")),
+            private_key_password=passphrase,
         )
 
 
@@ -85,3 +88,42 @@ class PullSettings:
             ssh=SSHSettings.from_env(),
             redshift=RedshiftSettings.from_env(),
         )
+
+
+_VALID_BACKENDS = {"duckdb", "parquet", "both"}
+
+
+@dataclass(frozen=True)
+class StorageSettings:
+    """Where and how pulled data is persisted (env-controlled).
+
+    ``backend`` selects DuckDB, partitioned Parquet, or both.
+    """
+
+    backend: str
+    duckdb_path: Path
+    parquet_dir: Path
+    partition_date_col: str
+
+    @classmethod
+    def from_env(cls) -> "StorageSettings":
+        backend = os.getenv("STORAGE_BACKEND", "both").strip().lower()
+        if backend not in _VALID_BACKENDS:
+            raise ConfigError(
+                f"STORAGE_BACKEND must be one of {sorted(_VALID_BACKENDS)}, "
+                f"got '{backend}'."
+            )
+        return cls(
+            backend=backend,
+            duckdb_path=Path(os.getenv("DUCKDB_PATH", "data/smarthub.duckdb")),
+            parquet_dir=Path(os.getenv("PARQUET_DIR", "data/leads")),
+            partition_date_col=os.getenv("PARTITION_DATE_COL", "created_at"),
+        )
+
+    @property
+    def use_duckdb(self) -> bool:
+        return self.backend in ("duckdb", "both")
+
+    @property
+    def use_parquet(self) -> bool:
+        return self.backend in ("parquet", "both")

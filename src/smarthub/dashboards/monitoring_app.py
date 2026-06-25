@@ -9,8 +9,8 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from .. import io
-from ..transforms import add_monitoring_derived_columns, aggregate_monitoring
+from smarthub import io
+from smarthub.transforms import add_monitoring_derived_columns, aggregate_monitoring
 
 st.set_page_config(layout="wide", page_title="SmartHub DS Performance")
 

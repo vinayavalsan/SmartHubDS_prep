@@ -19,11 +19,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sshtunnel import SSHTunnelForwarder
 
-from . import io
+from . import storage
 from .cli import build_pull_parser
-from .config import ConfigError, PullSettings, RedshiftSettings
+from .config import ConfigError, PullSettings, RedshiftSettings, StorageSettings
 from .logging_utils import configure_logging, get_logger
-from .models import leads_select
+from .models import leads_select, leads_with_expected_revenue_select
 
 logger = get_logger(__name__)
 
@@ -50,7 +50,11 @@ def _build_engine(rs: RedshiftSettings, local_port: int) -> Engine:
 
 
 def fetch_leads(
-    settings: PullSettings, min_created_at: str, max_created_at: str
+    settings: PullSettings,
+    min_created_at: str,
+    max_created_at: str,
+    with_expected_revenue: bool = True,
+    selected_only: bool = True,
 ) -> pd.DataFrame:
     """Open the tunnel, run the ORM query, and return the result as a dataframe.
 
@@ -58,12 +62,18 @@ def fetch_leads(
     even if the query raises.
     """
     ssh, rs = settings.ssh, settings.redshift
-    stmt = leads_select(min_created_at, max_created_at)
+    if with_expected_revenue:
+        stmt = leads_with_expected_revenue_select(
+            min_created_at, max_created_at, selected_only=selected_only
+        )
+    else:
+        stmt = leads_select(min_created_at, max_created_at)
 
     with SSHTunnelForwarder(
         (ssh.host, ssh.port),
         ssh_username=ssh.user,
         ssh_pkey=str(ssh.private_key_path),
+        ssh_private_key_password=ssh.private_key_password,
         remote_bind_address=(rs.host, rs.port),
     ) as tunnel:
         logger.info("SSH tunnel established on localhost:%s", tunnel.local_bind_port)
@@ -82,13 +92,24 @@ def fetch_leads(
 def run(
     min_created_at: str,
     max_created_at: str,
-    output: str | None = None,
+    with_expected_revenue: bool = True,
+    selected_only: bool = True,
 ) -> pd.DataFrame:
-    """End-to-end pull: load config, fetch, persist. Returns the dataframe."""
-    settings = PullSettings.from_env()
-    leads_df = fetch_leads(settings, min_created_at, max_created_at)
-    written = io.save_leads(leads_df, output)
-    logger.info("Wrote %s rows to %s", len(leads_df), written)
+    """End-to-end pull: load config, fetch, persist. Returns the frame.
+
+    Upserts (keyed on ``id``) into whichever backend(s) ``STORAGE_BACKEND``
+    enables, so overlapping re-pulled windows update late-resolving outcomes in
+    place rather than duplicating them.
+    """
+    leads_df = fetch_leads(
+        PullSettings.from_env(),
+        min_created_at,
+        max_created_at,
+        with_expected_revenue=with_expected_revenue,
+        selected_only=selected_only,
+    )
+    results = storage.save_pull(leads_df, StorageSettings.from_env())
+    logger.info("Persisted pull: %s", results)
     return leads_df
 
 
@@ -96,7 +117,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_pull_parser().parse_args(argv)
     configure_logging(args.log_level)
     try:
-        run(args.min_created_at, args.max_created_at, args.output)
+        run(
+            args.min_created_at,
+            args.max_created_at,
+            with_expected_revenue=not args.no_expected_revenue,
+            selected_only=not args.all_listings,
+        )
     except ConfigError as exc:
         logger.error("Configuration error: %s", exc)
         return 2

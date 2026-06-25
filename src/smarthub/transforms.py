@@ -78,7 +78,14 @@ def prepare_leads_frame(df: pd.DataFrame) -> pd.DataFrame:
     if "bid" in out.columns:
         out = out[out["bid"] > 0]
 
-    for id_col in ("campaign_id", "lead_type_id"):
+    id_cols = (
+        "campaign_id",
+        "lead_type_id",
+        "account_id",
+        "source_type_id",
+        "bidding_strategy_id",
+    )
+    for id_col in id_cols:
         if id_col in out.columns:
             out[id_col] = out[id_col].astype("Int64")
 
@@ -146,6 +153,85 @@ def build_metric_plot_data(
         plot_df = grouped[metric_col].sum().reset_index(name="value")
 
     return plot_df.sort_values(group_cols).reset_index(drop=True)
+
+
+_CURVE_COLS = [
+    "threshold",
+    "winrate_below",
+    "winrate_above",
+    "winrate_delta",
+    "n_below",
+    "n_above",
+]
+
+
+def cumulative_winrate_curves(
+    df: pd.DataFrame,
+    bucket_size: float = 1.0,
+    bid_col: str = "bid",
+    won_col: str = "won",
+) -> pd.DataFrame:
+    """Kiran's "shelves" curves: win rate when bidding at/under vs over a price.
+
+    For each price ``threshold`` (stepped by ``bucket_size``):
+      - ``winrate_below`` = win rate over pings with ``bid <= threshold``
+      - ``winrate_above`` = win rate over pings with ``bid > threshold``
+      - ``winrate_delta`` = above − below (the lift from bidding past the point)
+
+    Used to spot artificial floors/ceilings and the edges where a small bid
+    change moves win rate a lot. Returns an empty frame if inputs are missing.
+    """
+    if not {bid_col, won_col}.issubset(df.columns):
+        return pd.DataFrame(columns=_CURVE_COLS)
+
+    sub = df[[bid_col, won_col]]
+    sub = sub[pd.notna(sub[bid_col])]
+    if sub.empty:
+        return pd.DataFrame(columns=_CURVE_COLS)
+
+    bids = sub[bid_col].astype("float64").to_numpy()
+    won = pd.to_numeric(sub[won_col], errors="coerce").fillna(0).astype("float64")
+    won = won.to_numpy()
+
+    order = np.argsort(bids, kind="mergesort")
+    bids, won = bids[order], won[order]
+    total = bids.size
+    total_won = float(won.sum())
+    cum_won = np.cumsum(won)
+
+    lo = np.floor(bids[0] / bucket_size) * bucket_size
+    hi = np.ceil(bids[-1] / bucket_size) * bucket_size
+    thresholds = np.round(np.arange(lo, hi + bucket_size, bucket_size), 6)
+
+    rows = []
+    for x in thresholds:
+        idx = int(np.searchsorted(bids, x, side="right"))  # count with bid <= x
+        won_below = float(cum_won[idx - 1]) if idx > 0 else 0.0
+        n_above = total - idx
+        won_above = total_won - won_below
+        wr_below = won_below / idx if idx else np.nan
+        wr_above = won_above / n_above if n_above else np.nan
+        delta = (wr_above - wr_below) if (idx and n_above) else np.nan
+        rows.append((x, wr_below, wr_above, delta, idx, n_above))
+
+    return pd.DataFrame(rows, columns=_CURVE_COLS)
+
+
+def funnel_counts(df: pd.DataFrame) -> pd.DataFrame:
+    """Accept/reject funnel stages as unambiguous counts.
+
+    NOTE: exact accept/reject semantics (`accepted` vs `won` vs
+    `accepted_listings`) are pending confirmation (CONTEXT §4 open questions);
+    these stages use only counts we can define cleanly.
+    """
+    stages: list[tuple[str, int]] = [("Pings", len(df))]
+    if "won" in df.columns:
+        won = pd.to_numeric(df["won"], errors="coerce").fillna(0)
+        stages.append(("Won (partner accepted bid)", int((won == 1).sum())))
+    if "accepted_listings" in df.columns:
+        resold = pd.to_numeric(df["accepted_listings"], errors="coerce").fillna(0)
+        stages.append(("Has accepted listing (resold)", int((resold > 0).sum())))
+    return pd.DataFrame(stages, columns=["stage", "count"])
 
 
 # ---------------------------------------------------------------------------

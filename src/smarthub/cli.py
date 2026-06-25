@@ -37,9 +37,14 @@ def build_pull_parser() -> argparse.ArgumentParser:
         help="Exclusive upper bound for lp.created_at (YYYY-MM-DD HH:MM:SS).",
     )
     parser.add_argument(
-        "--output",
-        default=None,
-        help="Output parquet path (default: data/leads.parquet).",
+        "--no-expected-revenue",
+        action="store_true",
+        help="Pull lead_pings only, skipping the lead_ping_listings join.",
+    )
+    parser.add_argument(
+        "--all-listings",
+        action="store_true",
+        help="Aggregate expected revenue over ALL listings, not just selected.",
     )
     parser.add_argument(
         "--log-level",

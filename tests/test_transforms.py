@@ -134,3 +134,35 @@ def test_aggregate_monitoring_resamples():
     assert len(agg) == 1
     assert agg.loc[0, "revenue_measured"] == 300.0
     assert agg.loc[0, "num_won"] == 9
+
+
+def test_cumulative_winrate_curves():
+    df = pd.DataFrame({"bid": [1.0, 2.0, 3.0, 4.0], "won": [0, 0, 1, 1]})
+    curves = t.cumulative_winrate_curves(df, bucket_size=1.0).set_index("threshold")
+    # thresholds span 1..4
+    assert list(curves.index) == [1.0, 2.0, 3.0, 4.0]
+    # at x=2: below {1,2} -> 0/2; above {3,4} -> 2/2
+    assert curves.loc[2.0, "winrate_below"] == 0.0
+    assert curves.loc[2.0, "winrate_above"] == 1.0
+    assert curves.loc[2.0, "winrate_delta"] == 1.0
+    # at x=4: everything below -> 2/4; nothing above -> NaN
+    assert curves.loc[4.0, "winrate_below"] == 0.5
+    assert pd.isna(curves.loc[4.0, "winrate_above"])
+
+
+def test_cumulative_winrate_curves_missing_cols():
+    assert t.cumulative_winrate_curves(pd.DataFrame({"x": [1]})).empty
+
+
+def test_funnel_counts():
+    df = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "won": [1, 0, 1],
+            "accepted_listings": [2, 0, 0],
+        }
+    )
+    funnel = t.funnel_counts(df).set_index("stage")["count"]
+    assert funnel["Pings"] == 3
+    assert funnel["Won (partner accepted bid)"] == 2
+    assert funnel["Has accepted listing (resold)"] == 1

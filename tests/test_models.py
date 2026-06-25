@@ -1,10 +1,16 @@
-"""Tests for the ORM models and query builder."""
+"""Tests for the ORM models and query builders."""
 
 from datetime import datetime
 
 from sqlalchemy.dialects import postgresql
 
-from smarthub.models import LEADS_COLUMNS, LeadPing, leads_select
+from smarthub.models import (
+    LEADS_COLUMNS,
+    LeadPing,
+    LeadPingListing,
+    leads_select,
+    leads_with_expected_revenue_select,
+)
 
 
 def _compiled_sql(stmt) -> str:
@@ -21,7 +27,6 @@ def _compiled_sql(stmt) -> str:
 def test_leads_select_targets_lead_pings_table():
     sql = _compiled_sql(leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00"))
     assert "FROM lead_pings" in sql
-    # all requested columns appear in the projection
     for col in LEADS_COLUMNS:
         assert col.key in sql
 
@@ -33,15 +38,39 @@ def test_leads_select_applies_date_range():
     assert "2026-06-07" in sql and "2026-06-20" in sql
 
 
+def test_leads_select_excludes_pii_columns():
+    sql = _compiled_sql(leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00"))
+    for pii in ("ip_address", "user_agent", "date_of_birth", "trusted_form_token"):
+        assert f"lead_pings.{pii}" not in sql
+
+
 def test_leads_select_accepts_datetime_objects():
-    stmt = leads_select(
-        datetime(2026, 6, 7, 0, 0, 0), datetime(2026, 6, 20, 0, 0, 0)
-    )
+    stmt = leads_select(datetime(2026, 6, 7), datetime(2026, 6, 20))
     assert "FROM lead_pings" in _compiled_sql(stmt)
 
 
-def test_no_raw_sql_string_in_query_builder():
-    # leads_select returns a SQLAlchemy Select, not a string.
-    stmt = leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00")
-    assert not isinstance(stmt, str)
-    assert stmt.get_final_froms()[0].name == LeadPing.__tablename__
+def test_expected_revenue_join_query():
+    sql = _compiled_sql(
+        leads_with_expected_revenue_select("2026-06-07 00:00:00", "2026-06-20 00:00:00")
+    )
+    # joins the listings aggregate and exposes expected revenue
+    assert "lead_ping_listings" in sql
+    assert "sum(lead_ping_listings.est_payout)" in sql
+    assert "expected_revenue" in sql
+    assert "LEFT OUTER JOIN" in sql
+    # default selected-only filter applied
+    assert "lead_ping_listings.selected" in sql
+
+
+def test_expected_revenue_join_all_listings():
+    sql = _compiled_sql(
+        leads_with_expected_revenue_select(
+            "2026-06-07 00:00:00", "2026-06-20 00:00:00", selected_only=False
+        )
+    )
+    assert "lead_ping_listings.selected" not in sql
+
+
+def test_listing_fk_points_to_lead_pings():
+    fks = list(LeadPingListing.__table__.c.lead_ping_id.foreign_keys)
+    assert fks and fks[0].column is LeadPing.__table__.c.id

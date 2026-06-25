@@ -38,7 +38,12 @@ venv.bak/
 
 # data
 leads.parquet
+*.duckdb
+*.duckdb.wal
 
 # Streamlit
 .streamlit/
 
+
+# pytest
+.pytest_cache/

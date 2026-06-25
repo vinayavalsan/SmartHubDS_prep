@@ -57,8 +57,25 @@ smarthub-pull \
 # or:  python -m smarthub.data_pull --min-created-at ... --max-created-at ...
 ```
 
-This writes `data/leads.parquet` (path resolved from the project root, so it
-works regardless of where you run it). Use `--output` to override.
+Pulls **upsert on `id`** into the configured storage, so you can run on
+overlapping windows (e.g. last 8h every 4h) and late-resolving outcomes
+(`won`, `rev`, listing payouts) update in place instead of duplicating. Use
+`--no-expected-revenue` to skip the listings join, `--all-listings` to aggregate
+expected revenue over all listings.
+
+### Storage (set in `.env`)
+
+`STORAGE_BACKEND` selects where pulls are persisted:
+
+- `duckdb` — single file at `DUCKDB_PATH` (default `data/smarthub.duckdb`); native
+  upsert + SQL window reads.
+- `parquet` — per-day files under `PARQUET_DIR` laid out as
+  `data/leads/YYYY/MM/DD-MM-YYYY.parquet`; same-day pulls merge + dedupe.
+- `both` (default) — write to both.
+
+`PARTITION_DATE_COL` (default `created_at`) buckets rows into the per-day Parquet
+files. For training, `io.load_leads_window(days=N)` reads just the most recent
+`N` days (the rolling recency window from CONTEXT §7).
 
 ### 2. Launch a dashboard
 
@@ -66,6 +83,19 @@ works regardless of where you run it). Use `--output` to override.
 streamlit run src/smarthub/dashboards/leads_app.py        # lead-ping explorer
 streamlit run src/smarthub/dashboards/monitoring_app.py   # DS performance
 ```
+
+Streamlit prints a local URL and opens your browser — by default
+**http://localhost:8501**. To run both at once, give the second one a different
+port:
+
+```bash
+streamlit run src/smarthub/dashboards/monitoring_app.py --server.port 8502
+# -> http://localhost:8502
+```
+
+The leads dashboard reads from the configured storage automatically (DuckDB if
+present, else Parquet); click **🔄 Reload Data** after a new pull. Stop a
+dashboard with `Ctrl+C`.
 
 ## Testing & linting
 

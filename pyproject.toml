@@ -18,6 +18,7 @@ dependencies = [
     "redshift-connector>=2.0",
     "SQLAlchemy>=2.0",
     "sqlalchemy-redshift>=0.8.14",
+    "duckdb>=0.10",
 ]
 
 [project.optional-dependencies]

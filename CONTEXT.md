@@ -80,13 +80,52 @@ strategy, we bid $7.50 (keeping 25%). A random **±10% variance** is applied to 
 bid on purpose, so we sample many price points and learn win rate at each. Strategies
 are rotated round-robin to probe the market.
 
-**Expected revenue & the ceiling (key for Anton):** a *separate* table stores
-**expected revenue** — what we think we'll make, **already discounted by how often
-buyers reject**. Example: top buyer would pay $78 but only accepts 20% of the time →
-expected revenue ≈ $15.90. Anton will be handed expected revenue as a **ceiling** and
-must bid under it. This is why revenue can look much larger than the bid, and why
-margins look fat — the reject rate is already baked in, so you don't model it
-separately.
+**Expected revenue (key for Anton):** a *separate* table stores **expected revenue**
+— what we think we'll make, **already discounted by how often buyers reject**.
+Example: top buyer would pay $78 but only accepts 20% of the time → expected revenue
+≈ $15.90. This is why revenue can look much larger than the bid, and why margins look
+fat — the reject rate is already baked in, so you don't model it separately.
+
+Expected revenue is **not itself the ceiling**. It is the input that, combined with
+our **target CM**, sets the highest bid we'd be willing to make (see §6). See §6 for
+how the actual bidding bounds are defined and discovered — this was clarified by
+Vinaya and Kiran after the original draft of this doc.
+
+### ⚠️ "Payout" is overloaded — read this
+
+The warehouse uses "payout" on the **buyer (downstream) side**, which is the opposite
+of how a reseller normally says it. Confirmed against the real schema:
+
+- On `lead_pings`: **`bid`** = what we pay the **partner** (our cost); **`rev`** = our
+  realized revenue.
+- On `lead_ping_listings`: **`payout`** / **`est_payout`** are **buyer-side** — money
+  coming *to us* (realized / expected revenue *from that buyer*). They are **not** what
+  we pay the partner.
+
+So when this doc or the team says "payout," check the side: partner-side payout = our
+`bid`; listing `payout`/`est_payout` = buyer revenue.
+
+### Where each concept lives (concept → column)
+
+| Concept | Table.column |
+|---|---|
+| Our bid to the partner (cost) | `lead_pings.bid` |
+| Realized revenue | `lead_pings.rev` (≈ Σ `lead_ping_listings.payout` over accepted) |
+| Expected revenue (ceiling input) | Σ `lead_ping_listings.est_payout` per ping |
+| Won the lead (partner accepted) | `lead_pings.won` |
+| Downstream accept/reject | `lead_ping_listings.post_accepted` |
+| Listing selected / excluded / deduped | `lead_ping_listings.selected` / `excluded` / `de_duped` |
+| CM target lever (dumb 10/25/50/75) | `lead_pings.bidding_strategy_id` |
+| Exclusive vs shared lead | `lead_ping_listings.exclusive` |
+| Listing counts | `lead_pings.total_listings` / `accepted_listings` |
+
+The `smarthub.models` ORM mirrors these tables; `leads_with_expected_revenue_select`
+aggregates `est_payout` per ping (see its docstring for the selected-only assumption).
+
+**Open questions to confirm:** how exactly to aggregate expected revenue (sum over
+`selected = 'true'`? best listing? exclude `de_duped`/`excluded`?); the meaning of
+`bpfm_score` and `bid_to_use`; and the distinction between `accepted` (ping) vs `won`
+vs `accepted_listings`.
 
 ---
 
@@ -104,29 +143,86 @@ separately.
 
 ## 6. The modeling problem (what Anton is for)
 
-Find the right **bid per ping**. Illustrated by the **Launch Potato** example:
+> This section was corrected after feedback from Vinaya and Kiran (Slack thread,
+> Jun 24, 2026). The earlier draft framed expected revenue as "the ceiling" and gave
+> Anton two either/or modes; both were wrong. The accurate framing is below.
 
-- Launch Potato is a competitor and sets an **artificial floor** at $10 — every bid
-  below $10 is auto-rejected (win rate = 0% below $10).
-- The win-rate curve flattens around **$15**, suggesting competitors have an
-  artificial **ceiling** there; past $15 win rate shoots up steeply.
-- **Takeaway:** if the budget is $19, don't bid $19 — bid ~$15.25, win the same lead,
-  and keep the extra ~$4 of margin.
+Anton's job is to choose the **bid per ping that maximizes profit**, working within
+a budgetary sandbox whose bounds it must also **discover**.
 
-So the objective is to find the **"shelves" / edges** in the win-rate-vs-price data:
-price points where a small bid change causes a big win-rate jump, because that's where
-our buyer distribution is beating the competition.
+### The bounds
 
-Two possible **modes** for Anton:
-1. **Maximize win rate** — bid high enough to win, even at the cost of margin.
-2. **Maximize contribution margin** — accept losing a few leads to keep margins high.
+- **Upper bound (max bid)** is set by **expected revenue together with the target
+  CM**, not by expected revenue alone. Since `CM = (revenue − bid) / revenue`, the
+  most we'd pay while still hitting a target CM is:
 
-The real question is *what to bid given a ceiling* — not just always bidding the
-ceiling.
+  ```text
+  max_bid = expected_revenue × (1 − target_CM)
+  ```
+
+- **Lower bound (min bid)** is a **partner-side floor**, *if one exists* — e.g.
+  Launch Potato auto-rejects every bid below $10, so bidding under the floor wins
+  nothing. The floor sets the *minimum* sensible bid.
+
+- **Bounds may not exist.** The floor/ceiling/win-rate curves we looked at "may or
+  may not exist for a partner / lead type / etc." Identifying *whether* bounds exist
+  and *where* they sit is part of Anton's job, not a given.
+
+### The objective: one optimization, not two modes
+
+Profit is driven by **both win rate and CM**, which trade off against each other:
+
+- Bid **higher** within the range → win rate ↑, but CM ↓.
+- Bid **lower** → CM ↑, but win rate ↓.
+
+So there is a **single** objective: find the bid in `[floor, ceiling]` that maximizes
+overall profit — conceptually, maximize expected profit per ping:
+
+```text
+expected_profit(bid) ≈ P(win | bid) × (expected_revenue − bid)
+```
+
+Kiran's phrasing — *"optimize for CM without compromising win rate"* — is the same
+idea. (The earlier "maximize win rate **or** maximize CM" framing was a false
+either/or.)
+
+### Finding the edges
+
+Within the range we still want the **"shelves" / edges**: price points where a small
+bid change barely moves win rate. If win rate at $9.50 equals win rate at $10, bid
+$9.50 and keep the extra margin. Discovering where those edges live requires actively
+probing the market — see §7.
 
 ---
 
-## 7. Attributes that matter
+## 7. Exploration and recency
+
+Two requirements that the earlier draft missed entirely (raised by Kiran in the
+Jun 24 thread).
+
+### Explore around the optimum (don't just exploit it)
+
+Anton should not only bid the current best estimate. It must bid with **deliberate
+variability** — occasionally a little above and below the optimum — to gather real
+data on the **shape of the market** at different price points. That probing is the
+only way to learn where the edges/shelves live and keep future bids well-informed.
+(This is the explore/exploit trade-off; the existing `dumb 10/25/50/75 ± 10%`
+strategies probe in a fixed way, but Anton needs to probe *around its own optimum*.)
+
+### Weight recent data; define "recent"; define the cold-start fallback
+
+The market changes — supply and demand shift — so old data goes stale.
+
+- Use **recent** learnings on a **rolling basis**; don't over-trust old data.
+- **"Recent" must be explicitly defined** as a configurable window (e.g. a rolling
+  N-day lookback), **not buried in the code**. It should be a named config value.
+- When there is **no recent data** (cold start, new partner/lead type), the bidding
+  pattern must be **explicitly articulated** so behavior stays organized rather than
+  chaotic — e.g. a defined exploration schedule or fallback bid.
+
+---
+
+## 8. Attributes that matter
 
 Significant signals (curve shape changes with each):
 
@@ -140,7 +236,7 @@ ones. Keep Anton explainable.
 
 ---
 
-## 8. Glossary
+## 9. Glossary
 
 | Term | Meaning |
 |------|---------|
@@ -152,11 +248,17 @@ ones. Keep Anton explainable.
 | **Won** | The partner accepted our bid; we now hold the lead. |
 | **Accept / reject** | Whether a downstream buyer takes the lead we post. |
 | **Bid** | What we offer the partner for the lead. |
-| **Expected revenue** | Forecast revenue, already discounted by buyer reject rates (a separate table). |
-| **Realized / measured revenue** | What we actually made; blank if the lead was never bought. |
-| **Payout** | What we pay the partner (only when we resell). |
-| **Profit** | Realized revenue − payout. |
+| **Expected revenue** | Forecast revenue, already reject-discounted. Lives as Σ `lead_ping_listings.est_payout` per ping. |
+| **Realized / measured revenue** | What we actually made (`lead_pings.rev`); blank if the lead was never bought. |
+| **Payout (⚠ overloaded)** | Partner-side: our cost = `lead_pings.bid`. Listing-side: `lead_ping_listings.payout`/`est_payout` = buyer revenue *to us*. |
+| **Profit** | Realized revenue − our cost = `lead_pings.rev − lead_pings.bid` (when won). |
 | **Contribution margin (CM)** | Profit ÷ revenue; also the lever in bidding strategies (dumb 10/25/50/75). |
 | **Win rate** | Share of bids that win the lead, often measured across price points. |
 | **Buyer distribution** | Our network of downstream buyers; its strength varies by state and lead type. |
-| **Shelf / edge** | A price point where win rate jumps sharply — a target for smart bidding. |
+| **Shelf / edge** | A price point where win rate barely moves — bid at the cheaper side and keep the margin. |
+| **Target CM** | The contribution margin we aim to keep; with expected revenue it sets the max bid. |
+| **Ceiling (max bid)** | `expected_revenue × (1 − target_CM)` — the highest bid that still hits the CM target. |
+| **Floor (min bid)** | A partner-imposed minimum below which bids are auto-rejected (e.g. Launch Potato's $10); may not exist. |
+| **Bounds / sandbox** | The `[floor, ceiling]` range Anton bids within; their existence and location must be discovered. |
+| **Exploration (explore/exploit)** | Deliberately bidding around the optimum to learn the market's shape at other price points. |
+| **Recency window** | The rolling lookback that defines "recent" data; a named config value, not hard-coded. |

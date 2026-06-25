@@ -9,9 +9,14 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from .. import io
-from ..transforms import aggregate_leads, build_metric_plot_data
-from . import _ui
+from smarthub import io
+from smarthub.transforms import (
+    aggregate_leads,
+    build_metric_plot_data,
+    cumulative_winrate_curves,
+    funnel_counts,
+)
+from smarthub.dashboards import _ui
 
 st.set_page_config(page_title="SmartHub Anton Dashboard", layout="wide")
 
@@ -300,6 +305,90 @@ def display_plot_type_3(df):
 
 
 # ---------------------------------------------------------------------------
+# Plot Type 4 - cumulative win-rate "shelves" curves
+# ---------------------------------------------------------------------------
+
+
+def _winrate_curve_figure(curves, title, show_delta):
+    value_cols = ["winrate_below", "winrate_above"]
+    if show_delta:
+        value_cols.append("winrate_delta")
+    long = curves.melt(
+        id_vars="threshold",
+        value_vars=value_cols,
+        var_name="curve",
+        value_name="value",
+    )
+    fig = px.line(
+        long, x="threshold", y="value", color="curve", markers=True, title=title
+    )
+    fig.update_layout(xaxis_title="bid threshold ($)", yaxis_title="win rate")
+    return _ui.style_figure(fig)
+
+
+def display_plot_type_4(df):
+    st.markdown("### Plot Type 4 - Cumulative win-rate curves")
+    st.caption(
+        "Win rate when bidding at/under (winrate_below) vs over (winrate_above) "
+        "each price — find floors, ceilings and edges."
+    )
+    if not {"bid", "won"}.issubset(df.columns):
+        st.info("bid and won columns are required for Plot Type 4.")
+        return
+
+    legend_options = _ui.get_legend_options(df)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        size_lbl = st.selectbox(
+            "Bin width", options=list(_BUCKET_OPTIONS.keys()), index=1, key="plot4_bin"
+        )
+    with col2:
+        legend_col = st.selectbox(
+            "Split by",
+            options=legend_options,
+            index=_ui.get_default_option(legend_options, "None"),
+            key="plot4_legend",
+        )
+    with col3:
+        show_delta = st.checkbox("Show win-rate delta", value=False, key="plot4_delta")
+
+    bucket = _BUCKET_OPTIONS[size_lbl]
+
+    if legend_col == "None":
+        curves = cumulative_winrate_curves(df, bucket)
+        if curves.empty:
+            st.info("No data available.")
+            return
+        st.plotly_chart(
+            _winrate_curve_figure(curves, f"Win rate vs bid ({size_lbl})", show_delta),
+            use_container_width=True,
+        )
+    else:
+        for value in sorted(df[legend_col].dropna().unique().tolist()):
+            curves = cumulative_winrate_curves(df[df[legend_col] == value], bucket)
+            if curves.empty:
+                continue
+            st.plotly_chart(
+                _winrate_curve_figure(
+                    curves, f"{legend_col} = {value} ({size_lbl})", show_delta
+                ),
+                use_container_width=True,
+            )
+
+
+def display_funnel(df):
+    st.markdown("### Accept / reject funnel")
+    funnel = funnel_counts(df)
+    fig = px.funnel(funnel, x="count", y="stage")
+    fig.update_layout(yaxis_title=None)
+    st.plotly_chart(_ui.style_figure(fig), use_container_width=True)
+    st.caption(
+        "Stages use unambiguous counts; exact accept/reject semantics are pending "
+        "confirmation (CONTEXT §4)."
+    )
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
@@ -321,6 +410,20 @@ def _render_filters(df):
     selected_campaign = st.sidebar.selectbox(
         "campaign_id", options=["All campaign_ids"] + campaigns, index=0
     )
+
+    # Additional dimension filters (Kiran: partner / bidding strategy / insured)
+    for col, label in (
+        ("account_id", "account_id (partner)"),
+        ("bidding_strategy_id", "bidding_strategy_id"),
+        ("insured", "insured"),
+    ):
+        if col in lead_df.columns:
+            options = ["All"] + sorted(lead_df[col].dropna().unique().tolist())
+            choice = st.sidebar.selectbox(
+                label, options=options, index=0, key=f"flt_{col}"
+            )
+            if choice != "All":
+                lead_df = lead_df[lead_df[col] == choice]
 
     available_states = ordered_state_list(lead_df)
     if "selected_states" not in st.session_state:
@@ -392,10 +495,14 @@ def main():
     st.subheader("Raw Data")
     st.dataframe(filtered_df.head(5000), use_container_width=True)
 
+    st.subheader("Funnel")
+    display_funnel(filtered_df)
+
     st.subheader("Plots")
     display_plot_type_1(filtered_df)
     display_plot_type_2(filtered_df)
     display_plot_type_3(filtered_df)
+    display_plot_type_4(filtered_df)
 
 
 if __name__ == "__main__":
