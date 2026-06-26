@@ -34,6 +34,10 @@ LEGEND_WHITELIST = [
     "continuous_coverage_months",
     "created_hour",
     "created_dayofweek",
+    "military_affiliation",
+    "gender",
+    "marital_status",
+    "age"
 ]
 
 

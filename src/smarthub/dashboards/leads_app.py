@@ -6,6 +6,7 @@ Run with:
 
 from __future__ import annotations
 
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
@@ -59,7 +60,7 @@ def _figure_type_1(plot_df, feature_col, metric_col, legend_col):
         color=legend_col if use_legend else None,
         markers=True,
         title=(
-            f"{metric_col} vs {feature_col} split by {legend_col}"
+            f"{metric_col} by {feature_col}, split by {legend_col}"
             if use_legend
             else f"{metric_col} by {feature_col}"
         ),
@@ -73,7 +74,12 @@ def _figure_type_1(plot_df, feature_col, metric_col, legend_col):
 
 
 def display_plot_type_1(df):
-    st.markdown("### Plot Type 1")
+    st.markdown("### Plot Type 1 - Metric by selected feature")
+    st.caption(
+        "Choose any column for the x-axis and compare one or more performance "
+        "metrics across its values. Use the legend split to see whether the "
+        "pattern changes by campaign, partner, state, or another dimension."
+    )
     col1, col2, col3 = st.columns(3)
 
     feature_options = sorted(df.columns.tolist())
@@ -143,9 +149,9 @@ def _figure_type_2(plot_df, metric_col, legend_col, freq_label):
         color=legend_col if use_legend else None,
         markers=True,
         title=(
-            f"{metric_col} over time ({freq_label}) split by {legend_col}"
+            f"{metric_col} trend over time ({freq_label}), split by {legend_col}"
             if use_legend
-            else f"{metric_col} over time ({freq_label})"
+            else f"{metric_col} trend over time ({freq_label})"
         ),
     )
     fig.update_layout(
@@ -157,7 +163,12 @@ def _figure_type_2(plot_df, metric_col, legend_col, freq_label):
 
 
 def display_plot_type_2(df):
-    st.markdown("### Plot Type 2 - Time Series")
+    st.markdown("### Plot Type 2 - Metric trend over time")
+    st.caption(
+        "Track how selected metrics move by hour or by day. This is useful for "
+        "spotting time-based spikes, dips, rollout effects, or changes in lead "
+        "quality after filtering to a lead type, campaign, partner, or state set."
+    )
     if "created_at" not in df.columns:
         st.info("created_at column is required for Plot Type 2.")
         return
@@ -232,7 +243,7 @@ def _figure_type_3(
         color=legend_col if use_legend else None,
         markers=True,
         title=(
-            f"{metric_col} by {x_label} bucket ({size_lbl}) split by {legend_col}"
+            f"{metric_col} by {x_label} bucket ({size_lbl}), split by {legend_col}"
             if use_legend
             else f"{metric_col} by {x_label} bucket ({size_lbl})"
         ),
@@ -247,7 +258,12 @@ def _figure_type_3(
 
 
 def display_plot_type_3(df):
-    st.markdown("### Plot Type 3 - Metric Value Series")
+    st.markdown("### Plot Type 3 - Metric by dollar-value bucket")
+    st.caption(
+        "Group leads into profit, bid, payout, or revenue buckets, then compare "
+        "performance metrics across those price ranges. This helps reveal where "
+        "economics or win rate change as dollar values increase."
+    )
     x_axis_options = [lbl for lbl, col in _X_AXIS_MAP.items() if col in df.columns]
     if not x_axis_options:
         st.info("Plot Type 3 requires one of profit, bid, payout, or revenue.")
@@ -327,10 +343,11 @@ def _winrate_curve_figure(curves, title, show_delta):
 
 
 def display_plot_type_4(df):
-    st.markdown("### Plot Type 4 - Cumulative win-rate curves")
+    st.markdown("### Plot Type 4 - Win-rate above vs below bid threshold")
     st.caption(
-        "Win rate when bidding at/under (winrate_below) vs over (winrate_above) "
-        "each price — find floors, ceilings and edges."
+        "Compare cumulative win rate for bids at or below each threshold against "
+        "bids above that threshold. Use this to find bid floors, ceilings, and "
+        "thresholds where increasing bid amount stops adding much win-rate lift."
     )
     if not {"bid", "won"}.issubset(df.columns):
         st.info("bid and won columns are required for Plot Type 4.")
@@ -360,7 +377,11 @@ def display_plot_type_4(df):
             st.info("No data available.")
             return
         st.plotly_chart(
-            _winrate_curve_figure(curves, f"Win rate vs bid ({size_lbl})", show_delta),
+            _winrate_curve_figure(
+                curves,
+                f"Win-rate split above vs below bid threshold ({size_lbl})",
+                show_delta,
+            ),
             use_container_width=True,
         )
     else:
@@ -370,21 +391,141 @@ def display_plot_type_4(df):
                 continue
             st.plotly_chart(
                 _winrate_curve_figure(
-                    curves, f"{legend_col} = {value} ({size_lbl})", show_delta
+                    curves,
+                    f"Win-rate threshold split for {legend_col} = {value} ({size_lbl})",
+                    show_delta,
+                ),
+                use_container_width=True,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Plot Type 5 - cumulative contribution-margin "shelves" curves
+# ---------------------------------------------------------------------------
+
+
+def _safe_cm(profit_sum, rev_sum):
+    return profit_sum / rev_sum if rev_sum else None
+
+
+def cumulative_cm_curves(df, bucket_size):
+    source = df.dropna(subset=["bid"]).copy()
+    if source.empty:
+        return source
+
+    source["threshold"] = (
+        source["bid"].astype(float).floordiv(bucket_size) * bucket_size + bucket_size
+    ).round(6)
+
+    thresholds = sorted(source["threshold"].dropna().unique().tolist())
+    rows = []
+    for threshold in thresholds:
+        below = source[source["bid"] <= threshold]
+        above = source[source["bid"] > threshold]
+
+        cm_below = _safe_cm(below["profit"].sum(), below["rev"].sum())
+        cm_above = _safe_cm(above["profit"].sum(), above["rev"].sum())
+
+        rows.append(
+            {
+                "threshold": threshold,
+                "cm_below": cm_below,
+                "cm_above": cm_above,
+                "cm_delta": (
+                    cm_above - cm_below
+                    if cm_above is not None and cm_below is not None
+                    else None
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _cm_curve_figure(curves, title, show_delta):
+    value_cols = ["cm_below", "cm_above"]
+    if show_delta:
+        value_cols.append("cm_delta")
+    long = curves.melt(
+        id_vars="threshold",
+        value_vars=value_cols,
+        var_name="curve",
+        value_name="value",
+    )
+    fig = px.line(
+        long, x="threshold", y="value", color="curve", markers=True, title=title
+    )
+    fig.update_layout(xaxis_title="bid threshold ($)", yaxis_title="CM")
+    return _ui.style_figure(fig)
+
+
+def display_plot_type_5(df):
+    st.markdown("### Plot Type 5 - CM above vs below bid threshold")
+    st.caption(
+        "Compare cumulative contribution margin for bids at or below each threshold "
+        "against bids above that threshold. Use this to find bid levels where margin "
+        "improves, deteriorates, or stops changing materially."
+    )
+    if not {"bid", "profit", "rev"}.issubset(df.columns):
+        st.info("bid, profit, and rev columns are required for Plot Type 5.")
+        return
+
+    legend_options = _ui.get_legend_options(df)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        size_lbl = st.selectbox(
+            "Bin width", options=list(_BUCKET_OPTIONS.keys()), index=1, key="plot5_bin"
+        )
+    with col2:
+        legend_col = st.selectbox(
+            "Split by",
+            options=legend_options,
+            index=_ui.get_default_option(legend_options, "None"),
+            key="plot5_legend",
+        )
+    with col3:
+        show_delta = st.checkbox("Show CM delta", value=False, key="plot5_delta")
+
+    bucket = _BUCKET_OPTIONS[size_lbl]
+
+    if legend_col == "None":
+        curves = cumulative_cm_curves(df, bucket)
+        if curves.empty:
+            st.info("No data available.")
+            return
+        st.plotly_chart(
+            _cm_curve_figure(
+                curves,
+                f"CM split above vs below bid threshold ({size_lbl})",
+                show_delta,
+            ),
+            use_container_width=True,
+        )
+    else:
+        for value in sorted(df[legend_col].dropna().unique().tolist()):
+            curves = cumulative_cm_curves(df[df[legend_col] == value], bucket)
+            if curves.empty:
+                continue
+            st.plotly_chart(
+                _cm_curve_figure(
+                    curves,
+                    f"CM threshold split for {legend_col} = {value} ({size_lbl})",
+                    show_delta,
                 ),
                 use_container_width=True,
             )
 
 
 def display_funnel(df):
-    st.markdown("### Accept / reject funnel")
+    st.markdown("### Lead acceptance funnel")
     funnel = funnel_counts(df)
     fig = px.funnel(funnel, x="count", y="stage")
     fig.update_layout(yaxis_title=None)
     st.plotly_chart(_ui.style_figure(fig), use_container_width=True)
     st.caption(
-        "Stages use unambiguous counts; exact accept/reject semantics are pending "
-        "confirmation (CONTEXT §4)."
+        "Shows how many leads remain at each step of the accept/reject flow, "
+        "from initial pings to partner-accepted bids and accepted listings. Use "
+        "this to identify where the largest volume drop-off occurs."
     )
 
 
@@ -503,6 +644,7 @@ def main():
     display_plot_type_2(filtered_df)
     display_plot_type_3(filtered_df)
     display_plot_type_4(filtered_df)
+    display_plot_type_5(filtered_df)
 
 
 if __name__ == "__main__":
