@@ -26,7 +26,8 @@ import pandas as pd
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from config import FEATURE_COLS
+import config
+import preprocessing
 
 
 MODEL_URI = os.getenv("MODEL_URI", "models/anton_model.pkl")
@@ -72,10 +73,12 @@ def optimize_bid_for_row(
             "n_candidate_bids": 0,
         }
 
-    candidate_rows = pd.DataFrame([row[FEATURE_COLS].to_dict()] * len(candidate_bids))
+    candidate_rows = pd.DataFrame(
+        [row[config.FEATURE_COLS].to_dict()] * len(candidate_bids)
+    )
     candidate_rows["bid"] = candidate_bids
 
-    predicted_win_rates = model.predict_proba(candidate_rows[FEATURE_COLS])[:, 1]
+    predicted_win_rates = model.predict_proba(candidate_rows[config.FEATURE_COLS])[:, 1]
     expected_profits = predicted_win_rates * (expected_revenue - candidate_bids)
 
     best_idx = int(np.argmax(expected_profits))
@@ -111,13 +114,14 @@ def run_bid_optimizer_evaluation(
         print("Skipped: no rows with positive expected_revenue.")
         return None
 
-    current_bid_predicted_win_rate = model.predict_proba(eval_df[FEATURE_COLS])[:, 1]
+    current_bid_predicted_win_rate = model.predict_proba(eval_df[config.FEATURE_COLS])[
+        :, 1
+    ]
 
     eval_df["current_bid_predicted_win_rate"] = current_bid_predicted_win_rate
-    eval_df["current_bid_expected_profit"] = (
-        eval_df["current_bid_predicted_win_rate"]
-        * (eval_df["expected_revenue"] - eval_df["bid"])
-    )
+    eval_df["current_bid_expected_profit"] = eval_df[
+        "current_bid_predicted_win_rate"
+    ] * (eval_df["expected_revenue"] - eval_df["bid"])
 
     optimizer_rows = []
     for _, row in eval_df.iterrows():
@@ -144,35 +148,31 @@ def run_bid_optimizer_evaluation(
         eval_df["recommended_bid_expected_profit"]
         - eval_df["current_bid_expected_profit"]
     )
-    eval_df["expected_profit_lift_pct"] = (
-        eval_df["expected_profit_lift"]
-        / eval_df["current_bid_expected_profit"].replace(0, np.nan)
-    )
+    eval_df["expected_profit_lift_pct"] = eval_df["expected_profit_lift"] / eval_df[
+        "current_bid_expected_profit"
+    ].replace(0, np.nan)
     eval_df["bid_change"] = eval_df["recommended_bid"] - eval_df["bid"]
-    eval_df["bid_change_pct"] = (
-        eval_df["bid_change"]
-        / eval_df["bid"].replace(0, np.nan)
+    eval_df["bid_change_pct"] = eval_df["bid_change"] / eval_df["bid"].replace(
+        0, np.nan
     )
     eval_df["predicted_win_rate_lift"] = (
         eval_df["recommended_bid_predicted_win_rate"]
         - eval_df["current_bid_predicted_win_rate"]
     )
-    eval_df["predicted_win_rate_lift_pct"] = (
-        eval_df["predicted_win_rate_lift"]
-        / eval_df["current_bid_predicted_win_rate"].replace(0, np.nan)
-    )
+    eval_df["predicted_win_rate_lift_pct"] = eval_df[
+        "predicted_win_rate_lift"
+    ] / eval_df["current_bid_predicted_win_rate"].replace(0, np.nan)
     eval_df["recommended_bid_cm_if_won"] = (
-        (eval_df["expected_revenue"] - eval_df["recommended_bid"])
-        / eval_df["expected_revenue"]
-    )
+        eval_df["expected_revenue"] - eval_df["recommended_bid"]
+    ) / eval_df["expected_revenue"]
 
     eval_df["bid_change_direction"] = "unchanged"
     eval_df.loc[eval_df["bid_change"] > 0, "bid_change_direction"] = "increased"
     eval_df.loc[eval_df["bid_change"] < 0, "bid_change_direction"] = "decreased"
 
-    eval_df["selected_bid_percentile"] = (
-        eval_df["recommended_bid"] / eval_df["max_bid"].replace(0, np.nan)
-    )
+    eval_df["selected_bid_percentile"] = eval_df["recommended_bid"] / eval_df[
+        "max_bid"
+    ].replace(0, np.nan)
 
     direction_counts = (
         eval_df["bid_change_direction"]
@@ -186,19 +186,21 @@ def run_bid_optimizer_evaluation(
         direction_summary[direction] = {
             "count": int(len(direction_df)),
             "percent": float(len(direction_df) / len(eval_df) * 100),
-            "avg_bid_change": float(direction_df["bid_change"].mean())
-            if not direction_df.empty
-            else 0.0,
-            "avg_predicted_win_rate_lift": float(
-                direction_df["predicted_win_rate_lift"].mean()
-            )
-            if not direction_df.empty
-            else 0.0,
-            "avg_expected_profit_lift": float(
-                direction_df["expected_profit_lift"].mean()
-            )
-            if not direction_df.empty
-            else 0.0,
+            "avg_bid_change": (
+                float(direction_df["bid_change"].mean())
+                if not direction_df.empty
+                else 0.0
+            ),
+            "avg_predicted_win_rate_lift": (
+                float(direction_df["predicted_win_rate_lift"].mean())
+                if not direction_df.empty
+                else 0.0
+            ),
+            "avg_expected_profit_lift": (
+                float(direction_df["expected_profit_lift"].mean())
+                if not direction_df.empty
+                else 0.0
+            ),
         }
 
     current_total_profit = eval_df["current_bid_expected_profit"].sum()
@@ -209,16 +211,17 @@ def run_bid_optimizer_evaluation(
         "target_cm": float(target_cm),
         "min_bid": float(min_bid),
         "bid_step": float(bid_step),
-
         # Predicted performance comparison
         "current_bid_total_expected_profit": float(current_total_profit),
         "recommended_bid_total_expected_profit": float(recommended_total_profit),
         "expected_profit_lift_total": float(eval_df["expected_profit_lift"].sum()),
-        "expected_profit_lift_pct": float(
-            (recommended_total_profit - current_total_profit) / current_total_profit
-        )
-        if current_total_profit != 0
-        else np.nan,
+        "expected_profit_lift_pct": (
+            float(
+                (recommended_total_profit - current_total_profit) / current_total_profit
+            )
+            if current_total_profit != 0
+            else np.nan
+        ),
         "current_bid_avg_expected_profit": float(
             eval_df["current_bid_expected_profit"].mean()
         ),
@@ -231,20 +234,11 @@ def run_bid_optimizer_evaluation(
         "avg_recommended_bid_predicted_win_rate": float(
             eval_df["recommended_bid_predicted_win_rate"].mean()
         ),
-        "avg_predicted_win_rate_lift": float(
-            eval_df["predicted_win_rate_lift"].mean()
-        ),
+        "avg_predicted_win_rate_lift": float(eval_df["predicted_win_rate_lift"].mean()),
         "median_predicted_win_rate_lift": float(
             eval_df["predicted_win_rate_lift"].median()
         ),
-
         # Bid-change behavior
-        "avg_current_bid": float(eval_df["bid"].mean()),
-        "avg_recommended_bid": float(eval_df["recommended_bid"].mean()),
-        "avg_bid_change": float(eval_df["bid_change"].mean()),
-        "median_bid_change": float(eval_df["bid_change"].median()),
-        "p10_bid_change": float(eval_df["bid_change"].quantile(0.10)),
-        "p90_bid_change": float(eval_df["bid_change"].quantile(0.90)),
         "min_bid_change": float(eval_df["bid_change"].min()),
         "max_bid_change": float(eval_df["bid_change"].max()),
         "bid_increase_count": int(direction_counts["increased"]),
@@ -253,13 +247,8 @@ def run_bid_optimizer_evaluation(
         "bid_increase_pct": float(direction_counts["increased"] / len(eval_df) * 100),
         "bid_decrease_pct": float(direction_counts["decreased"] / len(eval_df) * 100),
         "bid_unchanged_pct": float(direction_counts["unchanged"] / len(eval_df) * 100),
-
         # Optimizer behavior
-        "avg_candidate_bids_evaluated": float(eval_df["n_candidate_bids"].mean()),
         "median_candidate_bids_evaluated": float(eval_df["n_candidate_bids"].median()),
-        "avg_selected_bid_percentile": float(
-            eval_df["selected_bid_percentile"].mean()
-        ),
         "median_selected_bid_percentile": float(
             eval_df["selected_bid_percentile"].median()
         ),
@@ -275,13 +264,14 @@ def run_bid_optimizer_evaluation(
         "p90_recommended_bid_cm_if_won": float(
             eval_df["recommended_bid_cm_if_won"].quantile(0.90)
         ),
-
         "bid_change_direction_summary": direction_summary,
     }
 
     print(f"Rows evaluated:                         {summary['optimizer_rows']:,}")
     print(f"Target CM:                              {summary['target_cm']:.2%}")
-    print(f"Bid grid:                               {min_bid:.2f} to max_bid by {bid_step:.2f}")
+    print(
+        f"Bid grid:                               {min_bid:.2f} to max_bid by {bid_step:.2f}"
+    )
     print()
     print("Predicted Performance")
     print("-" * 80)
@@ -293,8 +283,12 @@ def run_bid_optimizer_evaluation(
         "Expected Profit using Recommended Bid:  "
         f"{summary['recommended_bid_total_expected_profit']:.4f}"
     )
-    print(f"Expected Profit Lift:                   {summary['expected_profit_lift_total']:.4f}")
-    print(f"Expected Profit Lift %:                 {summary['expected_profit_lift_pct']:.2%}")
+    print(
+        f"Expected Profit Lift:                   {summary['expected_profit_lift_total']:.4f}"
+    )
+    print(
+        f"Expected Profit Lift %:                 {summary['expected_profit_lift_pct']:.2%}"
+    )
     print()
     print(
         "Avg Expected Profit using Current Bid:  "
@@ -320,14 +314,6 @@ def run_bid_optimizer_evaluation(
     print()
     print("Bid Changes")
     print("-" * 80)
-    print(f"Average Current Bid:                    {summary['avg_current_bid']:.4f}")
-    print(f"Average Recommended Bid:                {summary['avg_recommended_bid']:.4f}")
-    print(f"Average Bid Change:                     {summary['avg_bid_change']:.4f}")
-    print(f"Median Bid Change:                      {summary['median_bid_change']:.4f}")
-    print(
-        "10th / 90th Percentile Bid Change:      "
-        f"{summary['p10_bid_change']:.4f} / {summary['p90_bid_change']:.4f}"
-    )
     print(
         "Bid Increased / Decreased / Unchanged:  "
         f"{summary['bid_increase_count']:,} ({summary['bid_increase_pct']:.1f}%) / "
@@ -338,14 +324,6 @@ def run_bid_optimizer_evaluation(
     print("Optimizer Behavior")
     print("-" * 80)
     print(
-        "Avg Candidate Bids Evaluated:           "
-        f"{summary['avg_candidate_bids_evaluated']:.2f}"
-    )
-    print(
-        "Avg Selected Bid Percentile:            "
-        f"{summary['avg_selected_bid_percentile']:.2%}"
-    )
-    print(
         "Average Recommended CM if Won:          "
         f"{summary['avg_recommended_bid_cm_if_won']:.4f}"
     )
@@ -355,22 +333,6 @@ def run_bid_optimizer_evaluation(
     )
 
     return eval_df, summary
-
-
-def clean_bool_category(value):
-    """Clean boolean-like API values into training-compatible strings."""
-    if value is None or value == "":
-        return "Unknown"
-
-    return str(value).strip().title()
-
-
-def clean_text_category(value):
-    """Clean text category API values into training-compatible strings."""
-    if value is None or value == "":
-        return "NAvail"
-
-    return str(value).strip()
 
 
 class BidRequest(BaseModel):
@@ -403,45 +365,34 @@ class BidRequest(BaseModel):
 
 
 def request_to_model_row(request):
-    """Convert an API request into one model input row."""
-    return pd.Series(
-        {
-            "bid": request.min_bid,
-            "age": request.age,
-            "num_vehicles": (
-                request.num_vehicles if request.num_vehicles is not None else 1
-            ),
-            "num_drivers": (
-                request.num_drivers if request.num_drivers is not None else 1
-            ),
-            "num_auto_violations": (
-                request.num_auto_violations
-                if request.num_auto_violations is not None
-                else -1
-            ),
-            "num_auto_accidents": (
-                request.num_auto_accidents
-                if request.num_auto_accidents is not None
-                else -1
-            ),
-            "continuous_coverage_months": (
-                request.continuous_coverage_months
-                if request.continuous_coverage_months is not None
-                else -1
-            ),
-            "created_hour": request.created_hour,
-            "created_dayofweek": request.created_dayofweek,
-            "campaign_id": request.campaign_id,
-            "lead_type_id": request.lead_type_id,
-            "state": clean_text_category(request.state),
-            "insured": clean_bool_category(request.insured),
-            "home_owner": clean_bool_category(request.home_owner),
-            "dui": clean_bool_category(request.dui),
-            "military_affiliation": clean_bool_category(request.military_affiliation),
-            "gender": clean_text_category(request.gender),
-            "marital_status": clean_text_category(request.marital_status),
-        }
+    """Convert an API request into one cleaned model input row."""
+    raw_row = pd.DataFrame(
+        [
+            {
+                "bid": request.min_bid,
+                "age": request.age,
+                "num_vehicles": request.num_vehicles,
+                "num_drivers": request.num_drivers,
+                "num_auto_violations": request.num_auto_violations,
+                "num_auto_accidents": request.num_auto_accidents,
+                "continuous_coverage_months": request.continuous_coverage_months,
+                "created_hour": request.created_hour,
+                "created_dayofweek": request.created_dayofweek,
+                "campaign_id": request.campaign_id,
+                "lead_type_id": request.lead_type_id,
+                "state": request.state,
+                "insured": request.insured,
+                "home_owner": request.home_owner,
+                "dui": request.dui,
+                "military_affiliation": request.military_affiliation,
+                "gender": request.gender,
+                "marital_status": request.marital_status,
+            }
+        ]
     )
+
+    cleaned_df = preprocessing.clean_model_features(raw_row)
+    return cleaned_df.iloc[0]
 
 
 app = FastAPI(title="Anton Bid Prediction API")

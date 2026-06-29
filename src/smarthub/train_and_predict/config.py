@@ -2,52 +2,80 @@
 Configuration constants for Anton model training and prediction.
 """
 
+LEAD_TYPE_ID = 6
+
 RANDOM_SEED = 42
 
 TARGET_COL = "won"
 
-FEATURES = {
-    # Continuous numeric features
+
+COMMON_FEATURES = {
+    # Continuous
     "bid": "continuous",
     "age": "continuous",
+    # Discrete
+    "continuous_coverage_months": "discrete",
+    "created_hour": "discrete",
+    "created_dayofweek": "discrete",
+    # Categorical
+    "campaign_id": "categorical",
+    "lead_type_id": "categorical",
+    "source_type_id": "categorical",
+    "account_id": "categorical",
+    "state": "categorical",
+    "insured": "categorical",
+    "gender": "categorical",
+    "marital_status": "categorical",
+    "military_affiliation": "categorical",
+}
 
-    # Discrete numeric features
+AUTO_FEATURES = {
     "num_vehicles": "discrete",
     "num_drivers": "discrete",
     "num_auto_violations": "discrete",
     "num_auto_accidents": "discrete",
-    "continuous_coverage_months": "discrete",
-    "created_hour": "discrete",
-    "created_dayofweek": "discrete",
-
-    # Categorical features
-    "campaign_id": "categorical",
-    "lead_type_id": "categorical",
-    "state": "categorical",
-    "insured": "categorical",
     "home_owner": "categorical",
     "dui": "categorical",
-    "military_affiliation": "categorical",
-    "gender": "categorical",
-    "marital_status": "categorical",
 }
 
+if LEAD_TYPE_ID == 6:
+    FEATURES = {
+        **COMMON_FEATURES,
+        **AUTO_FEATURES,
+    }
+else:
+    raise ValueError(f"Lead type {LEAD_TYPE_ID} is not configured.")
+
 CONTINUOUS_FEATURES = [
-    feature for feature, feature_type in FEATURES.items()
+    feature
+    for feature, feature_type in FEATURES.items()
     if feature_type == "continuous"
 ]
 
 DISCRETE_FEATURES = [
-    feature for feature, feature_type in FEATURES.items()
-    if feature_type == "discrete"
+    feature for feature, feature_type in FEATURES.items() if feature_type == "discrete"
 ]
 
 CATEGORICAL_FEATURES = [
-    feature for feature, feature_type in FEATURES.items()
+    feature
+    for feature, feature_type in FEATURES.items()
     if feature_type == "categorical"
 ]
 
 FEATURE_COLS = CONTINUOUS_FEATURES + DISCRETE_FEATURES + CATEGORICAL_FEATURES
+
+
+# Logistic Regression model settings.
+# These values are passed directly into sklearn.linear_model.LogisticRegression.
+LOGISTIC_REGRESSION_PARAMS = {
+    "penalty": "l2",
+    "C": 1.0,
+    "solver": "lbfgs",
+    "max_iter": 1000,
+    "class_weight": None,
+    "random_state": RANDOM_SEED,
+}
+
 
 # Bid optimizer settings.
 # Target CM = 25% means max_bid = expected_revenue * (1 - 0.25).

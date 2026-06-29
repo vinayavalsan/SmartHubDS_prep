@@ -32,8 +32,7 @@ def build_feature_summary_dataframe(
 
         series = df[feature]
         missing_count = (
-            series.isna().sum()
-            + (series.astype(str).str.strip() == "").sum()
+            series.isna().sum() + (series.astype(str).str.strip() == "").sum()
         )
         missing_pct = missing_count / len(df) * 100 if len(df) else 0
 
@@ -75,12 +74,11 @@ def build_feature_value_counts_dataframe(df, features, top_n_per_feature=30):
     """Create long-format counts and percentages per feature value."""
     long_df = df[features].copy()
 
+    # for col in features:
+    #    long_df[col] = long_df[col].fillna("<NA>").replace("", "<EMPTY>").astype(str)
     for col in features:
         long_df[col] = (
-            long_df[col]
-            .fillna("<NA>")
-            .replace("", "<EMPTY>")
-            .astype(str)
+            long_df[col].astype("string").fillna("<NA>").replace("", "<EMPTY>")
         )
 
     long_df = long_df.melt(
@@ -89,9 +87,7 @@ def build_feature_value_counts_dataframe(df, features, top_n_per_feature=30):
     )
 
     counts_df = (
-        long_df.groupby(["feature", "feature_value"])
-        .size()
-        .reset_index(name="count")
+        long_df.groupby(["feature", "feature_value"]).size().reset_index(name="count")
     )
 
     counts_df["percent"] = (

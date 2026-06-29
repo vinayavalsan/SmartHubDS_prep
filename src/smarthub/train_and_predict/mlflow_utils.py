@@ -8,6 +8,7 @@ import mlflow.sklearn
 
 def log_training_run(
     model,
+    model_params,
     feature_cols,
     metrics,
     report_dir,
@@ -28,6 +29,12 @@ def log_training_run(
                 mlflow.log_metric(metric_name, metric_value)
 
         mlflow.log_artifacts(report_dir, artifact_path="training_report")
+        mlflow.log_params(
+            {
+                param_name: param_value
+                for param_name, param_value in model_params.items()
+            }
+        )
 
         if registered_model_name:
             mlflow.sklearn.log_model(

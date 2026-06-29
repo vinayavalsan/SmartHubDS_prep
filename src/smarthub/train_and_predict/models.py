@@ -8,13 +8,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from config import CATEGORICAL_FEATURES, CONTINUOUS_FEATURES, DISCRETE_FEATURES
+import config
 
 
-def build_logistic_regression_model(random_seed):
+def build_logistic_regression_model(random_seed, model_params):
     """Build the baseline Anton win-probability model."""
-    numeric_features = CONTINUOUS_FEATURES + DISCRETE_FEATURES
-    categorical_features = CATEGORICAL_FEATURES
+    numeric_features = config.CONTINUOUS_FEATURES + config.DISCRETE_FEATURES
+    categorical_features = config.CATEGORICAL_FEATURES
 
     numeric_transformer = Pipeline(
         [
@@ -42,10 +42,7 @@ def build_logistic_regression_model(random_seed):
             ("preprocessor", preprocessor),
             (
                 "classifier",
-                LogisticRegression(
-                    max_iter=1000,
-                    random_state=random_seed,
-                ),
+                LogisticRegression(**model_params),
             ),
         ]
     )

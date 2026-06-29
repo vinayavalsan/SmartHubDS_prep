@@ -8,98 +8,69 @@ This script intentionally orchestrates the workflow and keeps implementation
 details in helper modules.
 """
 
+import argparse
 from pathlib import Path
 
 import joblib
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-from config import (
-    CATEGORICAL_FEATURES,
-    CONTINUOUS_FEATURES,
-    DISCRETE_FEATURES,
-    FEATURE_COLS,
-    LOCAL_MODEL_PATH,
-    MLFLOW_EXPERIMENT_NAME,
-    MLFLOW_REGISTERED_MODEL_NAME,
-    MLFLOW_RUN_NAME,
-    MIN_BID,
-    MODEL_DIR,
-    RANDOM_SEED,
-    REPORT_DIR,
-    TARGET_CM,
-    TARGET_COL,
-    BID_STEP,
+import config
+import metrics
+import mlflow_utils
+import models
+import plots_and_reports
+import predict
+import preprocessing
+import smarthub.io
+
+
+np.random.seed(config.RANDOM_SEED)
+
+
+# =============================================================================
+# Load and clean data and summarize
+# =============================================================================
+
+raw_df = smarthub.io.load_leads()
+
+feature_summary_df, feature_counts_df = plots_and_reports.print_training_data_summary(
+    df=raw_df,
+    continuous_features=config.CONTINUOUS_FEATURES,
+    discrete_features=config.DISCRETE_FEATURES,
+    categorical_features=config.CATEGORICAL_FEATURES,
+    target_col=config.TARGET_COL,
 )
-from metrics import evaluate_model, print_model_evaluation
-from mlflow_utils import log_training_run
-from models import build_logistic_regression_model
-from plots_and_reports import (
-    print_saved_report_files,
-    print_training_data_summary,
-    save_evaluation_summary,
-    save_feature_summary_files,
-    save_performance_plots,
+
+
+df, cleaning_summary = preprocessing.clean_training_data(
+    raw_df,
+    lead_type_id=config.LEAD_TYPE_ID,
 )
-from predict import run_bid_optimizer_evaluation
-from preprocessing import clean_training_data
-from smarthub import io
 
-
-np.random.seed(RANDOM_SEED)
-
-
-# =============================================================================
-# Load and clean data
-# =============================================================================
-
-df = io.load_leads()
-print(sorted(df.keys()))
-
-df, cleaning_summary = clean_training_data(df)
-
-print(f"Loaded {cleaning_summary['raw_rows']:,} rows")
-print(f"Training rows: {cleaning_summary['training_rows']:,}")
-
-
-# =============================================================================
-# Data summary
-# =============================================================================
-
-print()
-print("=" * 80)
-print("Dataset")
-print("=" * 80)
+print(f"Lead Type ID         : {config.LEAD_TYPE_ID}")
 print(f"Rows Before Cleaning : {cleaning_summary['raw_rows']:,}")
 print(f"Rows After Cleaning  : {cleaning_summary['training_rows']:,}")
 print(
     f"Rows Dropped         : {cleaning_summary['dropped_rows']:,} "
     f"({cleaning_summary['dropped_pct']:.2f}%)"
 )
-print(f"Continuous Features  : {len(CONTINUOUS_FEATURES):,}")
-print(f"Discrete Features    : {len(DISCRETE_FEATURES):,}")
-print(f"Categorical Features : {len(CATEGORICAL_FEATURES):,}")
-
-feature_summary_df, feature_counts_df = print_training_data_summary(
-    df=df,
-    continuous_features=CONTINUOUS_FEATURES,
-    discrete_features=DISCRETE_FEATURES,
-    categorical_features=CATEGORICAL_FEATURES,
-    target_col=TARGET_COL,
-)
+print(f"Continuous Features  : {len(config.CONTINUOUS_FEATURES):,}")
+print(f"Discrete Features    : {len(config.DISCRETE_FEATURES):,}")
+print(f"Categorical Features : {len(config.CATEGORICAL_FEATURES):,}")
 
 
 # =============================================================================
 # Split
 # =============================================================================
 
-X = df[FEATURE_COLS]
-y = df[TARGET_COL]
+X = df[config.FEATURE_COLS]
+y = df[config.TARGET_COL]
 
 train_idx, test_idx = train_test_split(
     df.index,
     test_size=0.20,
-    random_state=RANDOM_SEED,
+    random_state=config.RANDOM_SEED,
 )
 
 X_train = X.loc[train_idx]
@@ -114,7 +85,9 @@ test_eval_df = df.loc[test_idx].copy()
 # Train model
 # =============================================================================
 
-model = build_logistic_regression_model(random_seed=RANDOM_SEED)
+model = models.build_logistic_regression_model(
+    random_seed=config.RANDOM_SEED, model_params=config.LOGISTIC_REGRESSION_PARAMS
+)
 model.fit(X_train, y_train)
 
 
@@ -122,52 +95,55 @@ model.fit(X_train, y_train)
 # Evaluate model
 # =============================================================================
 
-pred, pred_class, model_metrics = evaluate_model(
+pred, pred_class, model_metrics = metrics.evaluate_model(
     model=model,
     X_test=X_test,
     y_test=y_test,
 )
 
-print_model_evaluation(
+# =============================================================================
+# Bid optimization evaluation
+# =============================================================================
+
+optimizer_result = predict.run_bid_optimizer_evaluation(
+    test_eval_df=test_eval_df,
+    model=model,
+    target_cm=config.TARGET_CM,
+    min_bid=config.MIN_BID,
+    bid_step=config.BID_STEP,
+)
+
+
+if optimizer_result is not None:
+    optimizer_eval_df, optimizer_summary = optimizer_result
+    model_metrics["predicted_recommended_bid_win_rate"] = optimizer_summary[
+        "avg_recommended_bid_predicted_win_rate"
+    ]
+else:
+    optimizer_eval_df, optimizer_summary = None, {}
+    model_metrics["predicted_recommended_bid_win_rate"] = float("nan")
+
+metrics.print_model_evaluation(
     metrics=model_metrics,
     rows_trained=len(df),
     train_rows=len(X_train),
     test_rows=len(X_test),
 )
 
-
-# =============================================================================
-# Bid optimization evaluation
-# =============================================================================
-
-optimizer_result = run_bid_optimizer_evaluation(
-    test_eval_df=test_eval_df,
-    model=model,
-    target_cm=TARGET_CM,
-    min_bid=MIN_BID,
-    bid_step=BID_STEP,
-)
-
-if optimizer_result is not None:
-    optimizer_eval_df, optimizer_summary = optimizer_result
-else:
-    optimizer_eval_df, optimizer_summary = None, {}
-
-
 # =============================================================================
 # Save report
 # =============================================================================
 
-report_dir = REPORT_DIR
+report_dir = config.REPORT_DIR
 Path(report_dir).mkdir(exist_ok=True)
 
-save_feature_summary_files(
+plots_and_reports.save_feature_summary_files(
     report_dir=report_dir,
     feature_summary_df=feature_summary_df,
     feature_counts_df=feature_counts_df,
 )
 
-save_performance_plots(
+plots_and_reports.save_performance_plots(
     report_dir=report_dir,
     y_test=y_test,
     pred=pred,
@@ -189,13 +165,13 @@ evaluation_summary = {
     "bid_optimizer": optimizer_summary,
 }
 
-save_evaluation_summary(
+plots_and_reports.save_evaluation_summary(
     report_dir=report_dir,
     evaluation_summary=evaluation_summary,
     optimizer_eval_df=optimizer_eval_df,
 )
 
-print_saved_report_files(
+plots_and_reports.print_saved_report_files(
     report_dir=report_dir,
     optimizer_eval_df=optimizer_eval_df,
 )
@@ -205,23 +181,24 @@ print_saved_report_files(
 # Save model locally
 # =============================================================================
 
-Path(MODEL_DIR).mkdir(exist_ok=True)
-joblib.dump(model, LOCAL_MODEL_PATH)
-print(f"Saved model to {LOCAL_MODEL_PATH}")
+Path(config.MODEL_DIR).mkdir(exist_ok=True)
+joblib.dump(model, config.LOCAL_MODEL_PATH)
+print(f"Saved model to {config.LOCAL_MODEL_PATH}")
 
 
 # =============================================================================
 # MLflow
 # =============================================================================
 
-log_training_run(
+mlflow_utils.log_training_run(
     model=model,
-    feature_cols=FEATURE_COLS,
+    model_params=config.LOGISTIC_REGRESSION_PARAMS,
+    feature_cols=config.FEATURE_COLS,
     metrics=model_metrics,
     report_dir=report_dir,
-    experiment_name=MLFLOW_EXPERIMENT_NAME,
-    run_name=MLFLOW_RUN_NAME,
-    registered_model_name=MLFLOW_REGISTERED_MODEL_NAME,
+    experiment_name=config.MLFLOW_EXPERIMENT_NAME,
+    run_name=config.MLFLOW_RUN_NAME,
+    registered_model_name=config.MLFLOW_REGISTERED_MODEL_NAME,
 )
 
 print("Done.")

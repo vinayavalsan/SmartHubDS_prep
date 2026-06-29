@@ -28,12 +28,12 @@ def evaluate_model(model, X_test, y_test):
         "precision": float(precision_score(y_test, pred_class, zero_division=0)),
         "recall": float(recall_score(y_test, pred_class, zero_division=0)),
         "f1": float(f1_score(y_test, pred_class, zero_division=0)),
-        "average_win_rate": float(y_test.mean()),
-        "average_predicted_win_rate": float(pred.mean()),
+        "observed_win_rate": float(y_test.mean()),
+        "predicted_current_bid_win_rate": float(pred.mean()),
     }
 
     metrics["calibration_error"] = abs(
-        metrics["average_win_rate"] - metrics["average_predicted_win_rate"]
+        metrics["observed_win_rate"] - metrics["predicted_current_bid_win_rate"]
     )
 
     return pred, pred_class, metrics
@@ -63,8 +63,12 @@ def print_model_evaluation(metrics, rows_trained, train_rows, test_rows):
     print("=" * 80)
     print("Business Metrics")
     print("=" * 80)
-    print(f"Average Win Rate:                   {metrics['average_win_rate']:.4f}")
+    print(f"Observed Win Rate:                  " f"{metrics['observed_win_rate']:.4f}")
     print(
-        "Average Predicted Win Rate:         "
-        f"{metrics['average_predicted_win_rate']:.4f}"
+        f"Predicted Win Rate (Current Bids):  "
+        f"{metrics['predicted_current_bid_win_rate']:.4f}"
+    )
+    print(
+        f"Predicted Win Rate (Recommended):   "
+        f"{metrics['predicted_recommended_bid_win_rate']:.4f}"
     )
