@@ -80,7 +80,14 @@
   filters.
 
 ### Ops / structure
-- `restart: unless-stopped` on all compose services (postgres, server, worker).
+- `restart: unless-stopped` on all compose services.
+- Dashboards run in the compose: **leads** at http://localhost:8502, **monitoring**
+  at http://localhost:8503 (renamed "SmartHub Leads" / "SmartHub Monitoring");
+  both read the lock-free Parquet copy (`STORAGE_BACKEND=parquet`).
+- **Monitoring dashboard now uses real data** — `transforms.leads_to_monitoring_base`
+  aggregates pulled `lead_pings` into the time-series performance shape; the
+  sample CSV (`data/etl/sample_data.csv`) and `io.load_monitoring` were removed.
+- `install.sh --down` stops the stack and frees the host ports (4200/8502/8503).
 - Tidied Docker files into `docker/` (`Dockerfile.app`, `Dockerfile.worker`,
   `worker-entrypoint.sh`); compose + README updated.
 - Added `install.sh` — validates prerequisites (docker/compose, `.env` present,

@@ -14,7 +14,6 @@ from .config import StorageSettings
 
 # Default on-disk locations, resolved relative to the project root.
 DEFAULT_LEADS_PATH = paths.project_root() / "data" / "leads.parquet"
-DEFAULT_MONITORING_PATH = paths.data_dir() / "etl" / "sample_data.csv"
 TRAINING_DIR = paths.data_dir() / "training"
 
 
@@ -143,15 +142,3 @@ def load_training_table(
         target = files[-1]
     _check_exists(target, "Run the feature build first (build-features deployment).")
     return pd.read_parquet(target)
-
-
-def load_monitoring(path: str | os.PathLike[str] | None = None) -> pd.DataFrame:
-    """Load the monitoring CSV with parsed datetimes and coerced numerics."""
-    resolved = paths.resolve(path) if path is not None else DEFAULT_MONITORING_PATH
-    _check_exists(resolved, "Check the data/etl directory for the ETL export.")
-    df = pd.read_csv(resolved)
-    for col in ("datetime_min", "datetime_max"):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col])
-    transforms.coerce_numeric(df, transforms.MONITORING_NUMERIC_COLS)
-    return df

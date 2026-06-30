@@ -260,6 +260,33 @@ MONITORING_SUM_COLS = [
 ]
 
 
+def leads_to_monitoring_base(df: pd.DataFrame) -> pd.DataFrame:
+    """Turn cleaned per-ping leads into the per-row monitoring base.
+
+    Produces the columns ``aggregate_monitoring`` expects (one row per ping):
+    ``datetime_min`` (from ``created_at``), ``state``, ``campaign_id``, and the
+    sum bases ``num_opportunities``, ``num_won``, ``revenue_measured``,
+    ``revenue_expected``, ``payout``. Profit / CM / win rate are derived after
+    resampling. Input is the prepared leads frame (``io.load_leads``).
+    """
+    out = pd.DataFrame(index=df.index)
+    out["datetime_min"] = pd.to_datetime(df["created_at"], errors="coerce")
+    out["state"] = df.get("state")
+    out["campaign_id"] = df.get("campaign_id")
+    won = pd.to_numeric(df.get("won"), errors="coerce").fillna(0)
+    out["num_opportunities"] = 1
+    out["num_won"] = won.astype("int64")
+    out["revenue_measured"] = pd.to_numeric(df.get("rev"), errors="coerce").fillna(0.0)
+    if "expected_revenue" in df.columns:
+        out["revenue_expected"] = pd.to_numeric(
+            df["expected_revenue"], errors="coerce"
+        ).fillna(0.0)
+    else:
+        out["revenue_expected"] = 0.0
+    out["payout"] = pd.to_numeric(df.get("payout"), errors="coerce").fillna(0.0)
+    return out.dropna(subset=["datetime_min"]).reset_index(drop=True)
+
+
 def add_monitoring_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Recompute profit, contribution margins and win rate for monitoring data."""
     out = df.copy()

@@ -23,7 +23,7 @@ means and what Anton is solving), see [CONTEXT.md](./CONTEXT.md).
 │   └── flows/                    # Prefect flows (data_pull, features) + windowing
 ├── docker/                       # Dockerfile.app, Dockerfile.worker, worker-entrypoint.sh
 ├── tests/                        # pytest unit tests
-├── data/                         # accumulated data (gitignored) + etl/sample_data.csv
+├── data/                         # accumulated data (gitignored): leads/, training/, duckdb
 ├── prefect.yaml                  # Prefect deployments (data-pull, build-features)
 ├── docker-compose.prefect.yml    # Postgres + Prefect server + worker
 ├── install.sh                    # validate prerequisites/.env, then start the stack
@@ -83,20 +83,23 @@ expected revenue over all listings.
 files. For training, `io.load_leads_window(days=N)` reads just the most recent
 `N` days (the rolling recency window from CONTEXT §7).
 
-### 2. Launch a dashboard
+### 2. Dashboards
+
+Both dashboards run in the Docker stack and read the **real pulled leads** (the
+lock-free Parquet copy via `STORAGE_BACKEND=parquet`, so they never contend with
+the worker's DuckDB write lock — keep `STORAGE_BACKEND=both` in `.env`):
+
+- **SmartHub Leads** → **http://localhost:8502** (`leads-dashboard` service) —
+  lead-ping explorer: filters, funnel, win-rate curves.
+- **SmartHub Monitoring** → **http://localhost:8503** (`monitoring-dashboard`) —
+  performance over time (revenue/CM/win-rate), aggregated live from the pulled
+  leads (no sample file).
+
+To run one manually instead:
 
 ```bash
-streamlit run src/smarthub/dashboards/leads_app.py        # lead-ping explorer
-streamlit run src/smarthub/dashboards/monitoring_app.py   # DS performance
-```
-
-Streamlit prints a local URL and opens your browser — by default
-**http://localhost:8501**. To run both at once, give the second one a different
-port:
-
-```bash
-streamlit run src/smarthub/dashboards/monitoring_app.py --server.port 8502
-# -> http://localhost:8502
+streamlit run src/smarthub/dashboards/leads_app.py --server.port 8502
+streamlit run src/smarthub/dashboards/monitoring_app.py --server.port 8503
 ```
 
 The leads dashboard reads from the configured storage automatically (DuckDB if

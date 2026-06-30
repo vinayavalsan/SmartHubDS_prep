@@ -65,5 +65,45 @@ services:
       - ./data:/app/data                              # persist pulled data
       - ${SSH_PRIVATE_KEY_PATH}:/keys/id_ed25519:ro   # mount the SSH key (read-only)
 
+  leads-dashboard:
+    container_name: smarthub-leads
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      # Read the lock-free Parquet copy (the worker holds the DuckDB write lock).
+      STORAGE_BACKEND: parquet
+    ports:
+      - "8502:8501"                 # http://localhost:8502  (SmartHub Leads)
+    volumes:
+      - ./data:/app/data
+
+  monitoring-dashboard:
+    container_name: smarthub-monitoring
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      # Read the lock-free Parquet copy (the worker holds the DuckDB write lock).
+      STORAGE_BACKEND: parquet
+    command:
+      - streamlit
+      - run
+      - src/smarthub/dashboards/monitoring_app.py
+      - --server.address
+      - 0.0.0.0
+      - --server.port
+      - "8501"
+    ports:
+      - "8503:8501"                 # http://localhost:8503  (SmartHub Monitoring)
+    volumes:
+      - ./data:/app/data
+
 volumes:
   postgres-data:

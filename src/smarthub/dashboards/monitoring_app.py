@@ -10,9 +10,9 @@ import plotly.express as px
 import streamlit as st
 
 from smarthub import io
-from smarthub.transforms import add_monitoring_derived_columns, aggregate_monitoring
+from smarthub.transforms import aggregate_monitoring, leads_to_monitoring_base
 
-st.set_page_config(layout="wide", page_title="SmartHub DS Performance")
+st.set_page_config(layout="wide", page_title="SmartHub Monitoring")
 
 METRIC_GROUPS = {
     "All": None,
@@ -39,21 +39,9 @@ _BIN_MAP = {"1hr": "1h", "6hr": "6h", "12hr": "12h", "day": "D", "week": "W-MON"
 
 
 @st.cache_data
-def load_data(uploaded_file=None):
-    df = io.load_monitoring(uploaded_file) if uploaded_file is None else (
-        _read_upload(uploaded_file)
-    )
-    return add_monitoring_derived_columns(df)
-
-
-def _read_upload(uploaded_file):
-    import pandas as pd
-
-    df = pd.read_csv(uploaded_file)
-    for col in ("datetime_min", "datetime_max"):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col])
-    return df
+def load_data():
+    """Build the monitoring base from the real accumulated leads."""
+    return leads_to_monitoring_base(io.load_leads())
 
 
 def y_label_for(metric: str) -> str:
@@ -127,7 +115,7 @@ def _render_controls(df):
 
 
 def main():
-    st.title("SmartHub DS Performance")
+    st.title("SmartHub Monitoring")
 
     try:
         df = load_data()

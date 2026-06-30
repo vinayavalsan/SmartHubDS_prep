@@ -18,7 +18,7 @@ from smarthub.transforms import (
 )
 from smarthub.dashboards import _ui
 
-st.set_page_config(page_title="SmartHub Anton Dashboard", layout="wide")
+st.set_page_config(page_title="SmartHub Leads", layout="wide")
 
 
 @st.cache_data
@@ -466,7 +466,7 @@ def _render_metrics(df):
 
 
 def main():
-    st.title("SmartHub Anton Dashboard")
+    st.title("SmartHub Leads")
     if st.button("🔄 Reload Data"):
         st.cache_data.clear()
         st.rerun()

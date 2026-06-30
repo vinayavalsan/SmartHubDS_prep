@@ -129,6 +129,33 @@ def test_add_monitoring_derived_columns():
     assert out.loc[2, "winrate"] == 0.0
 
 
+def test_leads_to_monitoring_base():
+    # prepared-leads shape (won as 0/1, payout = won*bid, expected_revenue present)
+    leads = pd.DataFrame(
+        {
+            "created_at": pd.to_datetime(
+                ["2026-06-20 01:00", "2026-06-20 02:00", "2026-06-20 03:00"]
+            ),
+            "state": ["NY", "NY", "CA"],
+            "campaign_id": pd.array([1, 1, 2], dtype="Int64"),
+            "won": pd.array([1, 0, 1], dtype="Int64"),
+            "rev": [10.0, 0.0, 20.0],
+            "expected_revenue": [12.0, 8.0, 25.0],
+            "payout": [5.0, 0.0, 9.0],   # won * bid
+        }
+    )
+    base = t.leads_to_monitoring_base(leads)
+    assert list(base["num_opportunities"]) == [1, 1, 1]
+    assert list(base["num_won"]) == [1, 0, 1]
+    assert base["revenue_measured"].sum() == 30.0
+    assert base["revenue_expected"].sum() == 45.0
+    # feeds straight into aggregate_monitoring
+    agg = t.aggregate_monitoring(base, freq="D")
+    assert agg.loc[0, "num_opportunities"] == 3
+    assert agg.loc[0, "num_won"] == 2
+    assert agg.loc[0, "winrate"] == pytest.approx(2 / 3)
+
+
 def test_aggregate_monitoring_resamples():
     agg = t.aggregate_monitoring(_monitoring_frame(), freq="D")
     assert len(agg) == 1

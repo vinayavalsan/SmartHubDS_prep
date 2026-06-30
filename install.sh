@@ -4,11 +4,14 @@
 #
 #   ./install.sh            # validate and start
 #   ./install.sh --check    # validate only (no docker up)
+#   ./install.sh --down     # stop the stack and free the host ports
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 COMPOSE_FILE="docker-compose.prefect.yml"
+# Host ports the stack binds (free these on --down).
+HOST_PORTS=(4200 8502 8503)
 REQUIRED_VARS=(
   SSH_HOST
   SSH_USER
@@ -25,6 +28,21 @@ info()  { printf "  %s\n" "$*"; }
 
 fail() { red "✗ $*"; exit 1; }
 
+free_ports() {
+  if ! command -v lsof >/dev/null 2>&1; then
+    info "lsof not found; skipping explicit port free."
+    return
+  fi
+  for p in "${HOST_PORTS[@]}"; do
+    pids=$(lsof -ti "tcp:${p}" -sTCP:LISTEN 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+      info "Freeing port ${p} (killing: ${pids})"
+      # shellcheck disable=SC2086
+      kill $pids 2>/dev/null || true
+    fi
+  done
+}
+
 # --- 1. Docker available -----------------------------------------------------
 command -v docker >/dev/null 2>&1 || fail "docker is not installed / not on PATH."
 if docker compose version >/dev/null 2>&1; then
@@ -35,6 +53,21 @@ else
   fail "docker compose (v2) or docker-compose (v1) is required."
 fi
 green "✓ docker + compose found"
+
+daemon_up() { docker info >/dev/null 2>&1; }
+
+# --- --down: stop the stack and free the host ports --------------------------
+if [[ "${1:-}" == "--down" ]]; then
+  if daemon_up; then
+    info "Stopping the stack ..."
+    $COMPOSE -f "$COMPOSE_FILE" down --remove-orphans || true
+  else
+    info "Docker daemon not running — containers already stopped; freeing ports only."
+  fi
+  free_ports
+  green "Stopped; ports ${HOST_PORTS[*]} freed."
+  exit 0
+fi
 
 # --- 2. .env present ---------------------------------------------------------
 if [[ ! -f .env ]]; then
@@ -84,10 +117,14 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 
 # --- 6. Bring the stack up ---------------------------------------------------
+daemon_up || fail "Docker daemon is not running. Start Docker / Rancher Desktop and retry."
+green "✓ docker daemon running"
+
 echo
 info "Starting the Prefect stack ($COMPOSE_FILE) ..."
 $COMPOSE -f "$COMPOSE_FILE" up --build -d
 
 echo
-green "Up. Prefect UI: http://localhost:4200"
+green "Up."
+info "Prefect UI: http://localhost:4200   Leads: http://localhost:8502   Monitoring: http://localhost:8503"
 info "Logs:  docker logs prefect-worker -f"
