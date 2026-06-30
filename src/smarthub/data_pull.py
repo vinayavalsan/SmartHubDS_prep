@@ -23,7 +23,11 @@ from . import storage
 from .cli import build_pull_parser
 from .config import ConfigError, PullSettings, RedshiftSettings, StorageSettings
 from .logging_utils import configure_logging, get_logger
-from .models import leads_select, leads_with_expected_revenue_select
+from .models import (
+    coerce_leads_dtypes,
+    leads_select,
+    leads_with_expected_revenue_select,
+)
 
 logger = get_logger(__name__)
 
@@ -55,19 +59,23 @@ def fetch_leads(
     max_created_at: str,
     with_expected_revenue: bool = True,
     selected_only: bool = True,
+    lead_type_id: int | None = None,
 ) -> pd.DataFrame:
     """Open the tunnel, run the ORM query, and return the result as a dataframe.
 
     The SSH tunnel and the SQLAlchemy engine are both disposed deterministically
-    even if the query raises.
+    even if the query raises. ``lead_type_id`` restricts to one lead type.
     """
     ssh, rs = settings.ssh, settings.redshift
     if with_expected_revenue:
         stmt = leads_with_expected_revenue_select(
-            min_created_at, max_created_at, selected_only=selected_only
+            min_created_at,
+            max_created_at,
+            selected_only=selected_only,
+            lead_type_id=lead_type_id,
         )
     else:
-        stmt = leads_select(min_created_at, max_created_at)
+        stmt = leads_select(min_created_at, max_created_at, lead_type_id=lead_type_id)
 
     with SSHTunnelForwarder(
         (ssh.host, ssh.port),
@@ -85,6 +93,7 @@ def fetch_leads(
         finally:
             engine.dispose()
 
+    leads_df = coerce_leads_dtypes(leads_df)
     logger.info("Fetched leads frame with shape %s", leads_df.shape)
     return leads_df
 
@@ -94,6 +103,7 @@ def run(
     max_created_at: str,
     with_expected_revenue: bool = True,
     selected_only: bool = True,
+    lead_type_id: int | None = None,
 ) -> pd.DataFrame:
     """End-to-end pull: load config, fetch, persist. Returns the frame.
 
@@ -107,6 +117,7 @@ def run(
         max_created_at,
         with_expected_revenue=with_expected_revenue,
         selected_only=selected_only,
+        lead_type_id=lead_type_id,
     )
     results = storage.save_pull(leads_df, StorageSettings.from_env())
     logger.info("Persisted pull: %s", results)
@@ -122,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             args.max_created_at,
             with_expected_revenue=not args.no_expected_revenue,
             selected_only=not args.all_listings,
+            lead_type_id=args.lead_type_id,
         )
     except ConfigError as exc:
         logger.error("Configuration error: %s", exc)

@@ -127,3 +127,16 @@ class StorageSettings:
     @property
     def use_parquet(self) -> bool:
         return self.backend in ("parquet", "both")
+
+
+DEFAULT_TRAINING_WINDOW_DAYS = 21
+
+
+def training_window_days() -> int:
+    """Rolling training window in days (env ``TRAINING_WINDOW_DAYS``, default 21).
+
+    The feature build trains on this many recent days, since the market is
+    non-stationary (CONTEXT.md §7). Set ``0`` to use all accumulated data.
+    """
+    raw = os.getenv("TRAINING_WINDOW_DAYS")
+    return int(raw) if raw not in (None, "") else DEFAULT_TRAINING_WINDOW_DAYS

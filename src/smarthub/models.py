@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Sequence, Union
 
+import pandas as pd
 from sqlalchemy import (
     BigInteger,
     Date,
@@ -226,18 +227,52 @@ def _as_datetime(value: DateLike) -> datetime:
     return datetime.strptime(value, _DT_FORMAT)
 
 
-def leads_select(min_created_at: DateLike, max_created_at: DateLike) -> Select:
+def coerce_leads_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Force each `lead_pings` column to its ORM-declared dtype.
+
+    Makes the on-disk schema **stable regardless of nulls**: a string column that
+    happens to be all-null in one pull is still typed as text, so a later pull
+    with real strings (e.g. `home_property_type = 'Single Family Home'`) won't
+    hit a DuckDB type-conversion error. Columns not in the model (e.g. the
+    expected-revenue join outputs) are left untouched.
+    """
+    out = df.copy()
+    for column in LeadPing.__table__.columns:
+        name = column.name
+        if name not in out.columns:
+            continue
+        col_type = column.type
+        if isinstance(col_type, String):
+            out[name] = out[name].astype("string")
+        elif isinstance(col_type, Integer):  # covers BigInteger
+            out[name] = pd.to_numeric(out[name], errors="coerce").astype("Int64")
+        elif isinstance(col_type, Numeric):
+            out[name] = pd.to_numeric(out[name], errors="coerce").astype("float64")
+        elif isinstance(col_type, (Date, DateTime)):
+            out[name] = pd.to_datetime(out[name], errors="coerce")
+    return out
+
+
+def leads_select(
+    min_created_at: DateLike,
+    max_created_at: DateLike,
+    lead_type_id: int | None = None,
+) -> Select:
     """Build the base leads query: selected columns where created_at is in range.
 
     Bounds may be ``datetime`` objects or ``"YYYY-MM-DD HH:MM:SS"`` strings.
+    Pass ``lead_type_id`` to restrict to one lead type (e.g. 6=auto, 1=home);
+    ``None`` pulls all types.
     """
     lower, upper = _as_datetime(min_created_at), _as_datetime(max_created_at)
-    return (
+    stmt = (
         select(*LEADS_COLUMNS)
         .where(LeadPing.created_at >= lower)
         .where(LeadPing.created_at < upper)
-        .order_by(LeadPing.created_at)
     )
+    if lead_type_id is not None:
+        stmt = stmt.where(LeadPing.lead_type_id == lead_type_id)
+    return stmt.order_by(LeadPing.created_at)
 
 
 def expected_revenue_subquery(selected_only: bool = True):
@@ -268,15 +303,17 @@ def leads_with_expected_revenue_select(
     min_created_at: DateLike,
     max_created_at: DateLike,
     selected_only: bool = True,
+    lead_type_id: int | None = None,
 ) -> Select:
     """Leads query LEFT JOINed to per-ping expected revenue from the listings.
 
     Adds ``expected_revenue``, ``realized_payout`` and ``num_selected_listings``
-    columns. Pings with no matching listings get NULLs (outer join).
+    columns. Pings with no matching listings get NULLs (outer join). Pass
+    ``lead_type_id`` to restrict to one lead type; ``None`` pulls all types.
     """
     lower, upper = _as_datetime(min_created_at), _as_datetime(max_created_at)
     subq = expected_revenue_subquery(selected_only)
-    return (
+    stmt = (
         select(
             *LEADS_COLUMNS,
             subq.c.expected_revenue,
@@ -286,5 +323,7 @@ def leads_with_expected_revenue_select(
         .outerjoin(subq, subq.c.lead_ping_id == LeadPing.id)
         .where(LeadPing.created_at >= lower)
         .where(LeadPing.created_at < upper)
-        .order_by(LeadPing.created_at)
     )
+    if lead_type_id is not None:
+        stmt = stmt.where(LeadPing.lead_type_id == lead_type_id)
+    return stmt.order_by(LeadPing.created_at)

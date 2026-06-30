@@ -47,6 +47,12 @@ def build_pull_parser() -> argparse.ArgumentParser:
         help="Aggregate expected revenue over ALL listings, not just selected.",
     )
     parser.add_argument(
+        "--lead-type-id",
+        type=int,
+        default=None,
+        help="Restrict to one lead type (e.g. 6=auto, 1=home). Default: all.",
+    )
+    parser.add_argument(
         "--log-level",
         default=None,
         help="Logging level (default: env LOG_LEVEL or INFO).",

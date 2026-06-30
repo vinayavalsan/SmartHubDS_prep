@@ -26,6 +26,39 @@
   tunnel/connection cleanup, logging, CLI date range, optional SSH key
   passphrase, and `--no-expected-revenue` / `--all-listings` flags.
 
+### Orchestration (Prefect, local via Docker)
+- Data pull now runs as a scheduled **Prefect 3** flow, split into tasks
+  (`resolve_window → fetch → persist → update_watermark`) reusing the existing
+  pull/storage code.
+- Locally hosted via `docker-compose.prefect.yml` (server + worker);
+  `docker/worker-entrypoint.sh` wires work pool + queue + deployment + worker on
+  startup, deployment declared in `prefect.yaml`.
+- **Per-lead-type pulls**: flow parametrized by `lead_type_id`; one `data-pull`
+  deployment with two **schedules** (per-schedule parameters) for auto (6) and
+  home (1). ORM query builders take an optional `lead_type_id` filter.
+- Last-record timestamp stored **per type** in a Prefect **Variable**
+  (`smarthub_last_pull_timestamp_<type>`); each run resumes from it (minus an
+  overlap so late-resolving outcomes are re-pulled), 7-day backfill on first run.
+  A window with no rows keeps the watermark unchanged.
+- Pure window logic in `flows/windowing.py` with tests.
+- Postgres backs the Prefect server (avoids SQLite "database is locked").
+
+### Feature extraction
+- `features.build_training_table` builds the leakage-safe training table per lead
+  type: keeps real bidding decisions (`won` true/false), ping-time features +
+  `bid` + `expected_revenue` + `won_flag`, drops leakage + zero-variance columns,
+  adds time features.
+- `build-features` Prefect deployment on the **same work pool, separate queue**
+  (`features`); two schedules (auto/home). One worker serves both `default` and
+  `features` queues.
+- Output is **versioned**: `data/training/<type>/<timestamp>.parquet` (each build
+  kept; loaders default to latest) with a `<version>.json` lineage manifest
+  (window, date range, rows, win rate, features). Rolling window via
+  `TRAINING_WINDOW_DAYS` (`.env`, default 21; 0 = all data).
+- Both flows publish **Prefect markdown artifacts** (keyed `data-pull-<type>` /
+  `build-features-<type>`) summarising each run — window, rows, watermarks, win
+  rate, date range, features — visible per-run and as history in the UI.
+
 ### Storage
 - Added a DuckDB + partitioned-Parquet storage layer, switchable via `.env`
   (`STORAGE_BACKEND`).
@@ -45,6 +78,14 @@
 - Added Plot Type 4 — cumulative win-rate "shelves" curves (bid ≤ X vs bid > X,
   plus delta), an accept/reject funnel, and partner / bidding-strategy / insured
   filters.
+
+### Ops / structure
+- `restart: unless-stopped` on all compose services (postgres, server, worker).
+- Tidied Docker files into `docker/` (`Dockerfile.app`, `Dockerfile.worker`,
+  `worker-entrypoint.sh`); compose + README updated.
+- Added `install.sh` — validates prerequisites (docker/compose, `.env` present,
+  required vars set, SSH key exists, valid `STORAGE_BACKEND`) then brings the
+  stack up; `--check` validates only.
 
 ### Quality & cleanup
 - Unit tests throughout (41 total: transforms, config, ORM SQL, storage);

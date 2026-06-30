@@ -1,0 +1,57 @@
+# Prefect deployment definitions for SmartHub.
+# `prefect deploy --all` (run by docker/worker-entrypoint.sh at startup)
+# registers these against the work pool + queue below.
+
+name: smarthub
+prefect-version: 3.0.0
+
+# Local source: the worker runs the flow from this same checkout/image.
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /app
+
+deployments:
+  # One deployment, two schedules — one per lead type (per-schedule parameters).
+  - name: data-pull
+    entrypoint: src/smarthub/flows/data_pull_flow.py:data_pull_flow
+    work_pool:
+      name: smarthub-pool
+      work_queue_name: default
+    # Shared defaults; each schedule overrides the lead type below.
+    # Runs every 4h and pulls from (last record - overlap) -> now, so a 1h
+    # overlap means each run covers ~the last 4h plus 1h of re-pull.
+    parameters:
+      overlap_hours: 1
+      default_lookback_hours: 168
+      with_expected_revenue: true
+      selected_only: true
+    schedules:
+      - cron: "0 */4 * * *"      # auto
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 6
+          lead_type_name: auto
+      - cron: "15 */4 * * *"     # home (staggered 15 min)
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 1
+          lead_type_name: home
+
+  # Feature extraction: same work pool, separate queue ('features').
+  - name: build-features
+    entrypoint: src/smarthub/flows/features_flow.py:build_features_flow
+    work_pool:
+      name: smarthub-pool
+      work_queue_name: features
+    # window_days omitted -> flow uses TRAINING_WINDOW_DAYS env (default 21).
+    schedules:
+      - cron: "30 */4 * * *"     # auto, after the pulls
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 6
+          lead_type_name: auto
+      - cron: "45 */4 * * *"     # home
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 1
+          lead_type_name: home

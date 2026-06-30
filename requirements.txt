@@ -6,7 +6,9 @@ streamlit>=1.30
 plotly>=5.18
 python-dotenv>=1.0
 sshtunnel>=0.4
+paramiko>=3,<4  # sshtunnel uses paramiko.DSSKey, removed in paramiko 4
 redshift-connector>=2.0
 SQLAlchemy>=2.0
 sqlalchemy-redshift>=0.8.14
 duckdb>=0.10
+paramiko==3.5.1

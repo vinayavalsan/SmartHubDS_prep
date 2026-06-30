@@ -14,34 +14,40 @@ means and what Anton is solving), see [CONTEXT.md](./CONTEXT.md).
 │   ├── paths.py                  # project-root path resolution
 │   ├── logging_utils.py          # logging setup
 │   ├── io.py                     # data loading/saving (friendly errors)
-│   ├── transforms.py             # shared metric definitions (single source of truth)
-│   ├── data_pull.py              # Redshift -> parquet pull
-│   └── dashboards/
-│       ├── leads_app.py          # raw lead-ping dashboard
-│       └── monitoring_app.py     # DS performance dashboard
-├── tests/                        # pytest unit tests for transforms & config
-├── data/                         # input data (etl/sample_data.csv) + leads.parquet
+│   ├── transforms.py             # shared metric definitions
+│   ├── models.py                 # SQLAlchemy ORM + query builders
+│   ├── storage.py                # DuckDB + partitioned-Parquet persistence
+│   ├── features.py               # leakage-safe training-table extraction
+│   ├── data_pull.py              # Redshift -> storage pull
+│   ├── dashboards/               # Streamlit apps (leads, monitoring)
+│   └── flows/                    # Prefect flows (data_pull, features) + windowing
+├── docker/                       # Dockerfile.app, Dockerfile.worker, worker-entrypoint.sh
+├── tests/                        # pytest unit tests
+├── data/                         # accumulated data (gitignored) + etl/sample_data.csv
+├── prefect.yaml                  # Prefect deployments (data-pull, build-features)
+├── docker-compose.prefect.yml    # Postgres + Prefect server + worker
+├── install.sh                    # validate prerequisites/.env, then start the stack
 ├── pyproject.toml                # packaging, deps, scripts, pytest config
-├── requirements.txt              # runtime deps
-├── Dockerfile                    # container for pull + dashboards
 └── .env.example                  # copy to .env and fill in
 ```
 
-> The legacy `prep/` and `src/monitoring/` scripts are superseded by
-> `src/smarthub/` and can be deleted whenever convenient.
-
 ## Setup
+
+**Quickest path (Docker + Prefect):** fill in `.env`, then run the installer —
+it validates prerequisites and `.env`, then brings up the stack:
+
+```bash
+cp .env.example .env        # fill in SSH + Redshift credentials
+./install.sh                # validate + start (or: ./install.sh --check to validate only)
+# Prefect UI: http://localhost:4200
+```
+
+**For local dev / running tests** (no Docker):
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"     # editable install + dev tools (pytest, flake8)
-```
-
-Then create your `.env`:
-
-```bash
-cp .env.example .env        # fill in SSH + Redshift credentials
 ```
 
 ## Usage
@@ -107,13 +113,63 @@ flake8          # style (max line length 88)
 ## Docker
 
 ```bash
-docker build -t smarthub .
+docker build -f docker/Dockerfile.app -t smarthub .
 # leads dashboard (default):
 docker run --rm -p 8501:8501 --env-file .env -v "$PWD/data:/app/data" smarthub
 # data pull:
 docker run --rm --env-file .env -v "$PWD/data:/app/data" smarthub \
     smarthub-pull --min-created-at "2026-06-07 00:00:00" \
                   --max-created-at "2026-06-20 00:00:00"
+```
+
+## Orchestration (Prefect, local via Docker)
+
+The pull also runs as a scheduled **Prefect** flow, broken into tasks
+(`resolve_window → fetch → persist → update_watermark`) in
+`src/smarthub/flows/data_pull_flow.py`. Everything runs locally in Docker:
+
+```bash
+docker compose -f docker-compose.prefect.yml up --build
+# Prefect UI: http://localhost:4200
+```
+
+The stack is **Postgres + server + worker**. Postgres backs the Prefect server
+(the default SQLite throws "database is locked" under the scheduler + worker
+concurrency).
+
+What happens on startup (`docker/worker-entrypoint.sh`): wait for the server →
+create work pool `smarthub-pool` + queue `default` → `prefect deploy --all`
+(reads `prefect.yaml`) → start the worker. So flows + deployment + pool + queue
+are wired the moment the stack is up.
+
+- **Per lead type**: one `data-pull` deployment with **two schedules** (Prefect
+  per-schedule parameters) — auto (`lead_type_id=6`) and home (`lead_type_id=1`)
+  — so each type is pulled separately. Tell them apart by each run's parameters.
+- **Schedule / params** live in `prefect.yaml` (default: every 4h, 8h overlap,
+  7-day first-run backfill).
+- **Watermark (per type)**: the last record's timestamp is stored in a Prefect
+  Variable `smarthub_last_pull_timestamp_<type>` (e.g. `..._auto`, `..._home`);
+  each run resumes from it minus the overlap, so late-resolving outcomes get
+  re-pulled and upserted. First run with no watermark backfills
+  `default_lookback_hours`. (A window with no rows keeps the watermark unchanged.)
+- The worker mounts your SSH key (`SSH_PRIVATE_KEY_PATH` on the host →
+  `/keys/id_ed25519` in the container) and `./data` for persistence.
+
+**Feature extraction** runs as a second deployment, `build-features`, on the
+**same work pool but a separate queue** (`features`). It reads the accumulated
+data and writes a **versioned** leakage-safe training table to
+`data/training/<type>/<timestamp>.parquet` (per lead type, two schedules) — each
+build is kept so a model traces to its exact snapshot; loaders default to the
+latest. Trains on a rolling window set by `TRAINING_WINDOW_DAYS` in `.env`
+(default **21**; `0` = all data) — raw data is always retained, only the window
+read is limited. One worker serves both `default` and `features`
+queues (`PREFECT_WORK_QUEUES`).
+
+Run either flow once locally without Docker (needs `pip install -e ".[orchestration]"`):
+
+```bash
+python -m smarthub.flows.data_pull_flow      # pull (defaults to auto)
+python -m smarthub.flows.features_flow       # build features (defaults to auto)
 ```
 
 ## What the dashboards show

@@ -38,6 +38,17 @@ def test_ssh_settings_missing_key_file_raises(monkeypatch, tmp_path):
         SSHSettings.from_env()
 
 
+def test_training_window_days_default_and_override(monkeypatch):
+    from smarthub.config import training_window_days
+
+    monkeypatch.delenv("TRAINING_WINDOW_DAYS", raising=False)
+    assert training_window_days() == 21
+    monkeypatch.setenv("TRAINING_WINDOW_DAYS", "30")
+    assert training_window_days() == 30
+    monkeypatch.setenv("TRAINING_WINDOW_DAYS", "0")  # 0 = all data
+    assert training_window_days() == 0
+
+
 def test_ssh_settings_ok(monkeypatch, tmp_path):
     key = tmp_path / "id_rsa"
     key.write_text("dummy")

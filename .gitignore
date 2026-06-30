@@ -40,6 +40,7 @@ venv.bak/
 leads.parquet
 *.duckdb
 *.duckdb.wal
+data/training/
 
 # Streamlit
 .streamlit/
