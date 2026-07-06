@@ -99,17 +99,15 @@ is used only as the label (`won`) or for after-the-fact profit analysis.
 1. **`won` semantics** — *data-supported* (still worth a final nod from Kiran):
    `won = true` means the **partner gave us the lead**; `accepted = true` means we
    **resold it to ≥1 buyer**. See §6. `won` is the target.
-2. **Expected-revenue aggregation** — **likely `SUM(est_payout)` over
-   `selected = true` listings, NOT `MAX`.** The strategy doc says "top buyer"
-   (which would be `MAX`), but that's only right for *exclusive* leads — and the
-   data shows leads are mostly **non-exclusive** (`exclusive = false`,
-   `accepted_listings` 2–4), i.e. sold to multiple buyers, so revenue is a sum.
-   See §6. Make the aggregation configurable (sum-selected / max / sum-all),
-   default to **sum-over-selected**, and validate against realized `rev` once
-   real data accumulates. Pending Kiran/Vinaya confirmation.
-3. **CM target source** — `b = R × (1 − CM_target)` needs the CM target, tied to
-   `bidding_strategy_id` (dumb 10/25/50/75). Need a
-   `bidding_strategy_id → CM_target` lookup or config value.
+2. **Expected revenue — RESOLVED (1 Jul 2026):** use the backend
+   **`lead_pings.expected_revenue`** field (devs are adding it). Do **not** sum
+   listing `est_payout` ourselves — the backend already applies exclusivity +
+   de-duplication. Our listings-join `SUM` is an **interim stopgap** until the
+   column lands; then read the field and drop the join.
+3. **CM target source** — still needed if we use the explicit
+   `b = R × (1 − CM_target)` form; tied to `bidding_strategy_id` (blank in data).
+   Note: the ML model optimises profit directly (`P(win) × (R − bid)`), so a
+   fixed CM target matters less for v2.0 than for a formula-based bid.
 4. **Data volume** — ~276 rows so far. Keep the scheduled pull running over
    overlapping windows to accumulate ~3–4 weeks before training.
 5. **Lead type scope** — home/commercial/life columns are all-null in the auto
@@ -120,7 +118,14 @@ is used only as the label (`won`) or for after-the-fact profit analysis.
 ## 5. Data-quality / EDA checklist (before feature engineering)
 
 - Distributions & outliers (esp. `bid`, `expected_revenue`).
-- Missingness per column; drop all-null / mostly-null columns per lead type.
+- Missingness per column — **treat missing as a signal, do NOT fill with
+  averages** (decision, 1 Jul). Watch **default-value noise**: providers send
+  defaults regardless of the real consumer (e.g. `marital_status` always
+  "single", multi-vehicle defaults), so a "populated" field can be meaningless.
+- **Completeness / source-quality features** — instead of dropping "constant"
+  columns outright, add features measuring how complete/reliable each lead and
+  each **source** is (per-source historical accuracy). A constant column may be
+  default-fill garbage — that itself is a quality signal.
 - Cardinality (e.g. `zip` ~ thousands → bucket; `state` ~ 50 → fine).
 - Win-rate balance (class imbalance handling for the target).
 - Per-`account_id` / per-`lead_type_id` volume (enough rows per segment?).
@@ -179,8 +184,19 @@ From a sample of `won = true` rows (early June data):
   rule empirically until real data accumulates.
 - **`selected = true`** appears to mark the buyers we actually transact with →
   the set to sum `est_payout` over (confirm it's known at bid time).
-- **`bpfm_score`** is populated on some listings (~40–75) and `0.00` on many —
-  a per-buyer score of unknown meaning; pending definition.
+- **`bpfm_score`** — RESOLVED (1 Jul): a buyer **pacing** metric (progress to
+  daily quota); >90% → excluded from the auction to protect O&O. Backend-handled,
+  **not a model feature**.
+
+### Serve path & architecture (1 Jul decisions)
+- At prediction time Anton receives the lead via an **API ping** (FastAPI), not a
+  DB query. Training still uses the Redshift pull.
+- Model **input** = ping features (§2) + a candidate bid + `expected_revenue`;
+  **output** = `P(win | features, bid)` → choose the bid maximising expected
+  profit. Backend handles buyer-distribution suppression; the model only assesses
+  **lead quality / whether to win this ping**.
+- **Staging** is decoupled, async, **predict-only (no bids placed)**;
+  configuration via a **UI** (no hardcoded/script params). MVP by end of Q3.
 
 ---
 

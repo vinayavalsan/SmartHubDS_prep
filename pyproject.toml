@@ -11,7 +11,7 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
     "pyarrow>=14.0",
-    "streamlit>=1.30",
+    "streamlit>=1.36",
     "plotly>=5.18",
     "python-dotenv>=1.0",
     "sshtunnel>=0.4",
@@ -20,6 +20,7 @@ dependencies = [
     "SQLAlchemy>=2.0",
     "sqlalchemy-redshift>=0.8.14",
     "duckdb>=0.10",
+    "psycopg2-binary>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,7 @@ dev = ["pytest>=8.0", "flake8>=7.0"]
 orchestration = ["prefect>=3.0"]
 
 [project.scripts]
-smarthub-pull = "smarthub.data_pull:main"
+smarthub-pull = "smarthub.data.data_pull:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

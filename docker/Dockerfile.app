@@ -12,9 +12,7 @@ COPY pyproject.toml requirements.txt ./
 COPY src ./src
 RUN pip install --upgrade pip && pip install -e .
 
-# Application data / configs.
-COPY data ./data
-COPY README.md CONTEXT.md ./
+COPY README.md ./
 
 EXPOSE 8501
 
@@ -23,5 +21,5 @@ EXPOSE 8501
 #   docker run ... smarthub-pull --min-created-at "..." --max-created-at "..."
 #   docker run ... streamlit run src/smarthub/dashboards/monitoring_app.py \
 #       --server.address 0.0.0.0
-CMD ["streamlit", "run", "src/smarthub/dashboards/leads_app.py", \
+CMD ["streamlit", "run", "src/smarthub/dashboards/app.py", \
      "--server.address", "0.0.0.0", "--server.port", "8501"]

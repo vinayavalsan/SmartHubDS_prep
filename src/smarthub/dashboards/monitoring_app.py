@@ -9,10 +9,10 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from smarthub import io
-from smarthub.transforms import aggregate_monitoring, leads_to_monitoring_base
+from smarthub.data import io
+from smarthub.data.transforms import aggregate_monitoring, leads_to_monitoring_base
 
-st.set_page_config(layout="wide", page_title="SmartHub Monitoring")
+# set_page_config is called by the entry (app.py or the __main__ guard below).
 
 METRIC_GROUPS = {
     "All": None,
@@ -172,4 +172,5 @@ def main():
 
 
 if __name__ == "__main__":
+    st.set_page_config(page_title="SmartHub Monitoring", layout="wide")
     main()

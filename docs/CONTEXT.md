@@ -91,6 +91,14 @@ our **target CM**, sets the highest bid we'd be willing to make (see §6). See �
 how the actual bidding bounds are defined and discovered — this was clarified by
 Vinaya and Kiran after the original draft of this doc.
 
+> **UPDATE (1 Jul 2026 — supersedes the aggregation below):** the team decided the
+> backend will **add an `expected_revenue` column to `lead_pings`**, and Anton must
+> **use that value directly**. Do **not** sum listing `est_payout` ourselves — the
+> backend already applies exclusivity + de-duplication (e.g. same-carrier filtering)
+> that a plain `SUM` can't replicate. So the "SUM vs MAX" question is resolved: use
+> the backend field. Our current listings-join is an **interim stopgap** until the
+> column lands. See §10.
+
 ### ⚠️ "Payout" is overloaded — read this
 
 The warehouse uses "payout" on the **buyer (downstream) side**, which is the opposite
@@ -111,7 +119,7 @@ So when this doc or the team says "payout," check the side: partner-side payout 
 |---|---|
 | Our bid to the partner (cost) | `lead_pings.bid` |
 | Realized revenue | `lead_pings.rev` (≈ Σ `lead_ping_listings.payout` over accepted) |
-| Expected revenue (ceiling input) | Σ `lead_ping_listings.est_payout` per ping |
+| Expected revenue (ceiling input) | **`lead_pings.expected_revenue`** (backend field, being added) — *interim:* Σ `lead_ping_listings.est_payout` per ping |
 | Won the lead (partner accepted) | `lead_pings.won` |
 | Downstream accept/reject | `lead_ping_listings.post_accepted` |
 | Listing selected / excluded / deduped | `lead_ping_listings.selected` / `excluded` / `de_duped` |
@@ -119,13 +127,14 @@ So when this doc or the team says "payout," check the side: partner-side payout 
 | Exclusive vs shared lead | `lead_ping_listings.exclusive` |
 | Listing counts | `lead_pings.total_listings` / `accepted_listings` |
 
-The `smarthub.models` ORM mirrors these tables; `leads_with_expected_revenue_select`
+The `smarthub.data.models` ORM mirrors these tables; `leads_with_expected_revenue_select`
 aggregates `est_payout` per ping (see its docstring for the selected-only assumption).
 
-**Open questions to confirm:** how exactly to aggregate expected revenue (sum over
-`selected = 'true'`? best listing? exclude `de_duped`/`excluded`?); the meaning of
-`bpfm_score` and `bid_to_use`; and the distinction between `accepted` (ping) vs `won`
-vs `accepted_listings`.
+**Resolved 1 Jul 2026 (see §10):** expected revenue → use the backend
+`lead_pings.expected_revenue` field (don't aggregate listings). `bpfm_score` = a
+buyer **pacing** metric (daily-quota), backend-handled, not a model input.
+**Still open:** `bid_to_use`; and confirming `accepted` (resold ≥1 buyer) vs `won`
+(partner accepted our bid) vs `accepted_listings`.
 
 ---
 
@@ -248,7 +257,10 @@ ones. Keep Anton explainable.
 | **Won** | The partner accepted our bid; we now hold the lead. |
 | **Accept / reject** | Whether a downstream buyer takes the lead we post. |
 | **Bid** | What we offer the partner for the lead. |
-| **Expected revenue** | Forecast revenue, already reject-discounted. Lives as Σ `lead_ping_listings.est_payout` per ping. |
+| **Expected revenue** | Forecast revenue, reject-discounted. Use the backend **`lead_pings.expected_revenue`** field (being added); *interim* Σ `est_payout`. |
+| **BPFM score** | A buyer **pacing** metric (progress to daily quota); >90% → excluded from the auction to protect O&O. Backend-handled. |
+| **O&O vs SmartHub lead** | O&O = SmartFinancial's own campaigns (cost already realized, prioritized); SmartHub = third-party arbitrage leads. |
+| **Cannibalization KPI** | Flags selling a SmartHub lead to a buyer who'd otherwise take an O&O lead (undercuts our own business). |
 | **Realized / measured revenue** | What we actually made (`lead_pings.rev`); blank if the lead was never bought. |
 | **Payout (⚠ overloaded)** | Partner-side: our cost = `lead_pings.bid`. Listing-side: `lead_ping_listings.payout`/`est_payout` = buyer revenue *to us*. |
 | **Profit** | Realized revenue − our cost = `lead_pings.rev − lead_pings.bid` (when won). |
@@ -262,3 +274,33 @@ ones. Keep Anton explainable.
 | **Bounds / sandbox** | The `[floor, ceiling]` range Anton bids within; their existence and location must be discovered. |
 | **Exploration (explore/exploit)** | Deliberately bidding around the optimum to learn the market's shape at other price points. |
 | **Recency window** | The rolling lookback that defines "recent" data; a named config value, not hard-coded. |
+
+---
+
+## 10. Update — DS meeting, 1 Jul 2026
+
+New decisions and knowledge (Nimesh was absent; captured from notes):
+
+- **Expected revenue → a backend field.** Devs will add `lead_pings.expected_revenue`;
+  Anton must **use it directly**. Don't sum listing `est_payout` — the backend already
+  applies exclusivity + de-duplication (e.g. same-carrier filtering). Resolves MAX-vs-SUM.
+- **`bpfm_score` = buyer pacing metric** (daily quota); >90% → excluded from auction to
+  prioritise O&O. Backend concern, not a model input.
+- **O&O vs SmartHub + cannibalization KPI** (see glossary) — SmartHub is arbitrage;
+  don't undercut owned-and-operated leads.
+- **Data quality: defaults are noise.** Providers send default values regardless of the
+  real consumer (e.g. `marital_status` always "single", multi-vehicle defaults). So:
+  - **treat missing data as a signal** — do *not* fill with averages;
+  - build **secondary "completeness" / source-quality features** that measure how
+    complete/reliable each lead and source is, instead of trusting raw fields.
+- **Architecture:** at serve time Anton gets the lead via an **API ping**, not a DB
+  query. **Staging is decoupled from production** — async, "fire-and-forget",
+  **predict-only (no bids placed)**. **Configuration via a UI**, no hidden/hardcoded/
+  script params.
+- **Model objective (reaffirmed):** predict **win rate → optimise profit**; find the
+  ceiling that holds CM but **bid lower when win rate is unchanged**; add a **feedback
+  loop** so it converges automatically (current Anton failed to). Must be **≥ the
+  current system**, maintainable, transparent. **MVP by end of Q3.**
+- **Exploratory bidding** for cold-start (new sources with no history).
+- **Secondary source-quality metrics:** call revenue, "unity" (SMS revenue), conversion
+  rate — used to phase out low-quality partners.

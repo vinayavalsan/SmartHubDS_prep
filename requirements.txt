@@ -2,7 +2,7 @@
 pandas>=2.0
 numpy>=1.24
 pyarrow>=14.0
-streamlit>=1.30
+streamlit>=1.36   # st.navigation (multipage) requires 1.36+
 plotly>=5.18
 python-dotenv>=1.0
 sshtunnel>=0.4
@@ -11,4 +11,5 @@ redshift-connector>=2.0
 SQLAlchemy>=2.0
 sqlalchemy-redshift>=0.8.14
 duckdb>=0.10
+psycopg2-binary>=2.9   # Postgres driver for the config store
 paramiko==3.5.1

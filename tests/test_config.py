@@ -2,7 +2,7 @@
 
 import pytest
 
-from smarthub.config import ConfigError, RedshiftSettings, SSHSettings
+from smarthub.core.config import ConfigError, RedshiftSettings, SSHSettings
 
 
 def test_redshift_settings_missing_var_raises(monkeypatch):
@@ -39,7 +39,7 @@ def test_ssh_settings_missing_key_file_raises(monkeypatch, tmp_path):
 
 
 def test_training_window_days_default_and_override(monkeypatch):
-    from smarthub.config import training_window_days
+    from smarthub.core.config import training_window_days
 
     monkeypatch.delenv("TRAINING_WINDOW_DAYS", raising=False)
     assert training_window_days() == 21

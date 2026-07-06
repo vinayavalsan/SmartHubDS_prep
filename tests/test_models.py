@@ -6,7 +6,7 @@ from sqlalchemy.dialects import postgresql
 
 import pandas as pd
 
-from smarthub.models import (
+from smarthub.data.models import (
     LEADS_COLUMNS,
     LeadPing,
     LeadPingListing,

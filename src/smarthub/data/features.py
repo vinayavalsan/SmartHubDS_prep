@@ -48,6 +48,24 @@ PRE_BID_FEATURES = [
 # Time features derived from created_at.
 TIME_FEATURES = ["created_hour", "created_dayofweek"]
 
+# Age band edges + labels (competitiveness is non-linear in age — the 25–40
+# range is the most contested, per Kiran). Right-open bins. Each band becomes
+# its own 0/1 one-hot column named ``age_cohort_<label>``.
+AGE_COHORT_BINS = [0, 18, 25, 35, 45, 55, 65, 200]
+AGE_COHORT_LABELS = [
+    "under_18",
+    "18_24",
+    "25_34",
+    "35_44",
+    "45_54",
+    "55_64",
+    "65_plus",
+]
+AGE_COHORT_COLUMNS = [f"age_cohort_{label}" for label in AGE_COHORT_LABELS]
+
+# Engineered features derived from raw columns (added by build_training_table).
+DERIVED_FEATURES = ["is_married", "multi_vehicle"] + AGE_COHORT_COLUMNS
+
 # Known at bid time, used in the profit objective (kept alongside features).
 REVENUE_COLUMN = "expected_revenue"
 DECISION_COLUMN = "bid"
@@ -75,18 +93,48 @@ _TRUE = "true"
 _FALSE = "false"
 
 
+def _derive_features(out: pd.DataFrame) -> list[str]:
+    """Add engineered features in place; return the names that were added."""
+    added = []
+    if "marital_status" in out.columns:
+        ms = out["marital_status"].astype("string").str.strip().str.lower()
+        out["is_married"] = ms.eq("married").fillna(False).astype("int64")
+        added.append("is_married")
+    if "num_vehicles" in out.columns:
+        nv = pd.to_numeric(out["num_vehicles"], errors="coerce")
+        out["multi_vehicle"] = (nv > 1).fillna(False).astype("int64")
+        added.append("multi_vehicle")
+    if "age" in out.columns:
+        age = pd.to_numeric(out["age"], errors="coerce")
+        cohort = pd.cut(
+            age,
+            bins=AGE_COHORT_BINS,
+            labels=AGE_COHORT_LABELS,
+            right=False,
+        )
+        # One-hot: one 0/1 column per band. Missing/unparseable age -> all 0.
+        for label, col in zip(AGE_COHORT_LABELS, AGE_COHORT_COLUMNS):
+            out[col] = cohort.eq(label).astype("int64")
+            added.append(col)
+    return added
+
+
 def build_training_table(
     df: pd.DataFrame,
     lead_type_id: int | None = None,
-    drop_zero_variance: bool = True,
+    drop_zero_variance: bool = False,
 ) -> pd.DataFrame:
     """Assemble the leakage-safe training table from raw `lead_pings` rows.
 
     - Keeps only real bidding decisions (`won` is 'true' or 'false'); blank
       `won` (no bid / no outcome) is dropped. Both wins and losses are kept.
     - Optional `lead_type_id` filter.
-    - Selects ping-time features + bid + expected_revenue, target `won_flag`.
-    - Drops feature columns with no variance (single value / all-null).
+    - Selects ping-time features + engineered features + bid + expected_revenue,
+      target `won_flag`. **Nothing is dropped by default** — set
+      ``drop_zero_variance=True`` to also drop single-valued feature columns.
+    - Engineered: ``is_married`` (from marital_status), ``multi_vehicle``
+      (from num_vehicles), and one-hot ``age_cohort_<band>`` 0/1 columns
+      (banded from age).
     """
     out = df.copy()
 
@@ -106,8 +154,12 @@ def build_training_table(
         out["created_hour"] = created.dt.hour
         out["created_dayofweek"] = created.dt.dayofweek
 
+    # Engineered features (derived from raw columns).
+    derived = _derive_features(out)
+
     feature_cols = [c for c in PRE_BID_FEATURES if c in out.columns]
     feature_cols += [c for c in TIME_FEATURES if c in out.columns]
+    feature_cols += derived
 
     keep = (
         [c for c in META_COLUMNS if c in out.columns]

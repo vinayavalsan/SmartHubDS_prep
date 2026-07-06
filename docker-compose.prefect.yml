@@ -65,43 +65,25 @@ services:
       - ./data:/app/data                              # persist pulled data
       - ${SSH_PRIVATE_KEY_PATH}:/keys/id_ed25519:ro   # mount the SSH key (read-only)
 
-  leads-dashboard:
-    container_name: smarthub-leads
+  dashboard:
+    container_name: smarthub-dashboard
     restart: unless-stopped
     build:
       context: .
       dockerfile: docker/Dockerfile.app
+    depends_on:
+      postgres:
+        condition: service_healthy
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
-      # Read the lock-free Parquet copy (the worker holds the DuckDB write lock).
+      # Dashboards read the lock-free Parquet copy (worker holds the DuckDB lock).
       STORAGE_BACKEND: parquet
+      # Config page reads/writes the shared Postgres.
+      SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      # Set CONFIG_ADMIN_PASSWORD in .env to unlock the Config page.
     ports:
-      - "8502:8501"                 # http://localhost:8502  (SmartHub Leads)
-    volumes:
-      - ./data:/app/data
-
-  monitoring-dashboard:
-    container_name: smarthub-monitoring
-    restart: unless-stopped
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.app
-    env_file: .env
-    environment:
-      SMARTHUB_ROOT: /app
-      # Read the lock-free Parquet copy (the worker holds the DuckDB write lock).
-      STORAGE_BACKEND: parquet
-    command:
-      - streamlit
-      - run
-      - src/smarthub/dashboards/monitoring_app.py
-      - --server.address
-      - 0.0.0.0
-      - --server.port
-      - "8501"
-    ports:
-      - "8503:8501"                 # http://localhost:8503  (SmartHub Monitoring)
+      - "8500:8501"                 # http://localhost:8501  (Leads / Monitoring / Config)
     volumes:
       - ./data:/app/data
 

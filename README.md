@@ -2,26 +2,19 @@
 
 Data-science toolkit for SmartHub / Anton: pull lead data from Redshift and
 explore it through Streamlit dashboards. For the business domain (what the data
-means and what Anton is solving), see [CONTEXT.md](./CONTEXT.md).
+means and what Anton is solving), see [CONTEXT.md](./docs/CONTEXT.md).
 
 ## Project layout
 
 ```text
 .
 ├── src/smarthub/                 # installable package (src layout)
-│   ├── config.py                 # env-driven, validated settings
-│   ├── cli.py                    # argument parsing
-│   ├── paths.py                  # project-root path resolution
-│   ├── logging_utils.py          # logging setup
-│   ├── io.py                     # data loading/saving (friendly errors)
-│   ├── transforms.py             # shared metric definitions
-│   ├── models.py                 # SQLAlchemy ORM + query builders
-│   ├── storage.py                # DuckDB + partitioned-Parquet persistence
-│   ├── features.py               # leakage-safe training-table extraction
-│   ├── data_pull.py              # Redshift -> storage pull
-│   ├── dashboards/               # Streamlit apps (leads, monitoring)
+│   ├── core/                     # foundations: config, config_store, paths, logging
+│   ├── data/                     # models, data_pull, storage, io, transforms, features, cli
+│   ├── dashboards/               # Streamlit multipage app (leads, monitoring, config)
 │   └── flows/                    # Prefect flows (data_pull, features) + windowing
 ├── docker/                       # Dockerfile.app, Dockerfile.worker, worker-entrypoint.sh
+├── docs/                         # CONTEXT, MODELING, PLAN_July2026, CHANGELOG
 ├── tests/                        # pytest unit tests
 ├── data/                         # accumulated data (gitignored): leads/, training/, duckdb
 ├── prefect.yaml                  # Prefect deployments (data-pull, build-features)
@@ -60,7 +53,7 @@ The date range is now passed on the command line (no editing source):
 smarthub-pull \
     --min-created-at "2026-06-07 00:00:00" \
     --max-created-at "2026-06-20 00:00:00"
-# or:  python -m smarthub.data_pull --min-created-at ... --max-created-at ...
+# or:  python -m smarthub.data.data_pull --min-created-at ... --max-created-at ...
 ```
 
 Pulls **upsert on `id`** into the configured storage, so you can run on
@@ -83,28 +76,78 @@ expected revenue over all listings.
 files. For training, `io.load_leads_window(days=N)` reads just the most recent
 `N` days (the rolling recency window from CONTEXT §7).
 
-### 2. Dashboards
+### 2. Dashboard
 
-Both dashboards run in the Docker stack and read the **real pulled leads** (the
-lock-free Parquet copy via `STORAGE_BACKEND=parquet`, so they never contend with
-the worker's DuckDB write lock — keep `STORAGE_BACKEND=both` in `.env`):
+A **single multipage Streamlit app** (`dashboard` service) at
+**http://localhost:8501**, with three pages:
 
-- **SmartHub Leads** → **http://localhost:8502** (`leads-dashboard` service) —
-  lead-ping explorer: filters, funnel, win-rate curves.
-- **SmartHub Monitoring** → **http://localhost:8503** (`monitoring-dashboard`) —
-  performance over time (revenue/CM/win-rate), aggregated live from the pulled
-  leads (no sample file).
+- **Leads** — lead-ping explorer (filters, funnel, win-rate curves).
+- **Monitoring** — performance over time (revenue/CM/win-rate), aggregated live
+  from the pulled leads.
+- **Config** — Anton's runtime tuning knobs; **password-gated** (set
+  `CONFIG_ADMIN_PASSWORD` in `.env`). Reads/writes the shared Postgres.
 
-To run one manually instead:
+Dashboards read the **lock-free Parquet copy** (`STORAGE_BACKEND=parquet`) so
+they never contend with the worker's DuckDB write lock — keep
+`STORAGE_BACKEND=both` in `.env` so Parquet is written.
+
+Run it manually instead:
 
 ```bash
-streamlit run src/smarthub/dashboards/leads_app.py --server.port 8502
-streamlit run src/smarthub/dashboards/monitoring_app.py --server.port 8503
+streamlit run src/smarthub/dashboards/app.py        # all three pages
 ```
 
 The leads dashboard reads from the configured storage automatically (DuckDB if
 present, else Parquet); click **🔄 Reload Data** after a new pull. Stop a
 dashboard with `Ctrl+C`.
+
+## Anton runtime config
+
+Anton's tunable knobs (target CM, recency window, bid bounds, active model
+version, …) live in the **shared Postgres** — **not** in `.env`. `.env` holds
+only secrets/connection settings. Each parameter is defined once in the typed
+**registry** (`src/smarthub/core/config_store.py`), which supplies its **type,
+default, allowed values, and description** (used for both validation and the UI).
+
+### Defining a new parameter (code — one line)
+A parameter must exist in the registry before it can be set (the UI can only edit
+known params; it can't add new keys). Add a `ConfigParam` and read it where
+needed:
+
+```python
+# src/smarthub/core/config_store.py
+ConfigParam("max_daily_spend", "float", 5000.0,
+            "Max total spend per day across all bids ($).", minimum=0.0)
+```
+```python
+from smarthub.core.config_store import ConfigStore
+cap = ConfigStore().get("max_daily_spend", env="prod")   # default until set
+```
+No DB migration is needed — reads fall back to the registry default until a value
+is saved, and the new param appears in the Config UI automatically.
+
+### Setting a value (three ways)
+1. **Config UI** (normal path): open **http://localhost:8501 → Config**, enter the
+   admin password (`CONFIG_ADMIN_PASSWORD` in `.env`), pick the environment
+   (`staging` / `prod`), edit values, **Save**. Every change is validated and
+   recorded (who/when) in a history table.
+2. **Python / REPL:**
+   ```python
+   from smarthub.core.config_store import ConfigStore
+   ConfigStore().set("target_cm", 0.30, env="prod", updated_by="nimesh")
+   ```
+3. **SQL** (last resort) — values live in the `smarthub_config` table on the
+   shared Postgres.
+
+### Reading a value in code
+```python
+from smarthub.core.config_store import ConfigStore
+store = ConfigStore()
+store.get("recency_window_days", env="prod")   # typed, validated, with fallback
+```
+
+> Note: the current registry is a **draft** — confirm with Kiran which knobs
+> Anton should actually expose before treating it as final.
 
 ## Testing & linting
 
@@ -179,7 +222,7 @@ python -m smarthub.flows.features_flow       # build features (defaults to auto)
 
 The dashboards visualise win rate, contribution margin, profit and revenue
 across price points, time, states and campaigns — the "find the shelves"
-analysis described in [CONTEXT.md](./CONTEXT.md). Metric definitions live in one
+analysis described in [CONTEXT.md](./docs/CONTEXT.md). Metric definitions live in one
 place (`transforms.py`) so the two dashboards stay consistent.
 
 ### Open item

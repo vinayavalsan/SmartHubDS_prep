@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from smarthub import transforms as t
+from smarthub.data import transforms as t
 
 
 def test_safe_divide_handles_zero_and_nan():

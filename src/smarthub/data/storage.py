@@ -20,9 +20,9 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from . import paths
-from .config import StorageSettings
-from .logging_utils import get_logger
+from smarthub.core import paths
+from smarthub.core.config import StorageSettings
+from smarthub.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 

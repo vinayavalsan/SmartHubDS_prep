@@ -43,6 +43,26 @@
 - Pure window logic in `flows/windowing.py` with tests.
 - Postgres backs the Prefect server (avoids SQLite "database is locked").
 
+### Package restructure
+- Grouped modules into subpackages: **`core/`** (config, config_store, paths,
+  logging) and **`data/`** (models, data_pull, storage, io, transforms, features,
+  cli); `flows/` and `dashboards/` unchanged. All imports updated to the new
+  paths (`smarthub.core.*`, `smarthub.data.*`); `smarthub-pull` entry point →
+  `smarthub.data.data_pull:main`. Tests/scripts/docs updated; 66 tests green.
+
+### Runtime config (Tier-2)
+- `config_store.py` — typed, validated, **versioned** config store backed by the
+  **shared Postgres** (`smarthub_config` + history tables); env-scoped
+  (staging/prod) with global fallback. Registry covers target CM, bid floor/cap,
+  recency window, exploration variance, active model version, source-quality
+  threshold, holiday calendar.
+- **Single multipage dashboard** (`app.py`, `st.navigation`) — **Leads /
+  Monitoring / Config** in one Streamlit app on **http://localhost:8501**
+  (`dashboard` service); the three separate dashboard services are consolidated.
+- **Config page is password-gated** (`_auth.require_password`, `CONFIG_ADMIN_PASSWORD`
+  env); Leads/Monitoring stay open (read-only).
+- Secrets & DB connection stay in env (Tier-1); only business knobs are in the DB/UI.
+
 ### Feature extraction
 - `features.build_training_table` builds the leakage-safe training table per lead
   type: keeps real bidding decisions (`won` true/false), ping-time features +

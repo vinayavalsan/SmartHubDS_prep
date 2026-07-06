@@ -16,9 +16,9 @@ import pandas as pd
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 
-from smarthub import io, storage
-from smarthub.config import StorageSettings, training_window_days
-from smarthub.features import build_training_table
+from smarthub.data import io, storage
+from smarthub.core.config import StorageSettings, training_window_days
+from smarthub.data.features import build_training_table
 
 
 @task

@@ -9,8 +9,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import paths, storage, transforms
-from .config import StorageSettings
+from smarthub.core import paths
+from smarthub.core.config import StorageSettings
+from smarthub.data import storage, transforms
 
 # Default on-disk locations, resolved relative to the project root.
 DEFAULT_LEADS_PATH = paths.project_root() / "data" / "leads.parquet"

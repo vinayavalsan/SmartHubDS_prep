@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 
 COMPOSE_FILE="docker-compose.prefect.yml"
 # Host ports the stack binds (free these on --down).
-HOST_PORTS=(4200 8502 8503)
+HOST_PORTS=(4200 8501)
 REQUIRED_VARS=(
   SSH_HOST
   SSH_USER
@@ -126,5 +126,5 @@ $COMPOSE -f "$COMPOSE_FILE" up --build -d
 
 echo
 green "Up."
-info "Prefect UI: http://localhost:4200   Leads: http://localhost:8502   Monitoring: http://localhost:8503"
+info "Prefect UI: http://localhost:4200   Dashboard (Leads/Monitoring/Config): http://localhost:8501"
 info "Logs:  docker logs prefect-worker -f"

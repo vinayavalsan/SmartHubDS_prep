@@ -3,8 +3,8 @@
 import pandas as pd
 import pytest
 
-from smarthub import storage
-from smarthub.config import StorageSettings
+from smarthub.data import storage
+from smarthub.core.config import StorageSettings
 
 
 def _frame(ids, won, updated):
@@ -132,7 +132,7 @@ def test_save_pull_both_backends(tmp_path, monkeypatch):
 
 def test_storage_settings_invalid_backend(monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "mongodb")
-    from smarthub.config import ConfigError
+    from smarthub.core.config import ConfigError
 
     with pytest.raises(ConfigError):
         StorageSettings.from_env()

@@ -9,8 +9,8 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from smarthub import io
-from smarthub.transforms import (
+from smarthub.data import io
+from smarthub.data.transforms import (
     aggregate_leads,
     build_metric_plot_data,
     cumulative_winrate_curves,
@@ -18,7 +18,7 @@ from smarthub.transforms import (
 )
 from smarthub.dashboards import _ui
 
-st.set_page_config(page_title="SmartHub Leads", layout="wide")
+# set_page_config is called by the entry (app.py or the __main__ guard below).
 
 
 @st.cache_data
@@ -506,4 +506,5 @@ def main():
 
 
 if __name__ == "__main__":
+    st.set_page_config(page_title="SmartHub Leads", layout="wide")
     main()

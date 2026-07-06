@@ -19,9 +19,9 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 from prefect.variables import Variable
 
-from smarthub import storage
-from smarthub.config import PullSettings, StorageSettings
-from smarthub.data_pull import fetch_leads
+from smarthub.data import storage
+from smarthub.core.config import PullSettings, StorageSettings
+from smarthub.data.data_pull import fetch_leads
 from smarthub.flows.windowing import compute_pull_window, format_dt, parse_dt
 
 WATERMARK_PREFIX = "smarthub_last_pull_timestamp"

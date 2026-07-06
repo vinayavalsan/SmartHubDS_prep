@@ -19,11 +19,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sshtunnel import SSHTunnelForwarder
 
-from . import storage
-from .cli import build_pull_parser
-from .config import ConfigError, PullSettings, RedshiftSettings, StorageSettings
-from .logging_utils import configure_logging, get_logger
-from .models import (
+from smarthub.core.config import (
+    ConfigError,
+    PullSettings,
+    RedshiftSettings,
+    StorageSettings,
+)
+from smarthub.core.logging_utils import configure_logging, get_logger
+from smarthub.data import storage
+from smarthub.data.cli import build_pull_parser
+from smarthub.data.models import (
     coerce_leads_dtypes,
     leads_select,
     leads_with_expected_revenue_select,
