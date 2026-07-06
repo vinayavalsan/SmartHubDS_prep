@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from smarthub.data import io
+from smarthub.core import io
 
 
 def test_versioned_training_tables(tmp_path, monkeypatch):

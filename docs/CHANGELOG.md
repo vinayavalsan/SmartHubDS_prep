@@ -1,6 +1,127 @@
 # Changelog
 
 
+## 2026-07-08
+
+### expected_revenue backend column: confirmed present but unpopulated (blocked)
+- `lead_pings.exp_rev numeric(10,2)` exists (the intended authoritative expected
+  revenue), but it is 0 non-null / 0 positive across all 572,047 rows. So we keep
+  the interim listings-sum for R; switching to `exp_rev` is blocked on the backend
+  populating it. Recorded in CONTEXT §4. Verified via SQL on prod.
+
+### Quieted LightGBM feature-name warning flood
+- The offline optimizer calls `predict_proba` once per test row, so sklearn's
+  harmless "X does not have valid feature names" warning flooded the logs
+  (tens of thousands of lines). Silenced it at the optimizer's prediction sites
+  (`_quiet_feature_name_warning`). Training behavior unchanged.
+
+### LightGBM, runtime model config, and model→data lineage
+- Added a **LightGBM** model (`models.build_lightgbm_model` + `build_model`
+  dispatch) with a **monotonic-increasing constraint on `bid`** (so P(win) rises
+  with the bid — safe for the optimizer) and optional calibration. `MODEL_TYPE`
+  now defaults to `lightgbm`; LR still available via the switch. Added
+  `lightgbm` to the `ml` extra.
+- Wired training to the **Tier-2 config store**: added a `model_type` knob to the
+  registry (Config page), and training now reads `model_type`, `target_cm`, and
+  `bid_floor` from the store with a safe fallback to code constants if it's
+  unreachable.
+- **Model lineage**: `prepare_training_data` records the training-table version
+  + data date range; every train logs `model_type`, `training_table_version`,
+  `data_min/max_created_at`, `source_row_count` to MLflow (params + tags), the
+  Prefect artifact, the Slack notification, and the report JSON — so a model
+  traces back to the exact data it was trained on.
+
+### Model cleanup pass (data quality + generalization)
+- Clamp implausible `age` (outside 1–200) to NaN in `feature_engineering`
+  (fixes raw ages like -7648 / 1828 feeding the scaler); applies to train +
+  serve.
+- Dropped `source_type_id` (~9k unique -> memorization, inflated ROC AUC) and
+  redundant `account_id` (1:1 with `campaign_id`) from the model feature set.
+- Auto-drop zero-variance feature columns at train time
+  (`preprocessing.drop_zero_variance`) — removes dead constants (all-'false'
+  insured/home_owner/dui/military_affiliation) while keeping them in the schema
+  for when the data varies.
+- Optional isotonic probability calibration (`CALIBRATE`, default on) so
+  predict_proba is trustworthy for the profit optimizer, with automatic
+  fallback to uncalibrated if it errors.
+- Removed `penalty='l2'` from LR params (it's the default) to silence the
+  sklearn 1.8 deprecation warning.
+
+### Fixed DuckDB timestamp precision mismatch on pull
+- `append_duckdb` failed with "Unimplemented type for cast
+  (TIMESTAMP_NS -> TIMESTAMP_S) ... expiration_date": the table stored a
+  datetime column at second precision while pandas produces nanosecond
+  datetimes, and DuckDB can't downcast on INSERT.
+- Fix: align the incoming frame's datetime precision to the existing table
+  columns (done in pandas, which can downcast) before insert. No DB reset
+  needed; robust for any timestamp column, either direction.
+
+### Fixed the training label (single-class -> proper win/loss)
+- Diagnosed why train-model failed: the warehouse `won` column is only ever
+  `'true'` or NULL (no `'false'`), so the old "keep true/false" logic produced a
+  single-class target (all wins) and LogisticRegression couldn't fit.
+- Redefined the target in `build_training_table`: a bid is **placed** when
+  `bid > 0`; a placed bid **won** (`won=='true'` -> 1) or **lost** (null/blank
+  -> 0); no-bid pings are excluded. For auto this yields ~38k wins + ~68k losses
+  (~36% win rate) instead of 38k wins only.
+- Added `preprocessing.assert_trainable` so a single-class target fails with a
+  clear message (+ Slack alert) instead of a raw sklearn error.
+- TODO (confirm with Kiran): whether a NULL `won` on a recent, still-settling
+  ping means "lost" vs "unresolved" — may warrant excluding the most recent
+  window from training.
+
+
+## 2026-07-07
+
+### Anton model layer (train_and_predict) integrated
+- Analyzed the colleague's `train_and_predict/` module (see
+  `docs/TRAIN_AND_PREDICT_ANALYSIS.md`).
+- Made it integration-ready: added `__init__.py`, fixed `smarthub.io` →
+  `smarthub.core.io` and flat sibling imports → relative, wrapped `train.py` in
+  `run_training()` + a real `--lead-type-id` CLI, added the `ml` optional extra,
+  made `predict.py` import-safe (lazy joblib/mlflow, guarded FastAPI), renamed
+  `test_predict.py` → `manual_api_check.py`, removed a duplicate plot, moved
+  outputs under `data/`.
+- Reconciled the two feature pipelines: `feature_engineering.features` is now
+  the single source of truth (`model_feature_columns`, `add_time_features`,
+  `derive_serving_features`); training consumes the versioned training table and
+  uses a time-ordered split; serving derives features identically.
+- New Prefect flow `train-model` (STEP 3) with `log_prints=True`, a summary
+  artifact, Slack success/failure notifications, on a new `training` queue.
+  Worker image now installs `.[orchestration,ml]`.
+
+
+## 2026-07-06
+
+### Slack notifications
+- Added `smarthub.core.notifications`: best-effort Slack (Incoming Webhook)
+  alerts, disabled cleanly when `SLACK_WEBHOOK_URL` is unset, dependency-free.
+- Both Prefect flows send a success notification (data-pull: lead type, data
+  window, run start/finish, rows, watermark, stored Parquet/DuckDB paths;
+  build-features: version, row/feature counts, win rate, window, data range,
+  output path) and a failure alert via an `on_failure` hook covering every
+  failure point. Manual `smarthub-pull` runs also alert on failure.
+- `storage.save_pull` now also returns `duckdb_path` + `parquet_paths`.
+
+### Pipeline ordering guardrails
+- data-pull/build-features labelled STEP 1 / STEP 2 (Prefect deployment
+  descriptions + tags); build-features fails fast with a clear "run data-pull
+  first" message + artifact when no data exists.
+
+### Package reorganised by pipeline stage (hybrid)
+- `core/` keeps shared foundations + persistence (storage, io) + transforms.
+- `data_pull/` (pull, models, cli, windowing, flow), `feature_engineering/`
+  (features, flow), `monitoring/` (the Streamlit app). Removed `data/`,
+  `flows/`, `dashboards/`. Updated imports, `pyproject` entry point
+  (`smarthub.data_pull.pull:main`), `prefect.yaml` entrypoints, Dockerfile,
+  scripts, and docs. 78 tests green, flake8 clean.
+
+### Training features
+- Added derived `is_married`, `multi_vehicle`, and one-hot `age_cohort_*`
+  bands; `home_owner`/`insured` retained (zero-variance drop now off by
+  default — "don't drop anything").
+
+
 ## 2026-06-25
 
 ### Understanding & docs

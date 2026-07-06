@@ -19,7 +19,7 @@ EXPOSE 8501
 # Default: serve the leads dashboard. Override the command to run the
 # monitoring dashboard or the data pull, e.g.:
 #   docker run ... smarthub-pull --min-created-at "..." --max-created-at "..."
-#   docker run ... streamlit run src/smarthub/dashboards/monitoring_app.py \
+#   docker run ... streamlit run src/smarthub/monitoring/monitoring_app.py \
 #       --server.address 0.0.0.0
-CMD ["streamlit", "run", "src/smarthub/dashboards/app.py", \
+CMD ["streamlit", "run", "src/smarthub/monitoring/app.py", \
      "--server.address", "0.0.0.0", "--server.port", "8501"]

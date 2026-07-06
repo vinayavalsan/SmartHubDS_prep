@@ -28,7 +28,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "path",
         nargs="?",
-        default="data/leads",
+        default="data/training",
         help="Parquet file or directory (default: data/leads).",
     )
     parser.add_argument(

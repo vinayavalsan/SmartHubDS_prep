@@ -11,7 +11,7 @@ import pandas as pd
 
 from smarthub.core import paths
 from smarthub.core.config import StorageSettings
-from smarthub.data import storage, transforms
+from smarthub.core import storage, transforms
 
 # Default on-disk locations, resolved relative to the project root.
 DEFAULT_LEADS_PATH = paths.project_root() / "data" / "leads.parquet"
@@ -36,7 +36,11 @@ def load_leads(path: str | os.PathLike[str] | None = None) -> pd.DataFrame:
     """
     if path is not None:
         resolved = paths.resolve(path)
-        _check_exists(resolved, "Run the data pull first: python -m smarthub.data_pull")
+        _check_exists(
+            resolved,
+            "Run the data pull first (STEP 1): "
+            "smarthub-pull --min-created-at ... --max-created-at ...",
+        )
         return transforms.prepare_leads_frame(pd.read_parquet(resolved))
     try:
         raw = storage.load_leads_raw(StorageSettings.from_env())

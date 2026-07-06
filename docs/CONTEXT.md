@@ -98,6 +98,16 @@ Vinaya and Kiran after the original draft of this doc.
 > that a plain `SUM` can't replicate. So the "SUM vs MAX" question is resolved: use
 > the backend field. Our current listings-join is an **interim stopgap** until the
 > column lands. See §10.
+>
+> **STATUS (6 Jul 2026 — BLOCKED):** the column exists on `lead_pings` as
+> **`exp_rev`** `numeric(10,2)`, but it is **completely unpopulated** — 0 non-null
+> / 0 positive values across all 572,047 rows, for every lead type. So we still
+> **cannot** switch to it; the interim listings-sum remains the source of R.
+> **Action:** ask backend/Kiran to populate `exp_rev`. Once it carries values on
+> placed-bid leads, the switch is a small ORM + pull change (select `exp_rev`
+> aliased to `expected_revenue`, keep listings-sum as fallback) → re-pull →
+> build-features → train. Verified with:
+> `SELECT count(*) FILTER (WHERE exp_rev>0) FROM lead_pings;` → 0.
 
 ### ⚠️ "Payout" is overloaded — read this
 
@@ -127,7 +137,7 @@ So when this doc or the team says "payout," check the side: partner-side payout 
 | Exclusive vs shared lead | `lead_ping_listings.exclusive` |
 | Listing counts | `lead_pings.total_listings` / `accepted_listings` |
 
-The `smarthub.data.models` ORM mirrors these tables; `leads_with_expected_revenue_select`
+The `smarthub.data_pull.models` ORM mirrors these tables; `leads_with_expected_revenue_select`
 aggregates `est_payout` per ping (see its docstring for the selected-only assumption).
 
 **Resolved 1 Jul 2026 (see §10):** expected revenue → use the backend

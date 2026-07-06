@@ -1,9 +1,13 @@
 """Pull lead_pings from Redshift through an SSH tunnel and write a parquet file.
 
+This is STEP 1 of the pipeline (data-pull); build-features (STEP 2) reads the
+data this produces.
+
 Usage:
-    python -m smarthub.data_pull \\
+    smarthub-pull \\
         --min-created-at "2026-06-07 00:00:00" \\
         --max-created-at "2026-06-20 00:00:00"
+    # or:  python -m smarthub.data_pull.pull --min-created-at ... --max-...
 
 Configuration (SSH + Redshift credentials) comes from the environment / .env.
 See .env.example and CONTEXT.md.
@@ -26,9 +30,10 @@ from smarthub.core.config import (
     StorageSettings,
 )
 from smarthub.core.logging_utils import configure_logging, get_logger
-from smarthub.data import storage
-from smarthub.data.cli import build_pull_parser
-from smarthub.data.models import (
+from smarthub.core import notifications
+from smarthub.core import storage
+from smarthub.data_pull.cli import build_pull_parser
+from smarthub.data_pull.models import (
     coerce_leads_dtypes,
     leads_select,
     leads_with_expected_revenue_select,
@@ -142,11 +147,27 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ConfigError as exc:
         logger.error("Configuration error: %s", exc)
+        _notify_cli_failure(args, exc)
         return 2
-    except Exception:  # noqa: BLE001 - top-level guard for a CLI entry point
+    except Exception as exc:  # noqa: BLE001 - top-level guard for a CLI entry point
         logger.exception("Data pull failed")
+        _notify_cli_failure(args, exc)
         return 1
     return 0
+
+
+def _notify_cli_failure(args, exc: Exception) -> None:
+    """Best-effort Slack alert for a failed manual (CLI) pull."""
+    notifications.notify_failure(
+        "data-pull (manual/CLI)",
+        {
+            "Lead type": args.lead_type_id if args.lead_type_id is not None else "all",
+            "Data window (created_at)": (
+                f"`{args.min_created_at}` → `{args.max_created_at}`"
+            ),
+        },
+        error=f"{type(exc).__name__}: {exc}",
+    )
 
 
 if __name__ == "__main__":

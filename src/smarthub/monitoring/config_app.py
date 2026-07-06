@@ -5,7 +5,7 @@ shared Postgres via ``ConfigStore``, and records who changed what. Secrets /
 connection settings are intentionally NOT here — they live in the environment.
 
 Run with:
-    streamlit run src/smarthub/dashboards/config_app.py
+    streamlit run src/smarthub/monitoring/config_app.py
 """
 
 from __future__ import annotations

@@ -126,5 +126,5 @@ $COMPOSE -f "$COMPOSE_FILE" up --build -d
 
 echo
 green "Up."
-info "Prefect UI: http://localhost:4200   Dashboard (Leads/Monitoring/Config): http://localhost:8501"
+info "Prefect UI: http://localhost:4200   Dashboard (Leads/Monitoring/Config): http://localhost:8500"
 info "Logs:  docker logs prefect-worker -f"

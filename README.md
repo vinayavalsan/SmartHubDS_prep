@@ -8,11 +8,12 @@ means and what Anton is solving), see [CONTEXT.md](./docs/CONTEXT.md).
 
 ```text
 .
-├── src/smarthub/                 # installable package (src layout)
-│   ├── core/                     # foundations: config, config_store, paths, logging
-│   ├── data/                     # models, data_pull, storage, io, transforms, features, cli
-│   ├── dashboards/               # Streamlit multipage app (leads, monitoring, config)
-│   └── flows/                    # Prefect flows (data_pull, features) + windowing
+├── src/smarthub/                 # installable package (src layout), organised by pipeline stage
+│   ├── core/                     # shared foundations: config, config_store, paths, logging,
+│   │                             #   notifications + persistence (storage, io) + transforms
+│   ├── data_pull/                # STEP 1: pull, models, cli, windowing, flow (Prefect)
+│   ├── feature_engineering/      # STEP 2: features + flow (Prefect)
+│   └── monitoring/               # Streamlit multipage app (leads, monitoring, config)
 ├── docker/                       # Dockerfile.app, Dockerfile.worker, worker-entrypoint.sh
 ├── docs/                         # CONTEXT, MODELING, PLAN_July2026, CHANGELOG
 ├── tests/                        # pytest unit tests
@@ -53,7 +54,7 @@ The date range is now passed on the command line (no editing source):
 smarthub-pull \
     --min-created-at "2026-06-07 00:00:00" \
     --max-created-at "2026-06-20 00:00:00"
-# or:  python -m smarthub.data.data_pull --min-created-at ... --max-created-at ...
+# or:  python -m smarthub.data_pull.pull --min-created-at ... --max-created-at ...
 ```
 
 Pulls **upsert on `id`** into the configured storage, so you can run on
@@ -94,7 +95,7 @@ they never contend with the worker's DuckDB write lock — keep
 Run it manually instead:
 
 ```bash
-streamlit run src/smarthub/dashboards/app.py        # all three pages
+streamlit run src/smarthub/monitoring/app.py        # all three pages
 ```
 
 The leads dashboard reads from the configured storage automatically (DuckDB if
@@ -170,9 +171,18 @@ docker run --rm --env-file .env -v "$PWD/data:/app/data" smarthub \
 
 ## Orchestration (Prefect, local via Docker)
 
+> **Run order (important): 1) `data-pull` → 2) `build-features` → 3) `train-model`.**
+> `data-pull` loads leads into storage; `build-features` reads that data to build
+> the training table; `train-model` trains + evaluates the model from that table.
+> In the Prefect UI the deployments are labelled **STEP 1/2/3** (with matching
+> `step-1-run-first` / `step-2-run-after-data-pull` /
+> `step-3-run-after-build-features` tags). Each downstream step fails fast with a
+> clear "run the previous step first" message (and a blocked-run artifact) if its
+> input is missing.
+
 The pull also runs as a scheduled **Prefect** flow, broken into tasks
 (`resolve_window → fetch → persist → update_watermark`) in
-`src/smarthub/flows/data_pull_flow.py`. Everything runs locally in Docker:
+`src/smarthub/data_pull/flow.py`. Everything runs locally in Docker:
 
 ```bash
 docker compose -f docker-compose.prefect.yml up --build
@@ -208,15 +218,68 @@ data and writes a **versioned** leakage-safe training table to
 build is kept so a model traces to its exact snapshot; loaders default to the
 latest. Trains on a rolling window set by `TRAINING_WINDOW_DAYS` in `.env`
 (default **21**; `0` = all data) — raw data is always retained, only the window
-read is limited. One worker serves both `default` and `features`
-queues (`PREFECT_WORK_QUEUES`).
+read is limited.
 
-Run either flow once locally without Docker (needs `pip install -e ".[orchestration]"`):
+**Model training** runs as a third deployment, `train-model`, on the `training`
+queue. It reads the latest training table, trains `P(won | bid, features)`,
+evaluates it, runs the offline bid-optimizer evaluation, saves the model to
+`data/models/anton_model_<type>.pkl`, writes a report under
+`data/training_report/<type>/`, and logs to MLflow. It runs with
+`log_prints=True`, so the full training + optimizer output shows in the Prefect
+run logs, and it posts a summary artifact + Slack notification. Needs the `ml`
+extra (installed in the worker image). One worker serves all three queues:
+`default`, `features`, `training` (`PREFECT_WORK_QUEUES`).
+
+Run any flow once locally without Docker:
 
 ```bash
-python -m smarthub.flows.data_pull_flow      # pull (defaults to auto)
-python -m smarthub.flows.features_flow       # build features (defaults to auto)
+pip install -e ".[orchestration]"           # data-pull + build-features
+python -m smarthub.data_pull.flow           # pull (defaults to auto)
+python -m smarthub.feature_engineering.flow # build features (defaults to auto)
+
+pip install -e ".[orchestration,ml]"        # + model training
+python -m smarthub.train_and_predict.train --lead-type-id 6   # train auto
+python -m smarthub.train_and_predict.flow                     # train via Prefect
 ```
+
+The bid-recommendation API (FastAPI) serves the trained model:
+
+```bash
+export MODEL_URI="data/models/anton_model_auto.pkl"   # or an MLflow model URI
+uvicorn smarthub.train_and_predict.predict:app --port 8000
+# POST /recommend_bid  ·  GET /health
+```
+
+## Slack notifications
+
+Both pipelines send Slack alerts — a success message when a run finishes and a
+failure alert on any error. Set an [Incoming Webhook](https://api.slack.com/messaging/webhooks)
+in `.env`:
+
+```bash
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
+SLACK_ENV_LABEL=prod            # optional; shown on every message (default: hostname)
+SLACK_MENTION_ON_FAILURE=<@U123>  # optional; @-mention on failures only
+```
+
+Leave `SLACK_WEBHOOK_URL` blank to disable — notifications become a clean no-op.
+Sending is **best-effort**: a Slack/network problem is logged and swallowed, so
+it can never break or fail a pull / feature build.
+
+**On success:**
+
+- *data-pull* — lead type (auto/home + id), data window (`created_at` min→max),
+  run start/finish (UTC), rows fetched, watermark before→after, DuckDB/Parquet
+  row counts, and the exact stored file paths (per-day Parquet + DuckDB file).
+- *build-features* — lead type, version, row & feature counts, win rate,
+  training window, data date range, and the training-table output path.
+
+**On failure:** every failure point is caught by a Prefect `on_failure` hook on
+each flow (covers window resolution, the Redshift/SSH fetch, storage writes,
+watermark updates, the feature build, and the "no data — run data-pull first"
+guard). The alert identifies the pipeline, lead type, run name and a link to the
+run in the Prefect UI, plus the error message. Manual CLI pulls
+(`smarthub-pull`) also alert on failure.
 
 ## What the dashboards show
 

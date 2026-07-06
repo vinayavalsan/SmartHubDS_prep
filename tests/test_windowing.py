@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from smarthub.flows.windowing import (
+from smarthub.data_pull.windowing import (
     DT_FORMAT,
     compute_pull_window,
     format_dt,

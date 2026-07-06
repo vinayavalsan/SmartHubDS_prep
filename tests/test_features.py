@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from smarthub.data.features import (
+from smarthub.feature_engineering.features import (
     LEAKAGE_COLUMNS,
     TARGET_COLUMN,
     build_training_table,
@@ -10,44 +10,55 @@ from smarthub.data.features import (
 
 
 def _raw():
+    # The warehouse encodes wins as 'true' and losses as NULL/blank (never
+    # 'false'); a bid is "placed" when bid > 0. Row 3 has no bid -> excluded.
     return pd.DataFrame(
         {
-            "id": [1, 2, 3, 4],
+            "id": [1, 2, 3, 4, 5],
             "created_at": pd.to_datetime(
                 [
                     "2026-06-20 01:00",
                     "2026-06-20 05:00",
                     "2026-06-20 09:00",
                     "2026-06-21 02:00",
+                    "2026-06-20 14:00",
                 ]
             ),
-            "lead_type_id": [6, 6, 6, 1],
-            "won": ["true", "false", "", "true"],   # blank -> dropped
-            "bid": [12.0, 8.0, 5.0, 20.0],
-            "expected_revenue": [15.0, 9.0, 6.0, 25.0],
-            "state": ["CA", "NY", "TX", "FL"],
-            "age": [40, 55, 33, 60],
-            "insured": ["false", "false", "false", "false"],  # zero-variance
-            "marital_status": ["Married", "single", "MARRIED", ""],
-            "num_vehicles": [2, 1, 3, 1],
+            "lead_type_id": [6, 6, 6, 1, 6],
+            "won": ["true", "", "", "true", ""],   # true=win, blank=loss/no-bid
+            "bid": [12.0, 8.0, 0.0, 20.0, 5.0],     # id 3 has no bid placed
+            "expected_revenue": [15.0, 9.0, 6.0, 25.0, 7.0],
+            "state": ["CA", "NY", "TX", "FL", "WA"],
+            "age": [40, 55, 33, 60, 28],
+            "insured": ["false", "false", "false", "false", "false"],  # constant
+            "marital_status": ["Married", "single", "MARRIED", "", "Married"],
+            "num_vehicles": [2, 1, 3, 1, 2],
             # leakage columns that must be excluded:
-            "rev": [12.0, 0.0, 0.0, 20.0],
-            "accepted_listings": [1, 0, 0, 2],
-            "response_ms": [2000, 2100, 2200, 900],
+            "rev": [12.0, 0.0, 0.0, 20.0, 0.0],
+            "accepted_listings": [1, 0, 0, 2, 0],
+            "response_ms": [2000, 2100, 2200, 900, 1500],
         }
     )
 
 
-def test_drops_blank_won_keeps_wins_and_losses():
+def test_labels_wins_and_placed_bid_losses():
     table = build_training_table(_raw())  # no lead-type filter
-    # row id=3 (blank won) dropped; 1,2,4 kept
-    assert set(table["id"]) == {1, 2, 4}
-    assert sorted(table[TARGET_COLUMN].unique().tolist()) == [0, 1]
+    # id 3 has no bid -> excluded; 1,2,4,5 kept
+    assert set(table["id"]) == {1, 2, 4, 5}
+    flags = table.set_index("id")[TARGET_COLUMN]
+    assert flags[1] == 1 and flags[4] == 1   # won == 'true'
+    assert flags[2] == 0 and flags[5] == 0   # placed bid, not won -> loss
+
+
+def test_excludes_no_bid_rows():
+    table = build_training_table(_raw())
+    assert 3 not in set(table["id"])  # bid == 0, not a bidding decision
 
 
 def test_lead_type_filter():
     table = build_training_table(_raw(), lead_type_id=6)
-    assert set(table["id"]) == {1, 2}  # id 4 is home (1), id 3 blank
+    # auto rows with a placed bid: 1 (win), 2 (loss), 5 (loss); 3 no bid, 4 home
+    assert set(table["id"]) == {1, 2, 5}
     # nothing is dropped by default -> constant lead_type_id is kept
     assert "lead_type_id" in table.columns
 
@@ -56,7 +67,6 @@ def test_excludes_leakage_columns():
     table = build_training_table(_raw())
     for col in LEAKAGE_COLUMNS:
         assert col not in table.columns
-    # but keeps decision + revenue + target
     assert {"bid", "expected_revenue", TARGET_COLUMN}.issubset(table.columns)
 
 
@@ -67,51 +77,59 @@ def test_keeps_zero_variance_by_default():
 
 
 def test_drops_zero_variance_when_requested():
-    table = build_training_table(
-        _raw(), lead_type_id=6, drop_zero_variance=True
-    )
-    # insured is constant 'false' across kept rows -> dropped
-    assert "insured" not in table.columns
-    # a varying feature stays
-    assert "state" in table.columns
+    table = build_training_table(_raw(), lead_type_id=6, drop_zero_variance=True)
+    assert "insured" not in table.columns   # constant -> dropped
+    assert "state" in table.columns         # varies -> kept
 
 
 def test_derived_features():
-    table = build_training_table(_raw())  # rows 1, 2, 4
+    table = build_training_table(_raw()).set_index("id")  # ids 1,2,4,5
     assert {"is_married", "multi_vehicle"}.issubset(table.columns)
-    by_id = table.set_index("id")
-    # marital_status: 'Married'/'MARRIED' -> 1, 'single'/'' -> 0
-    assert by_id.loc[1, "is_married"] == 1
-    assert by_id.loc[2, "is_married"] == 0
-    assert by_id.loc[4, "is_married"] == 0
-    # num_vehicles: >1 -> 1
-    assert by_id.loc[1, "multi_vehicle"] == 1   # 2 vehicles
-    assert by_id.loc[2, "multi_vehicle"] == 0   # 1 vehicle
-    assert by_id.loc[4, "multi_vehicle"] == 0   # 1 vehicle
+    # marital_status: Married/MARRIED -> 1; single/'' -> 0
+    assert table.loc[1, "is_married"] == 1
+    assert table.loc[2, "is_married"] == 0
+    assert table.loc[4, "is_married"] == 0
+    assert table.loc[5, "is_married"] == 1
+    # num_vehicles > 1 -> 1
+    assert table.loc[1, "multi_vehicle"] == 1
+    assert table.loc[2, "multi_vehicle"] == 0
+    assert table.loc[5, "multi_vehicle"] == 1
 
 
 def test_age_cohort_one_hot():
-    from smarthub.data.features import AGE_COHORT_COLUMNS
+    from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
 
-    table = build_training_table(_raw()).set_index("id")
+    table = build_training_table(_raw()).set_index("id")  # ages 40,55,60,28
     assert set(AGE_COHORT_COLUMNS).issubset(table.columns)
-    # ages: id1=40 -> 35_44, id2=55 -> 55_64, id4=60 -> 55_64
     assert table.loc[1, "age_cohort_35_44"] == 1
     assert table.loc[2, "age_cohort_55_64"] == 1
     assert table.loc[4, "age_cohort_55_64"] == 1
+    assert table.loc[5, "age_cohort_25_34"] == 1
     # exactly one band set per row
-    assert table[AGE_COHORT_COLUMNS].sum(axis=1).tolist() == [1, 1, 1]
-    # id1 is only in 35_44, not elsewhere
-    assert table.loc[1, "age_cohort_55_64"] == 0
+    assert table[AGE_COHORT_COLUMNS].sum(axis=1).tolist() == [1, 1, 1, 1]
 
 
 def test_age_cohort_missing_all_zero():
-    from smarthub.data.features import AGE_COHORT_COLUMNS
+    from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
 
     raw = _raw()
     raw.loc[raw["id"] == 1, "age"] = None
     table = build_training_table(raw).set_index("id")
     assert table.loc[1, AGE_COHORT_COLUMNS].sum() == 0
+
+
+def test_age_clamped_to_missing():
+    from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
+
+    raw = _raw()
+    raw.loc[raw["id"] == 1, "age"] = -7648   # garbage
+    raw.loc[raw["id"] == 2, "age"] = 1828    # garbage
+    table = build_training_table(raw).set_index("id")
+    # impossible ages -> NaN raw age + all cohort bands 0
+    assert pd.isna(table.loc[1, "age"])
+    assert pd.isna(table.loc[2, "age"])
+    assert table.loc[1, AGE_COHORT_COLUMNS].sum() == 0
+    assert table.loc[2, AGE_COHORT_COLUMNS].sum() == 0
 
 
 def test_has_time_features():

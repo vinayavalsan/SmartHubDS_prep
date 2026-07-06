@@ -35,6 +35,21 @@ class StorageError(RuntimeError):
     """Raised on storage schema / state problems."""
 
 
+# Shown whenever a downstream step (e.g. build-features) is run before any
+# data exists. The pipeline order is: **1) data-pull  →  2) build-features**.
+NO_DATA_MESSAGE = (
+    "No lead data found in storage.\n"
+    "The pipeline must run in order: STEP 1 = data-pull, then "
+    "STEP 2 = build-features.\n"
+    "It looks like build-features ran first. Run the data pull, wait for it "
+    "to finish, then re-run build-features.\n"
+    "  - Prefect: run deployment 'smarthub-data-pull/data-pull' "
+    "(auto and home), or\n"
+    "  - CLI:     smarthub-pull --min-created-at <YYYY-MM-DD HH:MM:SS> "
+    "--max-created-at <YYYY-MM-DD HH:MM:SS>"
+)
+
+
 def _dedupe(df: pd.DataFrame, key: str = KEY) -> pd.DataFrame:
     """Keep one row per key. Prefer the most recently updated row when an
     ``updated_at`` column is present; otherwise keep the last occurrence
@@ -75,6 +90,52 @@ def _table_columns(con: duckdb.DuckDBPyConnection, table: str) -> list[str]:
     return [r[1] for r in con.execute(f'PRAGMA table_info("{table}")').fetchall()]
 
 
+def _table_column_types(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, str]:
+    """Map column name -> DuckDB type string for an existing table."""
+    return {
+        r[1]: str(r[2]).upper()
+        for r in con.execute(f'PRAGMA table_info("{table}")').fetchall()
+    }
+
+
+# DuckDB timestamp type -> pandas datetime unit. DuckDB won't downcast timestamp
+# precision on INSERT (e.g. ns -> s is "unimplemented"), but pandas can, so we
+# align the incoming frame's precision to the existing column before inserting.
+_DUCKDB_TS_UNIT = {
+    "TIMESTAMP_S": "s",
+    "TIMESTAMP_MS": "ms",
+    "TIMESTAMP": "us",
+    "DATETIME": "us",
+    "TIMESTAMP WITH TIME ZONE": "us",
+    "TIMESTAMPTZ": "us",
+    "TIMESTAMP_NS": "ns",
+}
+
+
+def _align_datetime_precision(
+    df: pd.DataFrame, table_types: dict[str, str]
+) -> pd.DataFrame:
+    """Cast incoming datetime columns to the existing table's precision.
+
+    Prevents DuckDB "Unimplemented type for cast (TIMESTAMP_NS -> TIMESTAMP_S)"
+    on INSERT when a column was first created at a coarser precision than the
+    nanosecond datetimes pandas produces.
+    """
+    out = df
+    copied = False
+    for col, dtype_str in table_types.items():
+        if col not in df.columns or not pd.api.types.is_datetime64_any_dtype(df[col]):
+            continue
+        unit = _DUCKDB_TS_UNIT.get(dtype_str)
+        if unit is None or getattr(df[col].dtype, "unit", None) == unit:
+            continue
+        if not copied:
+            out = df.copy()
+            copied = True
+        out[col] = out[col].astype(f"datetime64[{unit}]")
+    return out
+
+
 def append_duckdb(
     df: pd.DataFrame,
     table: str = LEADS_TABLE,
@@ -90,11 +151,15 @@ def append_duckdb(
 
     con = _connect(path)
     try:
-        con.register("incoming", df)
         if not _table_exists(con, table):
+            con.register("incoming", df)
             con.execute(f'CREATE TABLE "{table}" AS SELECT * FROM incoming')
             logger.info("Created DuckDB table '%s' from first pull", table)
         else:
+            # Match the incoming datetime precision to the table's, so DuckDB
+            # doesn't hit an unimplemented ns->s cast on INSERT.
+            df = _align_datetime_precision(df, _table_column_types(con, table))
+            con.register("incoming", df)
             # Schema evolution: add any new incoming columns to the table
             # (existing rows get NULL for them). Columns missing from this pull
             # are filled with NULL on insert via BY NAME.
@@ -118,7 +183,10 @@ def append_duckdb(
         logger.info("DuckDB '%s': upserted %s rows (now %s)", table, len(df), total)
         return int(total)
     finally:
-        con.unregister("incoming")
+        try:
+            con.unregister("incoming")
+        except Exception:  # noqa: BLE001 - nothing registered / already gone
+            pass
         con.close()
 
 
@@ -243,13 +311,40 @@ def parquet_exists(root: str | os.PathLike[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def save_pull(df: pd.DataFrame, settings: StorageSettings) -> dict[str, int]:
-    """Persist a pull to whichever backend(s) the settings enable."""
-    results: dict[str, int] = {}
+def parquet_partition_paths(
+    df: pd.DataFrame,
+    root: str | os.PathLike[str],
+    date_col: str = "created_at",
+) -> list[str]:
+    """The per-day Parquet file paths a pull of ``df`` writes into.
+
+    Mirrors ``append_parquet``'s partitioning so callers (e.g. notifications)
+    can report exactly which files were touched. Rows with no resolvable date
+    are ignored, matching the writer.
+    """
+    if df.empty:
+        return []
+    root_path = paths.resolve(root)
+    days = _row_days(df, date_col)
+    unique_days = sorted({d.date() for d in days[days.notna()]})
+    return [str(_partition_path(root_path, day)) for day in unique_days]
+
+
+def save_pull(df: pd.DataFrame, settings: StorageSettings) -> dict[str, object]:
+    """Persist a pull to whichever backend(s) the settings enable.
+
+    Returns row counts plus the concrete storage locations written:
+    ``duckdb_path`` and ``parquet_paths`` (the per-day partition files).
+    """
+    results: dict[str, object] = {}
     if settings.use_duckdb:
         results["duckdb_rows"] = append_duckdb(df, path=settings.duckdb_path)
+        results["duckdb_path"] = str(duckdb_path(settings.duckdb_path))
     if settings.use_parquet:
         results["parquet_rows"] = append_parquet(
+            df, settings.parquet_dir, settings.partition_date_col
+        )
+        results["parquet_paths"] = parquet_partition_paths(
             df, settings.parquet_dir, settings.partition_date_col
         )
     return results
@@ -261,9 +356,7 @@ def load_leads_raw(settings: StorageSettings) -> pd.DataFrame:
         return read_duckdb_table(path=settings.duckdb_path)
     if settings.use_parquet and parquet_exists(settings.parquet_dir):
         return read_parquet_dataset(settings.parquet_dir)
-    raise StorageError(
-        "No stored data found. Run the pull first: python -m smarthub.data_pull"
-    )
+    raise StorageError(NO_DATA_MESSAGE)
 
 
 def load_window_raw(settings: StorageSettings, days: int) -> pd.DataFrame:
@@ -275,6 +368,4 @@ def load_window_raw(settings: StorageSettings, days: int) -> pd.DataFrame:
         ts = pd.to_datetime(df["created_at"], errors="coerce")
         cutoff = ts.max() - pd.Timedelta(days=days)
         return df[ts >= cutoff]
-    raise StorageError(
-        "No stored data found. Run the pull first: python -m smarthub.data_pull"
-    )
+    raise StorageError(NO_DATA_MESSAGE)

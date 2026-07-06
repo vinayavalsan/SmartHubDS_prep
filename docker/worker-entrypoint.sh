@@ -9,7 +9,7 @@ set -euo pipefail
 : "${PREFECT_API_URL:?PREFECT_API_URL must be set}"
 POOL="${PREFECT_WORK_POOL:-smarthub-pool}"
 # Space-separated; one worker serves all of these queues in the pool.
-QUEUES="${PREFECT_WORK_QUEUES:-default features}"
+QUEUES="${PREFECT_WORK_QUEUES:-default features training}"
 
 cd /app
 

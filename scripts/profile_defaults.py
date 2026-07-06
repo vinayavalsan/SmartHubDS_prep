@@ -27,7 +27,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from smarthub.data import features  # noqa: E402
+from smarthub.feature_engineering import features  # noqa: E402
 
 
 def norm(s: pd.Series) -> pd.Series:

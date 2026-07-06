@@ -10,10 +10,21 @@ pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /app
 
+# Pipeline order (IMPORTANT): 1) data-pull -> 2) build-features -> 3) train-model.
+# data-pull loads leads into storage; build-features reads that data to build the
+# training table; train-model trains + evaluates the model from that table. Each
+# downstream step fails with a clear "run the previous step first" message if its
+# input is missing (see feature_engineering/flow.py:load_raw and
+# train_and_predict via preprocessing.prepare_training_data).
 deployments:
+  # STEP 1 — RUN FIRST.
   # One deployment, two schedules — one per lead type (per-schedule parameters).
   - name: data-pull
-    entrypoint: src/smarthub/flows/data_pull_flow.py:data_pull_flow
+    entrypoint: src/smarthub/data_pull/flow.py:data_pull_flow
+    description: >-
+      STEP 1 of 3 - RUN THIS FIRST. Pulls leads from Redshift into storage.
+      build-features (STEP 2) and train-model (STEP 3) depend on it.
+    tags: ["step-1-run-first", "pipeline-smarthub"]
     work_pool:
       name: smarthub-pool
       work_queue_name: default
@@ -37,9 +48,15 @@ deployments:
           lead_type_id: 1
           lead_type_name: home
 
+  # STEP 2 — RUN AFTER data-pull.
   # Feature extraction: same work pool, separate queue ('features').
   - name: build-features
-    entrypoint: src/smarthub/flows/features_flow.py:build_features_flow
+    entrypoint: src/smarthub/feature_engineering/flow.py:build_features_flow
+    description: >-
+      STEP 2 of 3 - RUN AFTER data-pull. Builds the training table from the
+      pulled leads. If no data exists yet, it fails asking you to run
+      data-pull (STEP 1) first.
+    tags: ["step-2-run-after-data-pull", "pipeline-smarthub"]
     work_pool:
       name: smarthub-pool
       work_queue_name: features
@@ -51,6 +68,34 @@ deployments:
           lead_type_id: 6
           lead_type_name: auto
       - cron: "45 */4 * * *"     # home
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 1
+          lead_type_name: home
+
+  # STEP 3 — RUN AFTER build-features.
+  # Model training + offline bid-optimizer evaluation. Separate queue
+  # ('training'). Requires the `ml` extra (installed in the worker image).
+  - name: train-model
+    entrypoint: src/smarthub/train_and_predict/flow.py:train_flow
+    description: >-
+      STEP 3 of 3 - RUN AFTER build-features. Trains + evaluates the Anton
+      win-probability model from the training table and runs the offline bid
+      optimizer. Fails asking you to run build-features (STEP 2) first if no
+      training table exists.
+    tags: ["step-3-run-after-build-features", "pipeline-smarthub"]
+    work_pool:
+      name: smarthub-pool
+      work_queue_name: training
+    parameters:
+      register_mlflow: true
+    schedules:
+      - cron: "0 5 * * *"        # auto, daily after the 4-hourly builds settle
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 6
+          lead_type_name: auto
+      - cron: "20 5 * * *"       # home
         timezone: "UTC"
         parameters:
           lead_type_id: 1

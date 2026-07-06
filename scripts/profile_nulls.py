@@ -23,7 +23,7 @@ import pandas as pd
 # Allow running as `python3 scripts/profile_nulls.py` without installing the pkg.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from smarthub.data import features  # noqa: E402
+from smarthub.feature_engineering import features  # noqa: E402
 
 
 def missing_mask(series: pd.Series) -> pd.Series:

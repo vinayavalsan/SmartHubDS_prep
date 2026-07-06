@@ -1,7 +1,7 @@
 """Streamlit dashboard for exploring raw lead-ping data.
 
 Run with:
-    streamlit run src/smarthub/dashboards/leads_app.py
+    streamlit run src/smarthub/monitoring/leads_app.py
 """
 
 from __future__ import annotations
@@ -9,14 +9,14 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from smarthub.data import io
-from smarthub.data.transforms import (
+from smarthub.core import io
+from smarthub.core.transforms import (
     aggregate_leads,
     build_metric_plot_data,
     cumulative_winrate_curves,
     funnel_counts,
 )
-from smarthub.dashboards import _ui
+from smarthub.monitoring import _ui
 
 # set_page_config is called by the entry (app.py or the __main__ guard below).
 

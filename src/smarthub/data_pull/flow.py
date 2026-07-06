@@ -19,10 +19,11 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 from prefect.variables import Variable
 
-from smarthub.data import storage
+from smarthub.core import storage
+from smarthub.core import notifications
 from smarthub.core.config import PullSettings, StorageSettings
-from smarthub.data.data_pull import fetch_leads
-from smarthub.flows.windowing import compute_pull_window, format_dt, parse_dt
+from smarthub.data_pull.pull import fetch_leads
+from smarthub.data_pull.windowing import compute_pull_window, format_dt, parse_dt
 
 WATERMARK_PREFIX = "smarthub_last_pull_timestamp"
 
@@ -89,7 +90,7 @@ def update_watermark(df: pd.DataFrame, var_name: str, window_max: str) -> str:
     return new_value
 
 
-@flow(name="smarthub-data-pull")
+@flow(name="smarthub-data-pull", on_failure=[notifications.flow_failure_hook])
 def data_pull_flow(
     lead_type_id: int = 6,
     lead_type_name: str = "auto",
@@ -98,8 +99,14 @@ def data_pull_flow(
     with_expected_revenue: bool = True,
     selected_only: bool = True,
 ) -> dict:
-    """Scheduled pull for ONE lead type: resolve → fetch → persist → watermark."""
+    """Scheduled pull for ONE lead type: resolve → fetch → persist → watermark.
+
+    On any unhandled failure, ``flow_failure_hook`` sends a Slack alert. On
+    success, a Slack notification reports the lead type, window, row count and
+    stored file paths.
+    """
     logger = get_run_logger()
+    started_at = _utc_now_naive()
     var_name = watermark_variable(lead_type_name)
 
     min_s, max_s = resolve_window(var_name, overlap_hours, default_lookback_hours)
@@ -123,7 +130,38 @@ def data_pull_flow(
         previous_watermark,
         watermark,
     )
+    _notify_success(
+        lead_type_name, lead_type_id, min_s, max_s, df, result,
+        previous_watermark, watermark, started_at,
+    )
     return {"lead_type": lead_type_name, "rows": int(len(df)), "watermark": watermark}
+
+
+def _notify_success(
+    lead_type_name, lead_type_id, min_s, max_s, df, result,
+    prev_wm, new_wm, started_at,
+) -> None:
+    """Send the Slack 'data pull completed' notification with full context."""
+    rows = int(len(df))
+    parquet_paths = result.get("parquet_paths") or []
+    parquet_txt = (
+        "\n".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
+    )
+    fields = {
+        "Lead type": f"{lead_type_name} ({lead_type_id})",
+        "Data window (created_at)": f"`{min_s}` → `{max_s}`",
+        "Rows fetched": f"{rows}",
+        "Run started (UTC)": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "Run finished (UTC)": _utc_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
+        "Watermark": f"`{prev_wm}` → `{new_wm}`",
+        "DuckDB rows (total)": result.get("duckdb_rows", "—"),
+        "Parquet rows (written)": result.get("parquet_rows", "—"),
+        "Parquet file(s)": parquet_txt,
+        "DuckDB file": (
+            f"`{result['duckdb_path']}`" if result.get("duckdb_path") else "—"
+        ),
+    }
+    notifications.notify_success("data-pull", fields)
 
 
 def _report(

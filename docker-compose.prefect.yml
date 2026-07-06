@@ -58,7 +58,7 @@ services:
       # inside the container (these win over values in .env).
       PREFECT_API_URL: http://prefect-server:4200/api
       PREFECT_WORK_POOL: smarthub-pool
-      PREFECT_WORK_QUEUES: "default features"
+      PREFECT_WORK_QUEUES: "default features training"
       SMARTHUB_ROOT: /app
       SSH_PRIVATE_KEY_PATH: /keys/id_ed25519
     volumes:

@@ -4,15 +4,15 @@ One service / one port. Leads + Monitoring are open (read-only); the Config page
 is protected by an admin password (see ``_auth``).
 
 Run with:
-    streamlit run src/smarthub/dashboards/app.py
+    streamlit run src/smarthub/monitoring/app.py
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-from smarthub.dashboards import config_app, leads_app, monitoring_app
-from smarthub.dashboards._auth import require_password
+from smarthub.monitoring import config_app, leads_app, monitoring_app
+from smarthub.monitoring._auth import require_password
 
 st.set_page_config(page_title="SmartHub DS", layout="wide")
 

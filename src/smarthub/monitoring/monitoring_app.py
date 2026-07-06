@@ -1,7 +1,7 @@
 """Streamlit dashboard for monitoring DS performance over time.
 
 Run with:
-    streamlit run src/smarthub/dashboards/monitoring_app.py
+    streamlit run src/smarthub/monitoring/monitoring_app.py
 """
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from smarthub.data import io
-from smarthub.data.transforms import aggregate_monitoring, leads_to_monitoring_base
+from smarthub.core import io
+from smarthub.core.transforms import aggregate_monitoring, leads_to_monitoring_base
 
 # set_page_config is called by the entry (app.py or the __main__ guard below).
 

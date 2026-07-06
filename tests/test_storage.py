@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from smarthub.data import storage
+from smarthub.core import storage
 from smarthub.core.config import StorageSettings
 
 
@@ -50,6 +50,33 @@ def test_duckdb_window(tmp_path):
     storage.append_duckdb(df, path=db)
     recent = storage.read_duckdb_window(7, path=db)  # anchored on max = 06-20
     assert set(recent["id"]) == {2, 3}
+
+
+def test_duckdb_handles_timestamp_precision_mismatch(tmp_path):
+    # A table created at second precision must still accept a later pull whose
+    # datetimes are nanosecond precision (DuckDB can't downcast ns->s on INSERT;
+    # append_duckdb aligns precision in pandas first).
+    db = tmp_path / "s.duckdb"
+    first = pd.DataFrame(
+        {
+            "id": [1],
+            "created_at": pd.to_datetime(["2026-06-20 01:00"]),
+            "expiration_date": pd.to_datetime(["2026-07-20"]).astype("datetime64[s]"),
+        }
+    )
+    storage.append_duckdb(first, path=db)
+
+    second = pd.DataFrame(
+        {
+            "id": [2],
+            "created_at": pd.to_datetime(["2026-06-21 01:00"]),
+            "expiration_date": pd.to_datetime(["2026-07-21"]),  # ns precision
+        }
+    )
+    # Must not raise a ConversionException.
+    assert storage.append_duckdb(second, path=db) == 2
+    out = storage.read_duckdb_table(path=db).set_index("id")
+    assert set(out.index) == {1, 2}
 
 
 def test_duckdb_adds_new_columns(tmp_path):
@@ -124,7 +151,12 @@ def test_save_pull_both_backends(tmp_path, monkeypatch):
 
     df = _frame([1, 2], ["false", "true"], ["2026-06-20 02:00", "2026-06-20 02:00"])
     results = storage.save_pull(df, settings)
-    assert results == {"duckdb_rows": 2, "parquet_rows": 2}
+    assert results["duckdb_rows"] == 2
+    assert results["parquet_rows"] == 2
+    # storage locations are reported for notifications
+    assert results["duckdb_path"].endswith("s.duckdb")
+    assert len(results["parquet_paths"]) == 1  # both rows land in one day file
+    assert results["parquet_paths"][0].endswith("20-06-2026.parquet")
 
     loaded = storage.load_leads_raw(settings)
     assert len(loaded) == 2
