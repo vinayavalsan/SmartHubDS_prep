@@ -11,6 +11,7 @@ WORKDIR /app
 # Install the package (incl. orchestration extra) first for layer caching.
 COPY pyproject.toml requirements.txt ./
 COPY src ./src
+COPY config ./config
 RUN pip install -e ".[orchestration,ml]"
 
 # Deployment config + startup entrypoint.

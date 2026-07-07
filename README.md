@@ -14,6 +14,7 @@ means and what Anton is solving), see [CONTEXT.md](./docs/CONTEXT.md).
 │   ├── data_pull/                # STEP 1: pull, models, cli, windowing, flow (Prefect)
 │   ├── feature_engineering/      # STEP 2: features + flow (Prefect)
 │   └── monitoring/               # Streamlit multipage app (leads, monitoring, config)
+├── config/                       # smarthub.ini (task configs) + holidays.json (is_workday calendar)
 ├── docker/                       # Dockerfile.app, Dockerfile.worker, worker-entrypoint.sh
 ├── docs/                         # CONTEXT, MODELING, PLAN_July2026, CHANGELOG
 ├── tests/                        # pytest unit tests
@@ -102,53 +103,47 @@ The leads dashboard reads from the configured storage automatically (DuckDB if
 present, else Parquet); click **🔄 Reload Data** after a new pull. Stop a
 dashboard with `Ctrl+C`.
 
-## Anton runtime config
+## Configuration (three tiers)
 
-Anton's tunable knobs (target CM, recency window, bid bounds, active model
-version, …) live in the **shared Postgres** — **not** in `.env`. `.env` holds
-only secrets/connection settings. Each parameter is defined once in the typed
-**registry** (`src/smarthub/core/config_store.py`), which supplies its **type,
-default, allowed values, and description** (used for both validation and the UI).
+Config is split by *who owns it* (team decision — Kiran/Vinaya: "business
+settings in the UI and nothing else; secrets in env"):
 
-### Defining a new parameter (code — one line)
-A parameter must exist in the registry before it can be set (the UI can only edit
-known params; it can't add new keys). Add a `ConfigParam` and read it where
-needed:
+| Tier | What | Where | Edited by |
+| --- | --- | --- | --- |
+| **Secrets / connection** | SSH + Redshift creds, storage paths, passwords, DB URLs | **`.env`** | ops |
+| **Business settings** | `target_cm`, `bid_floor`, `bid_max_cap`, `min_source_quality` | **Postgres config store**, via the **Streamlit Config page** | business (Kiran) |
+| **Task configs** | model_type, training window, calibration, bid_step, data-pull knobs… | **`config/smarthub.ini`** (`[data_pull]`/`[feature_engineering]`/`[training]`/`[prediction]`) | devs (git) |
 
-```python
-# src/smarthub/core/config_store.py
-ConfigParam("max_daily_spend", "float", 5000.0,
-            "Max total spend per day across all bids ($).", minimum=0.0)
-```
+### Business settings (UI)
+Only business knobs live in the typed registry (`core/config_store.py`) and are
+editable at **http://localhost:8501 → Config** (password `CONFIG_ADMIN_PASSWORD`,
+pick `staging`/`prod`, Save — validated + history-tracked). Read in code:
+
 ```python
 from smarthub.core.config_store import ConfigStore
-cap = ConfigStore().get("max_daily_spend", env="prod")   # default until set
-```
-No DB migration is needed — reads fall back to the registry default until a value
-is saved, and the new param appears in the Config UI automatically.
-
-### Setting a value (three ways)
-1. **Config UI** (normal path): open **http://localhost:8501 → Config**, enter the
-   admin password (`CONFIG_ADMIN_PASSWORD` in `.env`), pick the environment
-   (`staging` / `prod`), edit values, **Save**. Every change is validated and
-   recorded (who/when) in a history table.
-2. **Python / REPL:**
-   ```python
-   from smarthub.core.config_store import ConfigStore
-   ConfigStore().set("target_cm", 0.30, env="prod", updated_by="nimesh")
-   ```
-3. **SQL** (last resort) — values live in the `smarthub_config` table on the
-   shared Postgres.
-
-### Reading a value in code
-```python
-from smarthub.core.config_store import ConfigStore
-store = ConfigStore()
-store.get("recency_window_days", env="prod")   # typed, validated, with fallback
+ConfigStore().get("target_cm", env="prod")     # typed, validated, with fallback
 ```
 
-> Note: the current registry is a **draft** — confirm with Kiran which knobs
-> Anton should actually expose before treating it as final.
+### Task configs (ini file)
+Edit `config/smarthub.ini` — sections per pipeline stage. Missing keys fall back
+to code defaults, so the file is optional. Example — switch the model to LR:
+
+```ini
+[training]
+model_type = logistic_regression   ; or lightgbm
+calibrate  = true
+```
+
+Read in code via `smarthub.core.task_config` (e.g. `config.model_type()`,
+`config.BID_STEP`, `training_window_days()`). Override the file path with
+`SMARTHUB_TASK_CONFIG`. The ini ships in the Docker images (`COPY config`), so a
+worker rebuild picks up edits.
+
+### Holiday calendar (`is_workday`)
+`is_workday` is a model feature. Weekends (Sat/Sun) are non-workdays computed in
+code; **observed holidays** are listed in **`config/holidays.json`** (edit to
+add/remove dates — `SMARTHUB_HOLIDAYS` overrides the path, and the file is
+mountable to edit without a rebuild). Derived from `pst_date`.
 
 ## Testing & linting
 
@@ -216,9 +211,9 @@ are wired the moment the stack is up.
 data and writes a **versioned** leakage-safe training table to
 `data/training/<type>/<timestamp>.parquet` (per lead type, two schedules) — each
 build is kept so a model traces to its exact snapshot; loaders default to the
-latest. Trains on a rolling window set by `TRAINING_WINDOW_DAYS` in `.env`
-(default **21**; `0` = all data) — raw data is always retained, only the window
-read is limited.
+latest. Trains on a rolling window set by `training_window_days` in
+`config/smarthub.ini` (`[feature_engineering]`; default **21**; `0` = all data) —
+raw data is always retained, only the window read is limited.
 
 **Model training** runs as a third deployment, `train-model`, on the `training`
 queue. It reads the latest training table, trains `P(won | bid, features)`,

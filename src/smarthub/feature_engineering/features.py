@@ -70,7 +70,10 @@ AGE_MIN = 1
 AGE_MAX = 200
 
 # Engineered features derived from raw columns (added by build_training_table).
-DERIVED_FEATURES = ["is_married", "multi_vehicle"] + AGE_COHORT_COLUMNS
+DERIVED_FEATURES = (
+    ["is_married", "multi_vehicle", "age_missing", "is_workday"]
+    + AGE_COHORT_COLUMNS
+)
 
 # Known at bid time, used in the profit objective (kept alongside features).
 REVENUE_COLUMN = "expected_revenue"
@@ -117,9 +120,11 @@ def lead_type_name(lead_type_id: int) -> str:
 _MODEL_NUMERIC = [
     "bid",
     "age",
+    "age_missing",
     "continuous_coverage_months",
     "created_hour",
     "created_dayofweek",
+    "is_workday",
     "num_vehicles",
     "num_drivers",
     "num_auto_violations",
@@ -183,17 +188,40 @@ def add_time_features(out: pd.DataFrame) -> list[str]:
     return list(TIME_FEATURES)
 
 
+def add_is_workday(out: pd.DataFrame) -> list[str]:
+    """Add ``is_workday`` (1/0) from ``pst_date`` (else ``created_at``) in place.
+
+    Weekends are non-workdays (Sat/Sun) plus observed holidays (see
+    ``smarthub.core.holidays``). Uses ``pst_date`` — the Pacific business day —
+    so day boundaries match how the marketplace runs. Returns ``["is_workday"]``
+    if a usable date column was present, else ``[]``.
+    """
+    from smarthub.core import holidays
+
+    for col in ("pst_date", "created_at"):
+        if col in out.columns:
+            days = pd.to_datetime(out[col], errors="coerce")
+            out["is_workday"] = days.map(
+                lambda ts: int(holidays.is_workday(ts.date()))
+                if pd.notna(ts)
+                else 0
+            ).astype("int64")
+            return ["is_workday"]
+    return []
+
+
 def derive_serving_features(df: pd.DataFrame) -> pd.DataFrame:
     """Apply the SAME engineered features used in training to a scoring frame.
 
-    This is the train/serve parity hook: online prediction and the training
-    build both go through the same derivation (time parts + is_married,
-    multi_vehicle, age_cohort_*), so a model never sees features computed a
+    Train/serve parity hook: online prediction and the training build go through
+    the same derivation (time parts, is_workday, is_married, multi_vehicle,
+    age_missing, age_cohort_*), so a model never sees features computed a
     different way than it was trained on. Returns a new frame; callers select
     ``model_feature_columns(...)`` afterwards.
     """
     out = df.copy()
     add_time_features(out)
+    add_is_workday(out)
     _derive_features(out)
     return out
 
@@ -211,17 +239,20 @@ def _derive_features(out: pd.DataFrame) -> list[str]:
         added.append("multi_vehicle")
     if "age" in out.columns:
         age = pd.to_numeric(out["age"], errors="coerce")
-        # Clamp impossible ages to NaN (imputer handles) — fixes the raw `age`
-        # feature and keeps out-of-range values out of the cohort bands.
-        age = age.where((age >= AGE_MIN) & (age <= AGE_MAX))
-        out["age"] = age
+        # Missingness as signal (Vinaya): flag null OR implausible/default age,
+        # and fill the raw `age` with the -1 sentinel instead of mean-imputing.
+        plausible = age.between(AGE_MIN, AGE_MAX)  # False for NaN / out-of-range
+        out["age_missing"] = (~plausible).astype("int64")
+        added.append("age_missing")
+        age_clean = age.where(plausible)           # NaN where implausible
+        out["age"] = age_clean.fillna(-1)
         cohort = pd.cut(
-            age,
+            age_clean,
             bins=AGE_COHORT_BINS,
             labels=AGE_COHORT_LABELS,
             right=False,
         )
-        # One-hot: one 0/1 column per band. Missing/unparseable age -> all 0.
+        # One-hot: one 0/1 column per band. Missing/implausible age -> all 0.
         for label, col in zip(AGE_COHORT_LABELS, AGE_COHORT_COLUMNS):
             out[col] = cohort.eq(label).astype("int64")
             added.append(col)
@@ -269,11 +300,12 @@ def build_training_table(
     # Time features + engineered features (derived from raw columns) — the same
     # helpers used at serving time (see derive_serving_features).
     add_time_features(out)
+    workday = add_is_workday(out)
     derived = _derive_features(out)
 
     feature_cols = [c for c in PRE_BID_FEATURES if c in out.columns]
     feature_cols += [c for c in TIME_FEATURES if c in out.columns]
-    feature_cols += derived
+    feature_cols += workday + derived
 
     keep = (
         [c for c in META_COLUMNS if c in out.columns]

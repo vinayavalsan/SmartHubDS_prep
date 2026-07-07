@@ -1,0 +1,17 @@
+feature,type,missing_count,missing_pct,unique_values,mode,mean,median,min,max,std
+bid,continuous,0,0.0,1195,15.0,5.3668,3.7,0.1,15.0,4.5548
+age,continuous,0,0.0,83,77,65.0564,68.0,18,100,15.4938
+continuous_coverage_months,discrete,0,0.0,3,12,,,,,
+created_hour,discrete,0,0.0,24,18,,,,,
+created_dayofweek,discrete,0,0.0,7,0,,,,,
+is_married,discrete,0,0.0,2,0,,,,,
+age_cohort_18_24,discrete,0,0.0,2,0,,,,,
+age_cohort_25_34,discrete,0,0.0,2,0,,,,,
+age_cohort_35_44,discrete,0,0.0,2,0,,,,,
+age_cohort_45_54,discrete,0,0.0,2,0,,,,,
+age_cohort_55_64,discrete,0,0.0,2,0,,,,,
+age_cohort_65_plus,discrete,0,0.0,2,1,,,,,
+state,categorical,0,0.0,50,FL,,,,,
+gender,categorical,0,0.0,2,Female,,,,,
+marital_status,categorical,0,0.0,2,Single,,,,,
+campaign_id,categorical,0,0.0,3,12,,,,,

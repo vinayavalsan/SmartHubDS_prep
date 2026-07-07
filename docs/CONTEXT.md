@@ -314,3 +314,23 @@ New decisions and knowledge (Nimesh was absent; captured from notes):
 - **Exploratory bidding** for cold-start (new sources with no history).
 - **Secondary source-quality metrics:** call revenue, "unity" (SMS revenue), conversion
   rate — used to phase out low-quality partners.
+
+---
+
+## 11. Update — feature decisions, 6 Jul 2026 (Slack, Kiran + Vinaya)
+
+Refines §10's data-quality note — **simpler than first proposed**:
+
+- **Missing values as signal, minimally.** String features → a literal
+  `"NAvail"`. `age` → fill with the **`-1` sentinel** + an **`age_missing`** flag
+  (also set when the value looks like a default); **no mean imputation**. No
+  other per-field boolean flags for now.
+- **No per-ping completeness / reliability / data-quality features.** Kiran:
+  those matter only at the aggregate partner-subsource level, and **`traffic_tier`
+  already carries that** into the model. So we are *not* building completeness
+  scores or source-reliability rollups now.
+- **`is_workday` is a model feature** (not just monitoring) — it proxies
+  competitor/auction behaviour on weekends/holidays (and call-centre hours).
+  **Weekends (Sat/Sun) are non-workdays, in code**; observed holidays live in a
+  git-versioned file (`config/holidays.json`), editable without touching code.
+  Derived from **`pst_date`** (Pacific business day).

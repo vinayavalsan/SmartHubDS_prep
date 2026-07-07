@@ -103,7 +103,8 @@ def build_features_flow(
     """Build and save the training table for one lead type.
 
     ``window_days`` overrides the rolling training window; when ``None`` it falls
-    back to the ``TRAINING_WINDOW_DAYS`` env value (default 21). ``0`` = all data.
+    back to ``training_window_days`` in config/smarthub.ini (default 21).
+    ``0`` = all data.
 
     On any unhandled failure (including "no data — run data-pull first"),
     ``flow_failure_hook`` sends a Slack alert. On success, a Slack notification

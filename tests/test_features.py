@@ -118,18 +118,49 @@ def test_age_cohort_missing_all_zero():
     assert table.loc[1, AGE_COHORT_COLUMNS].sum() == 0
 
 
-def test_age_clamped_to_missing():
+def test_age_missing_sentinel_and_flag():
     from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
 
     raw = _raw()
-    raw.loc[raw["id"] == 1, "age"] = -7648   # garbage
-    raw.loc[raw["id"] == 2, "age"] = 1828    # garbage
+    raw.loc[raw["id"] == 1, "age"] = -7648   # garbage / implausible
+    raw.loc[raw["id"] == 2, "age"] = 1828    # garbage / implausible
     table = build_training_table(raw).set_index("id")
-    # impossible ages -> NaN raw age + all cohort bands 0
-    assert pd.isna(table.loc[1, "age"])
-    assert pd.isna(table.loc[2, "age"])
+    # implausible age -> -1 sentinel (not NaN), age_missing flag set, no cohort
+    assert table.loc[1, "age"] == -1
+    assert table.loc[2, "age"] == -1
+    assert table.loc[1, "age_missing"] == 1
+    assert table.loc[2, "age_missing"] == 1
     assert table.loc[1, AGE_COHORT_COLUMNS].sum() == 0
-    assert table.loc[2, AGE_COHORT_COLUMNS].sum() == 0
+    # a valid age is unchanged and not flagged
+    assert table.loc[4, "age"] == 60
+    assert table.loc[4, "age_missing"] == 0
+
+
+def test_is_workday_from_pst_date(monkeypatch, tmp_path):
+    from smarthub.core import holidays
+    from smarthub.feature_engineering.features import build_training_table
+
+    monkeypatch.setenv("SMARTHUB_HOLIDAYS", str(tmp_path / "none.json"))
+    holidays.reload()
+    try:
+        raw = pd.DataFrame(
+            {
+                "id": [1, 2, 3],
+                "won": ["true", "", "true"],
+                "bid": [5.0, 6.0, 7.0],
+                "created_at": pd.to_datetime(
+                    ["2026-06-22 10:00", "2026-06-20 10:00", "2026-06-22 11:00"]
+                ),
+                "pst_date": pd.to_datetime(["2026-06-22", "2026-06-20", "2026-06-22"]),
+            }
+        )
+        table = build_training_table(raw).set_index("id")
+        assert "is_workday" in table.columns
+        assert table.loc[1, "is_workday"] == 1   # Monday
+        assert table.loc[2, "is_workday"] == 0   # Saturday
+        assert table.loc[3, "is_workday"] == 1   # Monday
+    finally:
+        holidays.reload()
 
 
 def test_has_time_features():

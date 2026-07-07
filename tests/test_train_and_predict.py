@@ -123,12 +123,21 @@ def test_prepare_training_data(monkeypatch):
     assert frame["created_at"].is_monotonic_increasing
 
 
-def test_model_type_falls_back_when_store_unavailable(monkeypatch):
-    # Point the config store at an unreachable DB -> getter falls back to const.
+def test_model_type_from_ini_and_fallback(monkeypatch):
+    from smarthub.core import task_config
+
+    # Missing ini -> model_type falls back to the code default.
+    monkeypatch.setenv("SMARTHUB_TASK_CONFIG", "/nonexistent/smarthub.ini")
+    task_config.reload()
+    assert config.model_type() == config.MODEL_TYPE
+    task_config.reload()  # restore real ini for other tests
+
+
+def test_target_cm_falls_back_when_store_unavailable(monkeypatch):
+    # target_cm stays a BUSINESS knob (config store); unreachable -> code default.
     monkeypatch.setenv(
         "SMARTHUB_CONFIG_DB_URL", "postgresql+psycopg2://x:x@127.0.0.1:1/none"
     )
-    assert config.model_type() == config.MODEL_TYPE
     assert config.target_cm_value() == config.TARGET_CM
 
 

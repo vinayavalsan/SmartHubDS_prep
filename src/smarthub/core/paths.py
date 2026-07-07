@@ -10,8 +10,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# src/smarthub/paths.py -> project root is three levels up.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# src/smarthub/core/paths.py -> project root is four levels up
+# (core -> smarthub -> src -> repo root).
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def project_root() -> Path:

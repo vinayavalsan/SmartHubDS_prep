@@ -28,7 +28,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "path",
         nargs="?",
-        default="data/training",
+        default="data/training/auto",
         help="Parquet file or directory (default: data/leads).",
     )
     parser.add_argument(
@@ -44,7 +44,7 @@ def main(argv=None) -> int:
         return 1
 
     schema = pq.ParquetFile(files[0]).schema_arrow
-    print(f"Source : {files[0]}")
+    print(f"Source : {files[-1]}")
     print(f"Files  : {len(files)} found")
     print(f"Columns: {len(schema.names)}\n")
     for field in schema:

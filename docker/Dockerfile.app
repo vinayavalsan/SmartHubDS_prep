@@ -10,6 +10,7 @@ WORKDIR /app
 # Install dependencies first for better layer caching.
 COPY pyproject.toml requirements.txt ./
 COPY src ./src
+COPY config ./config
 RUN pip install --upgrade pip && pip install -e .
 
 COPY README.md ./

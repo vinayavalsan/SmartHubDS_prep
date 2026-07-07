@@ -91,7 +91,10 @@ class ConfigParam:
         return value
 
 
-# Tier-2 tunable parameters (the knobs the UI exposes).
+# Tier-2 BUSINESS settings — the ONLY things the UI exposes (team decision:
+# "business settings in the UI and nothing else; secrets in env"). Task configs
+# (model_type, training window, bid_step, …) live in config/smarthub.ini via
+# smarthub.core.task_config; secrets live in .env.
 REGISTRY: list[ConfigParam] = [
     ConfigParam("target_cm", "float", 0.25,
                 "Target contribution margin kept in the bid (0–1).", 0.0, 1.0),
@@ -99,20 +102,8 @@ REGISTRY: list[ConfigParam] = [
                 "Minimum bid in dollars (0 = no floor).", 0.0),
     ConfigParam("bid_max_cap", "float", 100.0,
                 "Hard maximum bid in dollars (safety cap).", 0.0),
-    ConfigParam("recency_window_days", "int", 21,
-                "Rolling training window in days.", 1, 365),
-    ConfigParam("exploration_variance_pct", "float", 0.10,
-                "Bid noise std as a fraction of the base bid (0–1).", 0.0, 1.0),
-    ConfigParam("model_type", "str", "lightgbm",
-                "Model family used for training.",
-                choices=("logistic_regression", "lightgbm")),
-    ConfigParam("active_model_version", "str", "none",
-                "MLflow model version currently served."),
     ConfigParam("min_source_quality", "float", 0.0,
                 "Minimum source-quality score required to bid (0–1).", 0.0, 1.0),
-    ConfigParam("holiday_calendar", "str", "US",
-                "Holiday calendar used for is_workday.",
-                choices=("US", "NONE")),
 ]
 REGISTRY_BY_KEY = {p.key: p for p in REGISTRY}
 

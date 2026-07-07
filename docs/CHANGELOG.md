@@ -9,6 +9,40 @@
   the interim listings-sum for R; switching to `exp_rev` is blocked on the backend
   populating it. Recorded in CONTEXT §4. Verified via SQL on prod.
 
+### is_workday feature + holiday calendar; age missingness-as-signal
+- Added **`is_workday`** as a model feature (per Kiran/Vinaya): weekends
+  (Sat/Sun) are non-workdays computed in code; observed holidays live in a
+  git-versioned **`config/holidays.json`** (mountable; `SMARTHUB_HOLIDAYS`
+  overrides). New `core/holidays.py` (`is_workday`/`is_holiday`). Derived from
+  `pst_date` (Pacific business day). Populated with **SmartFinancial's 2026
+  company paid holidays** (8 dates incl. 2027-01-01); not the generic US federal
+  set — MLK/Presidents'/Juneteenth/Veterans Day are working days here.
+- **age**: per Vinaya, replaced the NaN-clamp with a `-1` sentinel + an
+  **`age_missing`** flag (set on null OR implausible/default age); no mean
+  imputation. `age_missing` + `is_workday` added to the model feature set.
+- Dropped the placeholder `holiday_calendar` ini knob (holidays now in the JSON).
+- Not doing (per Kiran): per-ping completeness / reliability / data-quality
+  features — `traffic_tier` already carries source quality at the aggregate
+  level.
+
+### Config split into three tiers (team decision: UI = business only)
+- Per Kiran/Vinaya ("business settings in the UI and nothing else; secrets in
+  env"), reorganized config into: **secrets → `.env`**, **business → Postgres
+  config store/UI** (trimmed to `target_cm`, `bid_floor`, `bid_max_cap`,
+  `min_source_quality`), **task configs → `config/smarthub.ini`** with
+  `[data_pull]`/`[feature_engineering]`/`[training]`/`[prediction]` sections.
+- Added `core/task_config.py` (ini loader with typed getters + defaults).
+- Moved `model_type`, `calibrate`, `drop_zero_variance`, `test_size`,
+  `random_seed`, `bid_step`, `training_window_days`, `holiday_calendar`,
+  `exploration_variance_pct`, `active_model_version` out of the UI registry into
+  the ini. Training reads model/window/bid_step from the ini; `target_cm`/
+  `bid_floor` still come from the business store.
+- Dockerfiles now `COPY config` so the ini ships in the images. README config
+  section rewritten. `TRAINING_WINDOW_DAYS` removed from `.env`/`.env.example`
+  entirely — the training window now comes solely from the ini
+  (`[feature_engineering] training_window_days`). Fixed a latent `paths.py`
+  `project_root()` bug (pointed at `src/` after the reorg → now repo root).
+
 ### Quieted LightGBM feature-name warning flood
 - The offline optimizer calls `predict_proba` once per test row, so sklearn's
   harmless "X does not have valid feature names" warning flooded the logs

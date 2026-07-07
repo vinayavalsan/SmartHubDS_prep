@@ -133,10 +133,14 @@ DEFAULT_TRAINING_WINDOW_DAYS = 21
 
 
 def training_window_days() -> int:
-    """Rolling training window in days (env ``TRAINING_WINDOW_DAYS``, default 21).
+    """Rolling training window in days for the feature build (0 = all data).
 
-    The feature build trains on this many recent days, since the market is
-    non-stationary (CONTEXT.md §7). Set ``0`` to use all accumulated data.
+    Task knob — lives in ``config/smarthub.ini`` ``[feature_engineering]
+    training_window_days`` (via ``task_config``); falls back to the default
+    (21) if unset. The market is non-stationary (CONTEXT.md §7).
     """
-    raw = os.getenv("TRAINING_WINDOW_DAYS")
-    return int(raw) if raw not in (None, "") else DEFAULT_TRAINING_WINDOW_DAYS
+    from smarthub.core import task_config
+
+    return task_config.get_int(
+        "feature_engineering", "training_window_days", DEFAULT_TRAINING_WINDOW_DAYS
+    )
