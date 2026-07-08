@@ -60,9 +60,10 @@ def train_flow(
     m = result["metrics"]
     opt = result["optimizer_summary"] or {}
     logger.info(
-        "Trained %s model: ROC AUC=%.4f, rows=%s -> %s",
-        lead_type_name, m.get("roc_auc", float("nan")),
+        "Trained %s model %s: ROC AUC=%.4f, rows=%s -> %s (promoted=%s)",
+        lead_type_name, result.get("model_version"), m.get("roc_auc", float("nan")),
         result["prep_summary"]["training_rows"], result["model_path"],
+        result.get("promoted"),
     )
 
     _report(lead_type_name, lead_type_id, result, m, opt)
@@ -86,11 +87,21 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
             return "—"
 
     lineage = result.get("lineage", {})
+    promoted = result.get("promoted")
+    status_label = (
+        "✅ PROMOTED to currently-serving"
+        if promoted
+        else "⏸ HELD (currently-serving model unchanged)"
+    )
     md = f"""# Train model — {lead_type_name}
+
+## Promotion decision: {status_label}
+{result.get('promotion_reason', '—')}
 
 | field | value |
 | --- | --- |
 | lead_type_id | {lead_type_id} |
+| model version | `{result.get('model_version')}` |
 | model | {lineage.get('model_type')} (calibrated={lineage.get('calibrated')}) |
 | rows trained | {prep.get('training_rows')} |
 | observed win rate | {_f(prep.get('win_rate'))} |
@@ -136,6 +147,15 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     lineage = result.get("lineage", {})
     fields = {
         "Lead type": f"{lead_type_name} ({lead_type_id})",
+        "Model version": result.get("model_version"),
+        "Promotion": (
+            f"✅ Promoted — {result.get('promotion_reason')}"
+            if result.get("promoted")
+            else (
+                "⏸ Held (currently-serving model unchanged) — "
+                f"{result.get('promotion_reason')}"
+            )
+        ),
         "Model": f"{lineage.get('model_type')} (cal={lineage.get('calibrated')})",
         "Trained on table": f"`{lineage.get('training_table_version')}`",
         "Data range": (

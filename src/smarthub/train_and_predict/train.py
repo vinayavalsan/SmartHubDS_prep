@@ -19,10 +19,17 @@ import argparse
 import logging
 from pathlib import Path
 
-import joblib
 import numpy as np
 
-from . import config, metrics, models, plots_and_reports, predict, preprocessing
+from . import (
+    config,
+    metrics,
+    models,
+    plots_and_reports,
+    predict,
+    preprocessing,
+    registry,
+)
 
 logger = logging.getLogger("smarthub.train_and_predict.train")
 
@@ -127,13 +134,18 @@ def run_training(
         model_metrics["log_loss"], model_metrics["brier_score"],
     )
 
+    # Fixed once so the challenger and the currently-serving model (re-evaluated
+    # below) are scored under the identical objective — a fair comparison.
+    target_cm = config.target_cm_value()
+    min_bid = config.min_bid_value()
+
     log.info("Running offline bid-optimizer evaluation")
     optimizer_result = predict.run_bid_optimizer_evaluation(
         test_eval_df=test_df,
         model=model,
         feature_cols=feature_cols,
-        target_cm=config.target_cm_value(),
-        min_bid=config.min_bid_value(),
+        target_cm=target_cm,
+        min_bid=min_bid,
         bid_step=config.BID_STEP,
     )
     if optimizer_result is not None:
@@ -210,11 +222,55 @@ def run_training(
         report_dir, evaluation_summary, optimizer_eval_df
     )
 
-    # --- Save model ----------------------------------------------------------
-    model_path = config.model_path(lead_type_name)
-    Path(model_path).parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, model_path)
-    log.info("Saved model -> %s", model_path)
+    # --- Promotion gate --------------------------------------------------------
+    # Re-score the model CURRENTLY SERVING traffic on this run's exact
+    # held-out test set, so the comparison is apples-to-apples instead of
+    # diffing metrics computed on two different data snapshots. Any failure
+    # here (e.g. it predates a feature-schema change) is logged and treated as
+    # "nothing comparable currently serving" rather than blocking training.
+    serving_metrics, serving_optimizer_summary = _evaluate_currently_serving_model(
+        lead_type_name, test_df, y_test, target_cm, min_bid, log
+    )
+
+    decision = registry.decide_promotion(
+        challenger_metrics=model_metrics,
+        challenger_optimizer=optimizer_summary,
+        currently_serving_metrics=serving_metrics,
+        currently_serving_optimizer=serving_optimizer_summary,
+        min_roc_auc_regression=config.PROMOTION_MIN_ROC_AUC_REGRESSION,
+        min_profit_ratio=config.PROMOTION_MIN_PROFIT_RATIO,
+    )
+    log.info(
+        "Promotion decision: %s — %s",
+        "PROMOTE" if decision.promote else "HOLD (keep serving current model)",
+        decision.reason,
+    )
+
+    # --- Save model (always versioned; never overwrites a prior version) -----
+    manifest = registry.save_version(
+        model,
+        lead_type_name,
+        feature_cols=feature_cols,
+        metrics=model_metrics,
+        optimizer_summary=optimizer_summary,
+        lineage=lineage,
+        model_params=model_params,
+    )
+    model_path = manifest["model_path"]
+    log.info("Saved model version %s -> %s", manifest["version"], model_path)
+
+    if decision.promote:
+        registry.promote(lead_type_name, manifest["version"], reason=decision.reason)
+        log.info(
+            "Promoted %s to currently-serving for '%s'.",
+            manifest["version"], lead_type_name,
+        )
+    else:
+        log.warning(
+            "Challenger %s NOT promoted for '%s'; currently-serving model "
+            "unchanged.",
+            manifest["version"], lead_type_name,
+        )
 
     # --- MLflow --------------------------------------------------------------
     if register_mlflow:
@@ -230,7 +286,13 @@ def run_training(
                 experiment_name=config.MLFLOW_EXPERIMENT_NAME,
                 run_name=f"{config.MLFLOW_RUN_NAME}_{lead_type_name}",
                 registered_model_name=config.MLFLOW_REGISTERED_MODEL_NAME,
-                extra_params={"lead_type_name": lead_type_name, **lineage},
+                extra_params={
+                    "lead_type_name": lead_type_name,
+                    "model_version": manifest["version"],
+                    "promoted": decision.promote,
+                    "promotion_reason": decision.reason,
+                    **lineage,
+                },
             )
             log.info(
                 "Logged run to MLflow experiment '%s'",
@@ -243,12 +305,66 @@ def run_training(
         "lead_type_id": lead_type_id,
         "lead_type_name": lead_type_name,
         "model_path": model_path,
+        "model_version": manifest["version"],
+        "promoted": decision.promote,
+        "promotion_reason": decision.reason,
+        "promotion_comparison": decision.comparison,
         "report_dir": report_dir,
         "metrics": model_metrics,
         "optimizer_summary": optimizer_summary,
         "prep_summary": prep_summary,
         "lineage": lineage,
     }
+
+
+def _evaluate_currently_serving_model(
+    lead_type_name, test_df, y_test, target_cm, min_bid, log
+):
+    """Score the model currently serving traffic on this run's held-out test set.
+
+    Returns ``(metrics, optimizer_summary)``, or ``(None, None)`` if nothing
+    is serving yet, or if it can't be scored on the current data (e.g. its
+    feature schema has since changed) — in which case ``decide_promotion``
+    treats this as the bootstrap case and promotes the challenger.
+    """
+    serving_model, serving_manifest = registry.load_currently_serving_model(
+        lead_type_name
+    )
+    if serving_model is None:
+        log.info(
+            "Nothing currently serving for '%s' (first model).", lead_type_name
+        )
+        return None, None
+
+    serving_feature_cols = serving_manifest.get("feature_cols") or []
+    try:
+        X_serving = test_df[serving_feature_cols]
+        _, _, serving_metrics = metrics.evaluate_model(
+            serving_model, X_serving, y_test
+        )
+        serving_optimizer_result = predict.run_bid_optimizer_evaluation(
+            test_eval_df=test_df,
+            model=serving_model,
+            feature_cols=serving_feature_cols,
+            target_cm=target_cm,
+            min_bid=min_bid,
+            bid_step=config.BID_STEP,
+        )
+        serving_optimizer_summary = (
+            serving_optimizer_result[1] if serving_optimizer_result else {}
+        )
+        log.info(
+            "Currently-serving model (%s) re-scored on this test set: ROC AUC=%.4f",
+            serving_manifest.get("version"), serving_metrics["roc_auc"],
+        )
+        return serving_metrics, serving_optimizer_summary
+    except Exception as exc:  # noqa: BLE001 - incompatible schema, etc.
+        log.warning(
+            "Could not score currently-serving model %s on the current test "
+            "set (%s); treating as nothing comparable currently serving.",
+            serving_manifest.get("version"), exc,
+        )
+        return None, None
 
 
 def main(argv=None):

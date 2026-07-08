@@ -25,6 +25,8 @@ PRE_BID_FEATURES = [
     "num_auto_violations",
     "num_auto_claims",
     "num_auto_accidents",
+    "num_home_claims",
+    "home_property_type",
     "insured",
     "current_carrier",
     "continuous_coverage_months",
@@ -129,16 +131,17 @@ _MODEL_NUMERIC = [
     "num_drivers",
     "num_auto_violations",
     "num_auto_accidents",
+    "num_home_claims",
     "is_married",
     "multi_vehicle",
 ] + AGE_COHORT_COLUMNS
-# Note: `source_type_id` is intentionally excluded — ~9k unique values would
-# one-hot into thousands of sparse columns the model just memorises (it inflated
-# ROC AUC without generalising). `account_id` is excluded as a duplicate of
-# `campaign_id` (they map 1:1 in the data). The `insured`/`home_owner`/`dui`/
-# `military_affiliation` columns stay listed but are auto-dropped at train time
-# when they are constant (see preprocessing.drop_zero_variance), so they start
-# contributing automatically if the data ever varies.
+# `traffic_tier` is included — Kiran: source completeness/quality lives at the
+# partner-subsource (traffic tier) level, so this carries competitor-bidding
+# signal into the model. `source_type_id` is excluded (~9k unique values → sparse
+# one-hot memorisation that inflated AUC without generalising); `account_id` is
+# excluded as a duplicate of `campaign_id` (1:1 in the data). The `insured`/
+# `home_owner`/`dui`/`military_affiliation` columns stay listed but are
+# auto-dropped at train time when constant (preprocessing.drop_zero_variance).
 _MODEL_CATEGORICAL = [
     "state",
     "gender",
@@ -148,8 +151,10 @@ _MODEL_CATEGORICAL = [
     "home_owner",
     "dui",
     "campaign_id",
+    "traffic_tier",
+    "home_property_type",
 ]
-# Features that only make sense for auto leads (dropped for home).
+# Lead-type-specific features (Kiran: auto vs home have different fields).
 AUTO_ONLY_FEATURES = {
     "num_vehicles",
     "num_drivers",
@@ -159,33 +164,67 @@ AUTO_ONLY_FEATURES = {
     "home_owner",
     "multi_vehicle",
 }
+HOME_ONLY_FEATURES = {
+    "num_home_claims",
+    "home_property_type",
+}
 
 
 def model_feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
     """Return ``(numeric, categorical)`` model feature names for a lead type.
 
-    Auto-only features are dropped for non-auto lead types so the same code
-    path trains a home model without vehicle/driver columns.
+    Auto-only features (vehicles/drivers/violations…) are dropped for home;
+    home-only features (home_property_type, num_home_claims) are dropped for
+    auto — so one code path trains the right model per lead type.
     """
-    drop = set() if lead_type_id == LEAD_TYPE_AUTO else AUTO_ONLY_FEATURES
+    if lead_type_id == LEAD_TYPE_AUTO:
+        drop = HOME_ONLY_FEATURES
+    elif lead_type_id == LEAD_TYPE_HOME:
+        drop = AUTO_ONLY_FEATURES
+    else:
+        drop = set()
     numeric = [c for c in _MODEL_NUMERIC if c not in drop]
     categorical = [c for c in _MODEL_CATEGORICAL if c not in drop]
     return numeric, categorical
 
 
 def add_time_features(out: pd.DataFrame) -> list[str]:
-    """Add ``created_hour``/``created_dayofweek`` from ``created_at`` in place.
+    """Add ``created_hour`` / ``created_dayofweek`` in **Pacific** time.
 
-    Returns the names added (empty if there is no ``created_at`` column — e.g.
-    a live scoring request that already carries the time parts).
+    Kiran: don't use UTC — the call-centre operational day runs to ~5:30pm PT, so
+    UTC would flip the date. So prefer the Pacific columns:
+    ``created_dayofweek`` from ``pst_date`` and ``created_hour`` from ``pst_hour``.
+    Falls back to ``created_at`` (UTC) if the Pacific columns are absent, and
+    leaves values untouched for a live request that already carries them.
     """
-    if "created_at" not in out.columns:
-        return []
-    created = pd.to_datetime(out["created_at"], errors="coerce")
-    out["created_at"] = created
-    out["created_hour"] = created.dt.hour
-    out["created_dayofweek"] = created.dt.dayofweek
-    return list(TIME_FEATURES)
+    added = []
+    created = (
+        pd.to_datetime(out["created_at"], errors="coerce")
+        if "created_at" in out.columns
+        else None
+    )
+    if created is not None:
+        out["created_at"] = created
+
+    # created_dayofweek: Pacific business day (pst_date) preferred.
+    if "pst_date" in out.columns:
+        out["created_dayofweek"] = pd.to_datetime(
+            out["pst_date"], errors="coerce"
+        ).dt.dayofweek
+        added.append("created_dayofweek")
+    elif created is not None:
+        out["created_dayofweek"] = created.dt.dayofweek
+        added.append("created_dayofweek")
+
+    # created_hour: Pacific hour (pst_hour) preferred.
+    if "pst_hour" in out.columns:
+        out["created_hour"] = pd.to_numeric(out["pst_hour"], errors="coerce")
+        added.append("created_hour")
+    elif created is not None:
+        out["created_hour"] = created.dt.hour
+        added.append("created_hour")
+
+    return added
 
 
 def add_is_workday(out: pd.DataFrame) -> list[str]:
@@ -281,11 +320,30 @@ def build_training_table(
     - Engineered: ``is_married`` (from marital_status), ``multi_vehicle``
       (from num_vehicles), and one-hot ``age_cohort_<band>`` 0/1 columns
       (banded from age).
+    - When ``lead_type_id`` is given, the table is **lead-type-clean**: the auto
+      table drops home-only columns and the home table drops auto-only columns.
     """
     out = df.copy()
 
-    # Target: win = won=='true'; a placed bid is bid > 0. Keep placed bids (and
-    # any win, defensively), label win=1 / loss=0. Exclude no-bid pings.
+    # Drop errored pings entirely (Kiran: ignore rows where erred is true — they
+    # aren't real auction outcomes). Keep all non-errored pings.
+    if "erred" in out.columns:
+        err = out["erred"].astype("string").str.strip().str.lower()
+        out = out[~err.isin(["1", "true", "t", "yes", "y"])].copy()
+
+    # Expected revenue R: prefer the backend `exp_rev` when populated (>0), else
+    # fall back to the interim listings-sum. Auto-switches once exp_rev fills in.
+    if "exp_rev" in out.columns:
+        native = pd.to_numeric(out["exp_rev"], errors="coerce")
+        if REVENUE_COLUMN in out.columns:
+            listings = pd.to_numeric(out[REVENUE_COLUMN], errors="coerce")
+        else:
+            listings = pd.Series(float("nan"), index=out.index)
+        out[REVENUE_COLUMN] = native.where(native > 0, listings)
+
+    # Target: win = won=='true'; a placed bid is bid > 0. A placed bid with
+    # won null/blank = LOST (Kiran). Keep placed bids (+ any win); label
+    # win=1 / loss=0. Exclude no-bid pings.
     won_true = out["won"].astype("string").str.strip().str.lower().eq(_TRUE)
     bid_default = pd.Series(float("nan"), index=out.index, dtype="float64")
     bid_num = pd.to_numeric(out.get(DECISION_COLUMN, bid_default), errors="coerce")
@@ -306,6 +364,16 @@ def build_training_table(
     feature_cols = [c for c in PRE_BID_FEATURES if c in out.columns]
     feature_cols += [c for c in TIME_FEATURES if c in out.columns]
     feature_cols += workday + derived
+
+    # Keep the table lead-type-clean: drop the *other* type's exclusive columns
+    # so the auto table has no home-only columns and vice-versa.
+    if lead_type_id == LEAD_TYPE_AUTO:
+        cross_type = HOME_ONLY_FEATURES
+    elif lead_type_id == LEAD_TYPE_HOME:
+        cross_type = AUTO_ONLY_FEATURES
+    else:
+        cross_type = set()
+    feature_cols = [c for c in feature_cols if c not in cross_type]
 
     keep = (
         [c for c in META_COLUMNS if c in out.columns]

@@ -46,6 +46,27 @@ CALIBRATE = task_config.get_bool("training", "calibrate", True)
 TEST_SIZE = task_config.get_float("training", "test_size", 0.20)
 BID_STEP = task_config.get_float("prediction", "bid_step", 0.25)
 
+# Promotion gate (see `registry.decide_promotion`). A newly trained model
+# ("challenger") only replaces the model currently serving traffic if it
+# clears both checks below, evaluated on the SAME held-out test set. Loosen/
+# tighten per lead type behaviour via the ini, not code.
+PROMOTION_MIN_ROC_AUC_REGRESSION = task_config.get_float(
+    "training", "promotion_min_roc_auc_regression", 0.01
+)
+PROMOTION_MIN_PROFIT_RATIO = task_config.get_float(
+    "training", "promotion_min_profit_ratio", 0.98
+)
+
+
+def active_model_version() -> str | None:
+    """Explicit per-lead-type pin (ini ``[prediction] active_model_version``,
+    e.g. ``"v3_2026-07-09T140501Z"``) to serve a specific version instead of
+    whatever is currently promoted. ``"none"`` (default) = serve that model.
+    """
+    raw = task_config.get("prediction", "active_model_version", "none")
+    raw = (raw or "none").strip()
+    return None if raw.lower() == "none" else raw
+
 
 def model_type() -> str:
     """Model family (ini ``[training] model_type``, else MODEL_TYPE)."""
@@ -119,7 +140,13 @@ def report_dir(lead_type_name: str) -> str:
 
 
 def model_path(lead_type_name: str) -> str:
-    """Absolute per-lead-type model file (so auto/home don't clobber)."""
+    """Legacy single-file model path (pre-versioning).
+
+    No longer written by ``train.py`` — models are now versioned under
+    ``data/models/<type>/v<N>_<timestamp>.pkl`` with a currently-serving
+    model per lead type; see ``registry.py``. Kept only so an old artifact at
+    this path can still be loaded manually via ``MODEL_URI`` if one exists.
+    """
     return str(paths.resolve(f"{MODEL_ROOT}/anton_model_{lead_type_name}.pkl"))
 
 

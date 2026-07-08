@@ -1,6 +1,77 @@
 # Changelog
 
 
+## 2026-07-09 (cont'd)
+
+### Model versioning + promotion gate
+- **Problem:** `train.py` used to `joblib.dump` straight over
+  `data/models/anton_model_<type>.pkl` on every run — no comparison against
+  what was already serving, no history, no way back if a training run (e.g. a
+  data glitch) produced a worse model.
+- **New `train_and_predict/registry.py`.** Every training run is now saved as
+  an immutable, numbered, timestamped version:
+  `data/models/<type>/v<N>_<UTC timestamp>.pkl` + a `.json` manifest (metrics,
+  optimizer summary, lineage, model params). A `current.json` pointer per lead
+  type records the model **currently serving** that lead type — the version
+  `predict.load_model` actually uses. `registry.rollback(...)` repoints it at
+  an earlier version with no retraining.
+- **`train.run_training` now gates promotion.** Before saving, it re-scores
+  the *currently-serving* model on this run's exact held-out test set (not a
+  stored metric from a different data snapshot — the same rows), then
+  `registry.decide_promotion(...)` promotes the new ("challenger") model only
+  if its ROC AUC doesn't regress beyond `promotion_min_roc_auc_regression` and
+  its offline expected profit on that test set is >= `promotion_min_profit_ratio`
+  of the currently-serving model's (new `config/smarthub.ini [training]`
+  knobs, default 0.01 / 0.98). First model for a lead type is always promoted
+  (bootstrap case). A held (non-promoted) run is still saved as a version and
+  logged — visible in the Prefect artifact + Slack notification — not
+  silently dropped.
+- **`predict.load_model` / the FastAPI service** now resolve the model per
+  `lead_type_id`: `MODEL_URI` env (explicit override) > `smarthub.ini
+  [prediction] active_model_version` (pin a specific version) > the model
+  currently serving that lead type (default). Previously `MODEL_URI` defaulted
+  to a single hardcoded `auto` path regardless of the requested lead type.
+  `/health` now reports the resolved model URI for a given `lead_type_id`.
+- `config.model_path()` (the old flat-file path) is kept only for loading a
+  pre-existing legacy artifact manually; nothing writes to it anymore.
+
+
+## 2026-07-09
+
+### Docs: captured 7 Jul meeting insights
+- CONTEXT §12 and **MODELING §8 (new "current spec")** now reflect the meeting:
+  label/erred logic, Pacific time, `exp_rev`, per-lead-type features,
+  `current_carrier` data issue, the "no losses / lower profit" baseline to beat,
+  and the full-payload serving decision. MODELING's stale `won='false'` cleaning
+  rule is marked superseded.
+
+### Applied DS-meeting (7 Jul) decisions
+- **Exclude errored pings** from training (`erred` true → dropped); a placed bid
+  (`bid > 0`) with `won` null/blank stays a **loss** (confirmed: null ≠ lost
+  *unless* a bid was placed). Non-errored losses are kept — they carry the
+  competitive-pricing signal.
+- **Pacific time features** (Kiran: UTC flips the date since the call centre runs
+  to ~5:30pm PT). `created_dayofweek` now from `pst_date`, `created_hour` from
+  `pst_hour` (fallback to `created_at` UTC when the Pacific columns are absent).
+  Added `pst_hour` to the ORM/pull.
+- **expected_revenue now prefers the backend `exp_rev`** (added to ORM/pull) when
+  populated (>0), else falls back to the interim listings-sum — auto-switches as
+  `exp_rev` fills in (meeting: the column is now populating).
+- **Home vs auto feature split.** Added `HOME_ONLY_FEATURES`
+  (`home_property_type`, `num_home_claims`); `model_feature_columns` drops
+  home-only for auto and auto-only for home. Added the two home columns to the
+  training table (PRE_BID).
+
+### Open items from the meeting (no code yet)
+- `current_carrier` populated when `insured` = false (Kiran: bad data, but the
+  field is critical for bidding — don't sell to a lead's current carrier).
+  Kiran investigating; it's currently excluded from the model feature set —
+  revisit once the data issue is resolved.
+- Commercial lead type not yet handled (auto/home only for now).
+- Serving will use the **full lead payload** (not ping-id DB lookups), pared to
+  the needed features — API request schema to mirror the auto/home payloads.
+
+
 ## 2026-07-08
 
 ### expected_revenue backend column: confirmed present but unpopulated (blocked)
@@ -8,6 +79,14 @@
   revenue), but it is 0 non-null / 0 positive across all 572,047 rows. So we keep
   the interim listings-sum for R; switching to `exp_rev` is blocked on the backend
   populating it. Recorded in CONTEXT §4. Verified via SQL on prod.
+
+### Added traffic_tier as a model feature
+- Per Kiran, `traffic_tier` (partner-subsource) carries source-quality /
+  competitor-bidding signal and belongs in the model — added to the categorical
+  feature set. (`source_type_id` stays excluded for cardinality; `account_id`
+  stays excluded as a `campaign_id` duplicate.) Check its cardinality on the next
+  build — if very high, group rare values (LightGBM's ordinal path handles it
+  fine; LR one-hots it).
 
 ### is_workday feature + holiday calendar; age missingness-as-signal
 - Added **`is_workday`** as a model feature (per Kiran/Vinaya): weekends

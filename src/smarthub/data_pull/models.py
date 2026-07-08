@@ -123,6 +123,8 @@ class LeadPing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
     pst_date: Mapped[datetime | None] = mapped_column(Date)
+    pst_hour: Mapped[int | None] = mapped_column(Integer)      # Pacific hour 0–23
+    exp_rev: Mapped[float | None] = mapped_column(Numeric(10, 2))  # backend R
 
 
 class LeadPingListing(Base):
@@ -218,6 +220,8 @@ LEADS_COLUMNS: Sequence = (
     LeadPing.lead_created_at,
     LeadPing.expiration_date,
     LeadPing.pst_date,
+    LeadPing.pst_hour,
+    LeadPing.exp_rev,
 )
 
 

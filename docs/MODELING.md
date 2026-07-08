@@ -134,6 +134,9 @@ is used only as the label (`won`) or for after-the-fact profit analysis.
 - Confirm which features actually carry signal (keep a handful; avoid noise).
 
 ### Concrete cleaning rules (confirmed from inspection — see §6)
+> ⚠️ **Superseded by §8 (7 Jul 2026).** The warehouse `won` is only ever `'true'`
+> or NULL — there is **no `'false'`**. Correct rule: drop `erred` rows; a placed
+> bid (`bid > 0`) with `won` null = **loss**; `won` null with no bid = excluded.
 - **Keep only real bidding decisions:** `won` is non-blank (`won <> ''`) — this
   keeps **both** `won = 'true'` (wins) **and** `won = 'false'` (losses), which the
   model needs to learn the boundary. Only blank `won` (no bid / no outcome) is
@@ -216,6 +219,60 @@ From a sample of `won = true` rows (early June data):
 ### Training row for v2.0
 `(X, bid, won_flag, R)` — one row per bidding decision, all constructable from
 the store once the leakage split (§3) and §4 items are settled.
+
+---
+
+## 8. Current spec (supersedes §1–§6 where they differ) — 7 Jul 2026
+
+Authoritative as of the 7 Jul DS meeting + implementation. The single source of
+truth in code is `smarthub.feature_engineering.features`.
+
+**Label / rows (`build_training_table`).** `won` is only `'true'` or NULL in the
+warehouse (no `'false'`). Rules:
+- **Drop `erred` rows** (errored pings aren't real auction outcomes).
+- A **placed bid** = `bid > 0`. A placed bid with `won == 'true'` → **win (1)**;
+  a placed bid with `won` null/blank → **loss (0)**. Pings with no bid are
+  **excluded** (not decisions). Keep all non-errored pings (losses carry the
+  competitive-pricing signal).
+- Target column: `won_flag`.
+
+**Features.** Curated per-lead-type set via `model_feature_columns(lead_type_id)`
+(not the raw 28-col list, which was illustrative):
+- **Shared:** `bid`, `age` (+ `age_missing`), `continuous_coverage_months`,
+  `created_hour`, `created_dayofweek`, `is_workday`, `is_married`,
+  one-hot `age_cohort_*`; categorical `state`, `gender`, `marital_status`,
+  `military_affiliation`, `insured`, `campaign_id`, **`traffic_tier`**.
+- **Auto-only:** `num_vehicles`, `num_drivers`, `num_auto_violations`,
+  `num_auto_accidents`, `dui`, `home_owner`, `multi_vehicle`.
+- **Home-only:** `home_property_type`, `num_home_claims`.
+- **Excluded:** `source_type_id` (~9k cardinality → memorisation),
+  `account_id` (duplicate of `campaign_id`), `zip`/`city`/`current_carrier`.
+  `traffic_tier` is high-cardinality (~9k) — group rare values before trusting
+  it in the LR path.
+
+**Time / timezone.** Use **Pacific**, not UTC (operational day runs to ~5:30pm
+PT). `created_hour` ← `pst_hour`, `created_dayofweek` ← `pst_date`. `is_workday`
+= Mon–Fri (by `pst_date`) **and not** a holiday; weekends are computed in code,
+holidays live in `config/holidays.json` (SmartFinancial's observed list).
+
+**Expected revenue (R).** Prefer the backend **`exp_rev`** column (now
+populating) when `> 0`, else the interim listings-sum. Used for the ceiling
+(`R × (1 − target_cm)`) and the profit objective — never a feature.
+
+**Missing values.** Strings → `"NAvail"`; `age` → `-1` sentinel + `age_missing`
+flag (no mean imputation). **No** per-ping completeness/reliability features —
+`traffic_tier` carries source quality at the aggregate level (Kiran).
+
+**Serving.** Anton takes the **full lead payload** (not a ping-id DB lookup),
+pared to the needed features; the auto/home API payloads define per-type fields.
+
+**Baseline to beat.** Current Anton runs with **no losses but lower profit**
+(Vinaya) — the new model must be **≥ the current system** on profit/CM.
+
+**Open:** `current_carrier` sometimes populated when `insured=false` (bad data,
+but critical for bidding — don't sell to a lead's current carrier); Kiran
+investigating; excluded from the model until resolved. Commercial lead type not
+yet handled.
 
 ---
 

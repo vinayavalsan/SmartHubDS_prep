@@ -217,13 +217,39 @@ raw data is always retained, only the window read is limited.
 
 **Model training** runs as a third deployment, `train-model`, on the `training`
 queue. It reads the latest training table, trains `P(won | bid, features)`,
-evaluates it, runs the offline bid-optimizer evaluation, saves the model to
-`data/models/anton_model_<type>.pkl`, writes a report under
-`data/training_report/<type>/`, and logs to MLflow. It runs with
-`log_prints=True`, so the full training + optimizer output shows in the Prefect
-run logs, and it posts a summary artifact + Slack notification. Needs the `ml`
-extra (installed in the worker image). One worker serves all three queues:
-`default`, `features`, `training` (`PREFECT_WORK_QUEUES`).
+evaluates it, runs the offline bid-optimizer evaluation, saves the model as a
+new **version**, writes a report under `data/training_report/<type>/`, and
+logs to MLflow. It runs with `log_prints=True`, so the full training +
+optimizer output shows in the Prefect run logs, and it posts a summary
+artifact + Slack notification (including the promotion decision below). Needs
+the `ml` extra (installed in the worker image). One worker serves all three
+queues: `default`, `features`, `training` (`PREFECT_WORK_QUEUES`).
+
+**Model versioning & promotion gate.** Every training run is saved as an
+immutable version — `data/models/<type>/v<N>_<UTC timestamp>.pkl` (e.g.
+`v3_2026-07-09T140501Z.pkl`) plus a `.json` manifest of its metrics and
+lineage — never overwritten. It is **not** automatically served: the newly
+trained model ("challenger") is re-compared against the model **currently
+serving** that lead type **on the same held-out test set** before anything
+changes (`train_and_predict/registry.py:decide_promotion`). The challenger is
+only promoted (repointing `data/models/<type>/current.json`, which is what
+serving reads) if its ROC AUC doesn't regress beyond
+`promotion_min_roc_auc_regression` *and* its offline expected profit on that
+test set is at least `promotion_min_profit_ratio` of the currently-serving
+model's (`config/smarthub.ini [training]`, defaults 0.01 / 0.98). If it fails
+either check, the currently-serving model is left untouched and the run is
+logged as **held**, not silently discarded — the model + its metrics are
+still saved as a version for inspection. The first model trained for a lead
+type is always promoted (nothing to compare against yet).
+
+```python
+from smarthub.train_and_predict import registry
+
+registry.list_versions("auto")                 # ["v1_...", "v2_...", "v3_..."]
+registry.currently_serving_version("auto")     # currently-serving version, or None
+registry.rollback("auto")                      # repoint at the prior version
+registry.rollback("auto", to_version="v1_2026-07-01T050000Z")  # or a specific one
+```
 
 Run any flow once locally without Docker:
 
@@ -237,12 +263,15 @@ python -m smarthub.train_and_predict.train --lead-type-id 6   # train auto
 python -m smarthub.train_and_predict.flow                     # train via Prefect
 ```
 
-The bid-recommendation API (FastAPI) serves the trained model:
+The bid-recommendation API (FastAPI) serves the trained model. With no
+`MODEL_URI` set it serves whichever version is currently promoted for the
+request's `lead_type_id`; set `MODEL_URI` to pin a specific `.pkl`/MLflow URI
+regardless of the registry (or pin per lead type via `config/smarthub.ini
+[prediction] active_model_version`):
 
 ```bash
-export MODEL_URI="data/models/anton_model_auto.pkl"   # or an MLflow model URI
 uvicorn smarthub.train_and_predict.predict:app --port 8000
-# POST /recommend_bid  ·  GET /health
+# POST /recommend_bid  ·  GET /health?lead_type_id=6
 ```
 
 ## Slack notifications

@@ -163,6 +163,60 @@ def test_is_workday_from_pst_date(monkeypatch, tmp_path):
         holidays.reload()
 
 
+def test_excludes_errored_rows():
+    raw = _raw()
+    raw["erred"] = ["true", "", "", "false", "1"]  # ids 1 and 5 errored
+    table = build_training_table(raw)
+    assert set(table["id"]).isdisjoint({1, 5})   # errored pings dropped
+    assert set(table["id"]) == {2, 4}            # 3 no-bid excluded; 2,4 kept
+
+
+def test_expected_revenue_prefers_exp_rev():
+    raw = _raw()
+    # exp_rev populated for id 1, zero for id 2 (falls back to listings sum).
+    raw["exp_rev"] = [99.0, 0.0, 0.0, 0.0, 0.0]
+    table = build_training_table(raw).set_index("id")
+    assert table.loc[1, "expected_revenue"] == 99.0        # backend value used
+    assert table.loc[2, "expected_revenue"] == 9.0         # fell back to listings
+
+
+def test_time_features_prefer_pacific():
+    raw = _raw()
+    # UTC created_at on id 1 is 01:00 Sat; give Pacific pst_hour/pst_date instead.
+    raw["pst_hour"] = [17, 9, 9, 2, 14]
+    raw["pst_date"] = pd.to_datetime(
+        ["2026-06-22", "2026-06-20", "2026-06-20", "2026-06-21", "2026-06-20"]
+    )
+    table = build_training_table(raw).set_index("id")
+    assert table.loc[1, "created_hour"] == 17            # from pst_hour, not UTC 1
+    assert table.loc[1, "created_dayofweek"] == 0        # 2026-06-22 = Monday (PT)
+
+
+def test_training_table_is_lead_type_clean():
+    raw = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "won": ["true", "true"],
+            "bid": [5.0, 6.0],
+            "num_vehicles": [2, 1],
+            "num_home_claims": [0, 1],
+            "home_property_type": ["SFH", "Condo"],
+            "created_at": pd.to_datetime(
+                ["2026-06-22 10:00", "2026-06-22 11:00"]
+            ),
+        }
+    )
+    auto = build_training_table(raw, lead_type_id=6)
+    assert "num_home_claims" not in auto.columns       # home-only dropped
+    assert "home_property_type" not in auto.columns
+    assert "num_vehicles" in auto.columns              # auto keeps its own
+
+    home = build_training_table(raw, lead_type_id=1)
+    assert "num_vehicles" not in home.columns          # auto-only dropped
+    assert "num_home_claims" in home.columns
+    assert "home_property_type" in home.columns
+
+
 def test_has_time_features():
     table = build_training_table(_raw())
     assert {"created_hour", "created_dayofweek"}.issubset(table.columns)

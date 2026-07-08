@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from smarthub.feature_engineering import features as fe
-from smarthub.train_and_predict import config, predict, preprocessing
+from smarthub.train_and_predict import config, predict, preprocessing, registry
 
 
 # --- Feature schema (single source of truth) --------------------------------
@@ -24,10 +24,15 @@ def test_model_feature_columns_auto_vs_home():
     assert "multi_vehicle" in num_auto and "num_vehicles" in num_auto
     assert "multi_vehicle" not in num_home and "num_vehicles" not in num_home
     assert "home_owner" in cat_auto and "home_owner" not in cat_home
+    # home-only features present for home, absent for auto
+    assert "num_home_claims" in num_home and "num_home_claims" not in num_auto
+    assert "home_property_type" in cat_home
+    assert "home_property_type" not in cat_auto
     # shared features present in both
-    for col in fe.AGE_COHORT_COLUMNS + ["is_married", "created_hour"]:
+    for col in fe.AGE_COHORT_COLUMNS + ["is_married", "created_hour", "is_workday"]:
         assert col in num_auto and col in num_home
     assert "state" in cat_auto and "state" in cat_home
+    assert "traffic_tier" in cat_auto and "traffic_tier" in cat_home
     # high-cardinality / redundant identifiers are excluded
     assert "source_type_id" not in cat_auto
     assert "account_id" not in cat_auto
@@ -208,6 +213,54 @@ def test_optimize_bid_skips_when_no_room():
     )
     assert np.isnan(result["recommended_bid"])
     assert result["n_candidate_bids"] == 0
+
+
+# --- Model resolution (MODEL_URI env > pinned version > currently serving) --
+
+
+def test_resolve_model_uri_prefers_env_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
+    monkeypatch.setenv("MODEL_URI", "s3://somewhere/pinned-model.pkl")
+    resolved = predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
+    assert resolved == "s3://somewhere/pinned-model.pkl"
+
+
+def test_resolve_model_uri_uses_pinned_ini_version_over_currently_serving(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
+    monkeypatch.delenv("MODEL_URI", raising=False)
+    manifest = registry.save_version(
+        {"m": 1}, "auto", feature_cols=["bid"], metrics={"roc_auc": 0.7},
+        optimizer_summary={}, lineage={}, model_params={},
+    )
+    registry.promote("auto", manifest["version"])
+    monkeypatch.setattr(config, "active_model_version", lambda: manifest["version"])
+
+    resolved = predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
+    assert resolved == str(registry.version_path("auto", manifest["version"]))
+
+
+def test_resolve_model_uri_falls_back_to_currently_serving(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
+    monkeypatch.delenv("MODEL_URI", raising=False)
+    monkeypatch.setattr(config, "active_model_version", lambda: None)
+    manifest = registry.save_version(
+        {"m": 1}, "auto", feature_cols=["bid"], metrics={"roc_auc": 0.7},
+        optimizer_summary={}, lineage={}, model_params={},
+    )
+    registry.promote("auto", manifest["version"])
+
+    resolved = predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
+    assert resolved == str(registry.currently_serving_model_path("auto"))
+
+
+def test_resolve_model_uri_nothing_serving_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
+    monkeypatch.delenv("MODEL_URI", raising=False)
+    monkeypatch.setattr(config, "active_model_version", lambda: None)
+    with pytest.raises(FileNotFoundError):
+        predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
 
 
 def test_run_bid_optimizer_evaluation_summary():

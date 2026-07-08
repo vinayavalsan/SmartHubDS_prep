@@ -334,3 +334,35 @@ Refines §10's data-quality note — **simpler than first proposed**:
   **Weekends (Sat/Sun) are non-workdays, in code**; observed holidays live in a
   git-versioned file (`config/holidays.json`), editable without touching code.
   Derived from **`pst_date`** (Pacific business day).
+
+---
+
+## 12. Update — DS meeting, 7 Jul 2026
+
+- **Lead-ping / auction lifecycle (label logic):** partner pings → record; if it
+  passes validation a **bid** is recorded; on **error the record ends** (no
+  auction). A bid with **no post = we lost**; a **win** sets `accepted=true` and
+  creates a `lead_post` row (keyed by lead_ping id — where realized data lives).
+  → For training: **drop `erred` rows**; a placed bid with `won` null = **loss**;
+  keep all non-errored pings (they carry competitor-pricing signal). `rev` =
+  money we made (realized).
+- **`exp_rev` is now populating** on `lead_pings` (was empty). Use it as expected
+  revenue; we coalesce `exp_rev` (>0) → interim listings-sum.
+- **Time zone:** use **Pacific**, not UTC (the operational day runs to ~5:30pm
+  PT). Model uses `created_hour` (Pacific), `created_dayofweek`, `is_workday`;
+  holidays like Jul 3 must be marked explicitly.
+- **Features depend on lead type.** The 28-feature list was an example; auto vs
+  home (vs commercial, later) have different fields — use the API sample payloads
+  to map fields per type. Anton may take the **full payload** at serve time
+  (not a ping-id DB lookup), pared to needed features.
+- **`current_carrier`**: sometimes populated even when `insured=false` (bad
+  data). Critical for bidding (don't sell to a lead's current carrier). Kiran
+  investigating; excluded from the model for now.
+- **Baseline to beat:** current Anton runs with **no losses but lower profit**
+  (Vinaya) — the new model must be **≥ the current system** on profit/CM. This is
+  the yardstick for the eventual backtest / A-B.
+- **API docs caveat:** the sample payloads are ~95–99% accurate; engineering is
+  fixing minor required-field issues. Use them to map fields per lead type, but
+  expect small discrepancies.
+- **28-feature list was illustrative** — not all are used; the real per-type set
+  lives in `feature_engineering.model_feature_columns` (see MODELING §8).

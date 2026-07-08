@@ -1,9 +1,10 @@
 feature,type,missing_count,missing_pct,unique_values,mode,mean,median,min,max,std
-bid,continuous,0,0.0,1195,15.0,5.3668,3.7,0.1,15.0,4.5548
-age,continuous,0,0.0,83,77,65.0564,68.0,18,100,15.4938
+bid,continuous,0,0.0,1238,15.0,5.4909,3.75,0.1,15.0,4.6292
+age,continuous,0,0.0,83,77,64.7851,68.0,18,100,15.4899
 continuous_coverage_months,discrete,0,0.0,3,12,,,,,
-created_hour,discrete,0,0.0,24,18,,,,,
+created_hour,discrete,2511,42.02,24,10,,,,,
 created_dayofweek,discrete,0,0.0,7,0,,,,,
+is_workday,discrete,0,0.0,2,1,,,,,
 is_married,discrete,0,0.0,2,0,,,,,
 age_cohort_18_24,discrete,0,0.0,2,0,,,,,
 age_cohort_25_34,discrete,0,0.0,2,0,,,,,
@@ -14,4 +15,6 @@ age_cohort_65_plus,discrete,0,0.0,2,1,,,,,
 state,categorical,0,0.0,50,FL,,,,,
 gender,categorical,0,0.0,2,Female,,,,,
 marital_status,categorical,0,0.0,2,Single,,,,,
-campaign_id,categorical,0,0.0,3,12,,,,,
+campaign_id,categorical,0,0.0,3,4,,,,,
+traffic_tier,categorical,0,0.0,10,2001,,,,,
+home_property_type,categorical,0,0.0,6,Single Family Home,,,,,

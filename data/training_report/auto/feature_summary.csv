@@ -1,9 +1,9 @@
 feature,type,missing_count,missing_pct,unique_values,mode,mean,median,min,max,std
-bid,continuous,0,0.0,1491,15.0,5.9853,4.88,0.1,15.0,4.4336
-age,continuous,0,0.0,86,64.0,52.6585,53.0,-1.0,100.0,18.1743
+bid,continuous,0,0.0,1497,15.0,6.0832,5.0,0.1,19.0,4.4517
+age,continuous,0,0.0,86,64.0,52.8166,54.0,-1.0,100.0,18.1891
 age_missing,discrete,0,0.0,2,0,,,,,
-continuous_coverage_months,discrete,0,0.0,7,72,,,,,
-created_hour,discrete,0,0.0,24,16,,,,,
+continuous_coverage_months,discrete,0,0.0,7,12,,,,,
+created_hour,discrete,56167,40.69,24,9,,,,,
 created_dayofweek,discrete,0,0.0,7,0,,,,,
 is_workday,discrete,0,0.0,2,1,,,,,
 num_vehicles,discrete,0,0.0,13,1,,,,,
@@ -23,3 +23,4 @@ state,categorical,0,0.0,51,FL,,,,,
 gender,categorical,0,0.0,3,Male,,,,,
 marital_status,categorical,0,0.0,4,Single,,,,,
 campaign_id,categorical,0,0.0,8,13,,,,,
+traffic_tier,categorical,0,0.0,8982,Tier 1,,,,,

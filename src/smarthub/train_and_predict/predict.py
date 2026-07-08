@@ -18,9 +18,7 @@ from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 
-from . import config, preprocessing
-
-MODEL_URI = os.getenv("MODEL_URI", config.model_path("auto"))
+from . import config, preprocessing, registry
 
 
 @contextmanager
@@ -37,16 +35,57 @@ def _quiet_feature_name_warning():
         yield
 
 
-def load_model(model_uri: str = MODEL_URI):
-    """Load a trained Anton model from a local .pkl or an MLflow URI."""
-    if str(model_uri).endswith(".pkl"):
+def resolve_model_uri(lead_type_id: int = 6) -> str:
+    """Resolve which model artifact to load, for a given lead type.
+
+    Priority (first that applies wins):
+    1. The ``MODEL_URI`` env var — an explicit override (a ``.pkl`` path or an
+       MLflow model URI), for pinning/emergency overrides regardless of what
+       the registry says.
+    2. ``smarthub.ini [prediction] active_model_version`` — an explicit
+       version id (e.g. ``v3_2026-07-09T140501Z``) to pin this lead type to,
+       without touching the serving pointer.
+    3. The model **currently serving** this lead type
+       (``data/models/<type>/current.json`` — see ``registry.py``). This is
+       the normal case: whatever most recently passed the promotion gate in
+       training.
+    """
+    env_override = os.getenv("MODEL_URI")
+    if env_override:
+        return env_override
+
+    lead_type_name = config.lead_type_name(lead_type_id)
+
+    pinned_version = config.active_model_version()
+    if pinned_version:
+        return str(registry.version_path(lead_type_name, pinned_version))
+
+    path = registry.currently_serving_model_path(lead_type_name)
+    if path is None:
+        raise FileNotFoundError(
+            f"Nothing is currently serving lead type '{lead_type_name}'. "
+            "Train one first: python -m smarthub.train_and_predict.train "
+            f"--lead-type-id {lead_type_id}"
+        )
+    return str(path)
+
+
+def load_model(model_uri: str | None = None, lead_type_id: int = 6):
+    """Load a trained Anton model from a local .pkl or an MLflow URI.
+
+    ``model_uri`` is optional — if omitted, resolves via ``resolve_model_uri``
+    (env override -> pinned version -> currently-serving model) for
+    ``lead_type_id``.
+    """
+    uri = model_uri or resolve_model_uri(lead_type_id)
+    if str(uri).endswith(".pkl"):
         import joblib
 
-        return joblib.load(model_uri)
+        return joblib.load(uri)
 
     import mlflow.sklearn
 
-    return mlflow.sklearn.load_model(model_uri)
+    return mlflow.sklearn.load_model(uri)
 
 
 def _empty_result(max_bid: float) -> dict:
@@ -273,14 +312,22 @@ if _FASTAPI_AVAILABLE:
     app = FastAPI(title="Anton Bid Prediction API")
 
     @app.get("/health")
-    def health():
-        """Health check."""
-        return {"status": "ok", "model_uri": MODEL_URI}
+    def health(lead_type_id: int = 6):
+        """Health check. Reports which model artifact would currently be served."""
+        try:
+            model_uri = resolve_model_uri(lead_type_id)
+        except FileNotFoundError:
+            model_uri = None
+        return {
+            "status": "ok",
+            "lead_type_id": lead_type_id,
+            "model_uri": model_uri,
+        }
 
     @app.post("/recommend_bid")
     def recommend_bid(request: BidRequest):
         """Recommend the bid that maximizes expected profit for one lead."""
-        model = load_model()
+        model = load_model(lead_type_id=request.lead_type_id)
         record = request.model_dump(
             exclude={"expected_revenue", "target_cm", "min_bid", "bid_step"}
         )
