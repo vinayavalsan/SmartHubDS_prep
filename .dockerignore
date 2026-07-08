@@ -10,3 +10,9 @@ tests
 .pytest_cache
 .flake8
 data
+# Model artifacts
+data/models/**/*.json
+data/models/**/*.pkl
+
+# Local Excel files
+*.xlsx

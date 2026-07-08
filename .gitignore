@@ -48,3 +48,18 @@ data/training/
 
 # pytest
 .pytest_cache/
+
+
+# Local Excel files
+*.xlsx
+
+# Model artifacts
+data/models/**/*.json
+data/models/**/*.pkl
+
+# Local Excel files
+*.xlsx
+
+# Auto model registry & weights
+data/models/auto/*.json
+data/models/auto/*.pkl
