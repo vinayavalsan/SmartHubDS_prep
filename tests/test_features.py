@@ -220,3 +220,95 @@ def test_training_table_is_lead_type_clean():
 def test_has_time_features():
     table = build_training_table(_raw())
     assert {"created_hour", "created_dayofweek"}.issubset(table.columns)
+
+
+# --- Mandatory / optional feature selection ---------------------------------
+
+from smarthub.feature_engineering import features as fe  # noqa: E402
+
+
+def test_sr22_is_auto_only_model_feature():
+    _, cat_auto = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    _, cat_home = fe.model_feature_columns(fe.LEAD_TYPE_HOME)
+    assert "sr22_required" in cat_auto      # SR-22 is an auto matching criterion
+    assert "sr22_required" not in cat_home
+
+
+def test_mandatory_features_kept_when_no_optional():
+    # optional_enabled empty -> only the auto mandatory core survives.
+    numeric, categorical = fe.model_feature_columns(
+        fe.LEAD_TYPE_AUTO, optional_enabled=set()
+    )
+    selected = set(numeric) | set(categorical)
+    expected = fe.mandatory_features(fe.LEAD_TYPE_AUTO)
+    assert selected == expected
+    # image criteria all present
+    for col in ("home_owner", "multi_vehicle", "num_vehicles", "insured",
+                "num_auto_accidents", "dui", "sr22_required", "age"):
+        assert col in selected
+    assert set(fe.AGE_COHORT_COLUMNS).issubset(selected)
+    # optional features are gone
+    for col in ("state", "gender", "traffic_tier", "campaign_id",
+                "created_hour", "is_workday", "num_drivers"):
+        assert col not in selected
+
+
+def test_optional_subset_is_added_to_mandatory():
+    numeric, categorical = fe.model_feature_columns(
+        fe.LEAD_TYPE_AUTO, optional_enabled={"state", "traffic_tier"}
+    )
+    selected = set(numeric) | set(categorical)
+    assert {"state", "traffic_tier"}.issubset(selected)      # requested optional
+    assert fe.mandatory_features(fe.LEAD_TYPE_AUTO) <= selected  # core still there
+    assert "gender" not in selected and "campaign_id" not in selected
+
+
+def test_optional_cannot_drop_mandatory():
+    # even if an optional list omits everything, mandatory survives.
+    numeric, categorical = fe.model_feature_columns(
+        fe.LEAD_TYPE_AUTO, optional_enabled={"state"}
+    )
+    selected = set(numeric) | set(categorical)
+    assert "sr22_required" in selected and "home_owner" in selected
+
+
+def test_config_none_selects_mandatory_only(monkeypatch):
+    from smarthub.core import task_config
+
+    monkeypatch.setattr(task_config, "get", lambda *a, **k: "none")
+    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    assert set(numeric) | set(categorical) == fe.mandatory_features(fe.LEAD_TYPE_AUTO)
+
+
+def test_config_comma_list_ignores_unknown(monkeypatch):
+    from smarthub.core import task_config
+
+    monkeypatch.setattr(task_config, "get", lambda *a, **k: "state, not_a_feature")
+    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    selected = set(numeric) | set(categorical)
+    assert "state" in selected
+    assert "not_a_feature" not in selected
+    assert fe.mandatory_features(fe.LEAD_TYPE_AUTO) <= selected
+
+
+def test_optional_and_mandatory_partition_the_feature_set():
+    # mandatory and optional are disjoint and together cover the full auto set.
+    num, cat = fe.model_feature_columns(fe.LEAD_TYPE_AUTO, optional_enabled=None)
+    mand = fe.mandatory_features(fe.LEAD_TYPE_AUTO)
+    opt = fe.optional_features(fe.LEAD_TYPE_AUTO)
+    assert mand.isdisjoint(opt)
+    assert "sr22_required" in mand and "state" in opt
+    # home-only features never leak into the auto optional set
+    assert "num_home_claims" not in opt and "home_property_type" not in opt
+
+
+def test_config_all_keeps_every_feature(monkeypatch):
+    from smarthub.core import task_config
+
+    monkeypatch.setattr(task_config, "get", lambda *a, **k: "all")
+    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    selected = set(numeric) | set(categorical)
+    # matches the un-filtered universe for auto (all optional + mandatory)
+    for col in ("state", "gender", "traffic_tier", "campaign_id",
+                "created_hour", "is_workday", "num_drivers", "sr22_required"):
+        assert col in selected

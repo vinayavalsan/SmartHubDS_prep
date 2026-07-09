@@ -10,7 +10,11 @@ Follows MODELING.md: keep only ping-time features, exclude post-bid outcomes
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Features known at ping arrival (MODELING.md §3, group ①).
 PRE_BID_FEATURES = [
@@ -150,6 +154,7 @@ _MODEL_CATEGORICAL = [
     "insured",
     "home_owner",
     "dui",
+    "sr22_required",
     "campaign_id",
     "traffic_tier",
     "home_property_type",
@@ -161,6 +166,7 @@ AUTO_ONLY_FEATURES = {
     "num_auto_violations",
     "num_auto_accidents",
     "dui",
+    "sr22_required",
     "home_owner",
     "multi_vehicle",
 }
@@ -170,12 +176,101 @@ HOME_ONLY_FEATURES = {
 }
 
 
-def model_feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
+# --- Mandatory vs optional model features ------------------------------------
+# MANDATORY features are ALWAYS trained on and cannot be switched off via
+# config. The auto mandatory core is SmartFinancial's lead-matching criteria
+# (the product tiers: home owner, multiple vehicles, currently insured,
+# accidents, DUI, SR-22, age) plus ``bid`` — the optimizer's decision variable,
+# which the model must always see. Every other model feature for that lead type
+# is OPTIONAL and toggled per training run via ``config/smarthub.ini``
+# ``[features] <lead_type>_optional`` (see ``_configured_optional``).
+#
+# Home's mandatory core is not settled yet, so home keeps every feature (only
+# ``bid`` is pinned) until we agree it with Kiran.
+_MANDATORY_AUTO = {
+    "bid",
+    "age",
+    "age_missing",
+    *AGE_COHORT_COLUMNS,
+    "num_vehicles",
+    "multi_vehicle",
+    "num_auto_accidents",
+    "home_owner",
+    "insured",
+    "dui",
+    "sr22_required",
+}
+_MANDATORY_HOME = {"bid"}
+MANDATORY_FEATURES = {
+    LEAD_TYPE_AUTO: _MANDATORY_AUTO,
+    LEAD_TYPE_HOME: _MANDATORY_HOME,
+}
+
+# Sentinels for the ``[features] <lead_type>_optional`` config value.
+_OPTIONAL_ALL = "all"
+_OPTIONAL_NONE = "none"
+
+
+def mandatory_features(lead_type_id: int) -> set[str]:
+    """Model features that are always trained on for a lead type (never toggled)."""
+    return set(MANDATORY_FEATURES.get(lead_type_id, {DECISION_COLUMN}))
+
+
+def optional_features(lead_type_id: int) -> set[str]:
+    """The full set of toggleable (non-mandatory) model features for a lead type."""
+    if lead_type_id == LEAD_TYPE_AUTO:
+        drop = HOME_ONLY_FEATURES
+    elif lead_type_id == LEAD_TYPE_HOME:
+        drop = AUTO_ONLY_FEATURES
+    else:
+        drop = set()
+    base = {c for c in _MODEL_NUMERIC + _MODEL_CATEGORICAL if c not in drop}
+    return base - mandatory_features(lead_type_id)
+
+
+def _configured_optional(lead_type_id: int, optional_universe: set[str]) -> set[str]:
+    """Which OPTIONAL features are enabled for this lead type, from config.
+
+    Reads ``config/smarthub.ini`` ``[features] <lead_type>_optional``:
+    - absent / ``"all"``  -> every optional feature (backwards-compatible default),
+    - ``"none"`` / empty  -> no optional features (mandatory core only),
+    - comma list          -> exactly those (unknown names are ignored + warned).
+    """
+    from smarthub.core import task_config
+
+    key = f"{lead_type_name(lead_type_id)}_optional"
+    raw = (task_config.get("features", key, _OPTIONAL_ALL) or "").strip()
+    token = raw.lower()
+    if token in ("", _OPTIONAL_ALL):
+        return set(optional_universe)
+    if token == _OPTIONAL_NONE:
+        return set()
+
+    requested = {c.strip() for c in raw.split(",") if c.strip()}
+    unknown = requested - optional_universe - set(_MANDATORY_AUTO) - {"bid"}
+    if unknown:
+        logger.warning(
+            "[features] %s lists unknown/ineligible feature(s) %s; ignoring them. "
+            "Valid optional features: %s",
+            key, sorted(unknown), sorted(optional_universe),
+        )
+    return requested & optional_universe
+
+
+def model_feature_columns(
+    lead_type_id: int,
+    optional_enabled: set[str] | None = None,
+) -> tuple[list[str], list[str]]:
     """Return ``(numeric, categorical)`` model feature names for a lead type.
 
     Auto-only features (vehicles/drivers/violations…) are dropped for home;
     home-only features (home_property_type, num_home_claims) are dropped for
     auto — so one code path trains the right model per lead type.
+
+    Feature selection: MANDATORY features are always kept; OPTIONAL features are
+    included only when enabled. ``optional_enabled`` overrides the config lookup
+    (used in tests). The mandatory core can never be dropped here, whatever the
+    config says. Training and serving both call this, so they stay identical.
     """
     if lead_type_id == LEAD_TYPE_AUTO:
         drop = HOME_ONLY_FEATURES
@@ -183,8 +278,17 @@ def model_feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
         drop = AUTO_ONLY_FEATURES
     else:
         drop = set()
-    numeric = [c for c in _MODEL_NUMERIC if c not in drop]
-    categorical = [c for c in _MODEL_CATEGORICAL if c not in drop]
+    base_numeric = [c for c in _MODEL_NUMERIC if c not in drop]
+    base_categorical = [c for c in _MODEL_CATEGORICAL if c not in drop]
+
+    mandatory = mandatory_features(lead_type_id)
+    optional_universe = (set(base_numeric) | set(base_categorical)) - mandatory
+    if optional_enabled is None:
+        optional_enabled = _configured_optional(lead_type_id, optional_universe)
+
+    keep = mandatory | (set(optional_enabled) & optional_universe)
+    numeric = [c for c in base_numeric if c in keep]
+    categorical = [c for c in base_categorical if c in keep]
     return numeric, categorical
 
 

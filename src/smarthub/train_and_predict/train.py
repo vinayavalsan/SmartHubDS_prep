@@ -314,6 +314,7 @@ def run_training(
         "optimizer_summary": optimizer_summary,
         "prep_summary": prep_summary,
         "lineage": lineage,
+        "feature_cols": list(feature_cols),
     }
 
 

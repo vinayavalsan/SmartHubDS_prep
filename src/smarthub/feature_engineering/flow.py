@@ -223,35 +223,62 @@ def _pct(value) -> str:
 def _notify_success(
     lead_type_name, lead_type_id, version, table, metadata, path
 ) -> None:
-    """Send the Slack 'feature build completed' notification with full context."""
+    """Send the Slack 'feature build completed' notification, grouped for reading.
+
+    Leads with a headline (training rows + version + win rate), then groups the
+    rest under titled sections (Rows / Coverage / Time mix / Build). Day-metric
+    definitions and the output path go in the footer.
+    """
     feats = metadata.get("feature_columns", [])
     won_rate = metadata.get("won_rate")
     won_rate_str = f"{won_rate:.3f}" if isinstance(won_rate, float) else "—"
-    fields = {
-        "Lead type": f"{lead_type_name} ({lead_type_id})",
-        "Version": f"`{version}`",
-        "Rows (raw → training)": (
-            f"{metadata.get('raw_rows'):,} → {metadata.get('row_count'):,} "
-            f"(dropped {metadata.get('dropped_rows'):,} errored/no-bid)"
-        ),
-        "Wins / losses": f"{metadata.get('wins'):,} / {metadata.get('losses'):,}",
-        "Win rate": won_rate_str,
-        "Feature count": len(feats),
-        "Training window (days)": metadata.get("training_window_days"),
-        "Data range (created_at)": (
-            f"`{metadata.get('data_min_created_at')}` → "
-            f"`{metadata.get('data_max_created_at')}`"
-        ),
-        "expected_revenue coverage": _pct(metadata.get("expected_revenue_coverage")),
-        "age missing": _pct(metadata.get("age_missing_rate")),
-        "weekday share": _pct(metadata.get("weekday_share")),
-        "weekend share": _pct(metadata.get("weekend_share")),
-        "workday share (is_workday)": _pct(metadata.get("workday_rate")),
-        "Day definitions": _DAY_DEFS,
-        "traffic_tier distinct": metadata.get("traffic_tier_distinct"),
-        "Training table": f"`{path}`",
-    }
-    notifications.notify_success("build-features", fields)
+    raw_rows = metadata.get("raw_rows") or 0
+    row_count = metadata.get("row_count") or 0
+    dropped = metadata.get("dropped_rows") or 0
+
+    headline = (
+        f":bar_chart: *{row_count:,} training rows* · `{version}` "
+        f"(win rate {won_rate_str})"
+    )
+    rows_summary = (
+        f"{raw_rows:,} → {row_count:,} (dropped {dropped:,} errored/no-bid)"
+    )
+    groups = [
+        ("Rows", {
+            "Raw → training": rows_summary,
+            "Wins / losses": (
+                f"{metadata.get('wins'):,} / {metadata.get('losses'):,}"
+            ),
+            "Win rate": won_rate_str,
+        }),
+        ("Coverage", {
+            "expected_revenue coverage": _pct(
+                metadata.get("expected_revenue_coverage")
+            ),
+            "age missing": _pct(metadata.get("age_missing_rate")),
+            "traffic_tier distinct": metadata.get("traffic_tier_distinct"),
+        }),
+        ("Time mix", {
+            "weekday share": _pct(metadata.get("weekday_share")),
+            "weekend share": _pct(metadata.get("weekend_share")),
+            "workday share (is_workday)": _pct(metadata.get("workday_rate")),
+        }),
+        ("Build", {
+            "Training window (days)": metadata.get("training_window_days"),
+            "Feature count": len(feats),
+            "Data range (created_at)": (
+                f"`{metadata.get('data_min_created_at')}` → "
+                f"`{metadata.get('data_max_created_at')}`"
+            ),
+        }),
+    ]
+    notifications.notify_success_grouped(
+        "build-features",
+        subject=f"{lead_type_name} ({lead_type_id})",
+        headline=headline,
+        groups=groups,
+        footer_extra=f"{_DAY_DEFS} · table `{path}`",
+    )
 
 
 if __name__ == "__main__":

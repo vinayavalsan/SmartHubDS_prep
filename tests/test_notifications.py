@@ -110,3 +110,47 @@ def test_flow_failure_hook_swallows_bad_input(monkeypatch):
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.test/x")
     # Passing junk should not raise (hook must never mask the real error).
     n.flow_failure_hook(None, None, None)
+
+
+def test_grouped_payload_structure(capture_slack):
+    ok = n.notify_success_grouped(
+        "train-model",
+        subject="auto (6)",
+        headline=":white_check_mark: *Promoted to serving* · `v4`",
+        groups=[
+            ("Model", {"Model": "lightgbm", "Rows trained": 147628}),
+            ("Performance (held-out)", {"ROC AUC": "0.883", "Empty": None}),
+            ("Features · 25", {"Optional excluded": "military_affiliation"}),
+        ],
+        footer_extra="model `/app/data/models/auto/v4.pkl`",
+    )
+    assert ok is True
+    payload = capture_slack["payload"]
+    kinds = [b["type"] for b in payload["blocks"]]
+    # header, a headline section, 3 dividers (one per non-empty group), context
+    assert kinds[0] == "header"
+    assert kinds.count("divider") == 3
+    assert kinds[-1] == "context"
+    # subject shows in the header; empty field skipped; footer in context
+    assert "auto (6)" in payload["blocks"][0]["text"]["text"]
+    assert "Empty" not in payload["text"]
+    assert "military_affiliation" in payload["text"]
+    ctx = payload["blocks"][-1]["elements"][0]["text"]
+    assert "v4.pkl" in ctx
+    # group titles render as bold section text
+    dumped = json.dumps(payload)
+    assert "*Model*" in dumped and "*Performance (held-out)*" in dumped
+
+
+def test_grouped_payload_skips_empty_group(capture_slack):
+    n.notify_success_grouped(
+        "train-model",
+        groups=[
+            ("Real", {"a": 1}),
+            ("AllEmpty", {"x": None, "y": ""}),
+        ],
+    )
+    payload = capture_slack["payload"]
+    dumped = json.dumps(payload)
+    assert "*Real*" in dumped
+    assert "*AllEmpty*" not in dumped  # group with no values is dropped entirely

@@ -141,27 +141,41 @@ def _notify_success(
     lead_type_name, lead_type_id, min_s, max_s, df, result,
     prev_wm, new_wm, started_at,
 ) -> None:
-    """Send the Slack 'data pull completed' notification with full context."""
+    """Send the Slack 'data pull completed' notification, grouped for readability.
+
+    Leads with a headline (rows + window), then groups the rest under titled
+    sections (Volume / Watermark / Run); storage paths go in the footer.
+    """
     rows = int(len(df))
     parquet_paths = result.get("parquet_paths") or []
     parquet_txt = (
-        "\n".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
+        ", ".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
     )
-    fields = {
-        "Lead type": f"{lead_type_name} ({lead_type_id})",
-        "Data window (created_at)": f"`{min_s}` → `{max_s}`",
-        "Rows fetched": f"{rows}",
-        "Run started (UTC)": started_at.strftime("%Y-%m-%d %H:%M:%S"),
-        "Run finished (UTC)": _utc_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
-        "Watermark": f"`{prev_wm}` → `{new_wm}`",
-        "DuckDB rows (total)": result.get("duckdb_rows", "—"),
-        "Parquet rows (written)": result.get("parquet_rows", "—"),
-        "Parquet file(s)": parquet_txt,
-        "DuckDB file": (
-            f"`{result['duckdb_path']}`" if result.get("duckdb_path") else "—"
-        ),
-    }
-    notifications.notify_success("data-pull", fields)
+    duck = f"`{result['duckdb_path']}`" if result.get("duckdb_path") else "—"
+
+    headline = f":inbox_tray: *{rows:,} rows pulled* · `{min_s}` → `{max_s}`"
+    groups = [
+        ("Volume", {
+            "Rows fetched": f"{rows:,}",
+            "DuckDB rows (total)": result.get("duckdb_rows", "—"),
+            "Parquet rows (written)": result.get("parquet_rows", "—"),
+        }),
+        ("Watermark", {
+            "Before": f"`{prev_wm}`",
+            "After": f"`{new_wm}`",
+        }),
+        ("Run (UTC)", {
+            "Started": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "Finished": _utc_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
+        }),
+    ]
+    notifications.notify_success_grouped(
+        "data-pull",
+        subject=f"{lead_type_name} ({lead_type_id})",
+        headline=headline,
+        groups=groups,
+        footer_extra=f"parquet {parquet_txt} · duckdb {duck}",
+    )
 
 
 def _report(

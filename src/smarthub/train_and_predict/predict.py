@@ -298,6 +298,7 @@ if _FASTAPI_AVAILABLE:
         insured: str | None = None
         home_owner: str | None = None
         dui: str | None = None
+        sr22_required: str | None = None
         military_affiliation: str | None = None
         gender: str | None = None
         marital_status: str | None = None

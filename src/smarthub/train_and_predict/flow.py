@@ -16,8 +16,23 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 
 from smarthub.core import notifications
+from smarthub.feature_engineering import features as fe
 
 from . import train
+
+
+def _feature_breakdown(lead_type_id, feature_cols):
+    """Split the trained features into mandatory / optional-on / optional-off."""
+    feature_cols = list(feature_cols or [])
+    mandatory = fe.mandatory_features(lead_type_id)
+    optional_all = fe.optional_features(lead_type_id)
+    used = set(feature_cols)
+    return {
+        "total": len(feature_cols),
+        "n_mandatory": len(mandatory & used),
+        "optional_on": sorted(optional_all & used),
+        "optional_off": sorted(optional_all - used),
+    }
 
 
 @task(name="train-anton-model")
@@ -87,6 +102,7 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
             return "—"
 
     lineage = result.get("lineage", {})
+    fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
     promoted = result.get("promoted")
     status_label = (
         "✅ PROMOTED to currently-serving"
@@ -110,6 +126,10 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 `{lineage.get('data_max_created_at')}` |
 | model path | `{result['model_path']}` |
 | report dir | `{result['report_dir']}` |
+| features | {fb['total']} ({fb['n_mandatory']} mandatory + \
+{len(fb['optional_on'])} optional) |
+| optional included | {', '.join(fb['optional_on']) or '—'} |
+| optional excluded | {', '.join(fb['optional_off']) or '—'} |
 
 ## Model quality (held-out test)
 | metric | value |
@@ -137,7 +157,12 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 
 
 def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
-    """Send the Slack 'training completed' notification with full context."""
+    """Send the Slack 'training completed' notification, grouped for readability.
+
+    Leads with the promotion decision, then groups the rest under titled
+    sections (Model / Performance / Bid optimizer / Features) instead of one
+    long flat field list.
+    """
     def _f(value, fmt="{:.4f}"):
         try:
             return fmt.format(float(value))
@@ -145,33 +170,55 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
             return "—"
 
     lineage = result.get("lineage", {})
-    fields = {
-        "Lead type": f"{lead_type_name} ({lead_type_id})",
-        "Model version": result.get("model_version"),
-        "Promotion": (
-            f"✅ Promoted — {result.get('promotion_reason')}"
-            if result.get("promoted")
-            else (
-                "⏸ Held (currently-serving model unchanged) — "
-                f"{result.get('promotion_reason')}"
-            )
-        ),
-        "Model": f"{lineage.get('model_type')} (cal={lineage.get('calibrated')})",
-        "Trained on table": f"`{lineage.get('training_table_version')}`",
-        "Data range": (
-            f"{lineage.get('data_min_created_at')} → "
-            f"{lineage.get('data_max_created_at')}"
-        ),
-        "Rows trained": result["prep_summary"].get("training_rows"),
-        "ROC AUC": _f(m.get("roc_auc")),
-        "PR AUC": _f(m.get("pr_auc")),
-        "Log loss": _f(m.get("log_loss")),
-        "Calibration error": _f(m.get("calibration_error")),
-        "Optimizer profit lift %": _f(opt.get("expected_profit_lift_pct"), "{:.2%}"),
-        "Avg recommended CM": _f(opt.get("avg_recommended_bid_cm_if_won")),
-        "Model file": f"`{result['model_path']}`",
-    }
-    notifications.notify_success("train-model", fields)
+    fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
+    promoted = result.get("promoted")
+    icon = ":white_check_mark:" if promoted else ":pause_button:"
+    state = (
+        "Promoted to serving"
+        if promoted
+        else "Held — currently-serving model unchanged"
+    )
+    headline = (
+        f"{icon} *{state}* · `{result.get('model_version')}`\n"
+        f"{result.get('promotion_reason', '—')}"
+    )
+
+    feature_title = (
+        f"Features · {fb['total']} "
+        f"({fb['n_mandatory']} mandatory + {len(fb['optional_on'])} optional)"
+    )
+    groups = [
+        ("Model", {
+            "Model": f"{lineage.get('model_type')} (cal={lineage.get('calibrated')})",
+            "Rows trained": result["prep_summary"].get("training_rows"),
+            "Data range": (
+                f"{lineage.get('data_min_created_at')} → "
+                f"{lineage.get('data_max_created_at')}"
+            ),
+            "Trained on table": f"`{lineage.get('training_table_version')}`",
+        }),
+        ("Performance (held-out)", {
+            "ROC AUC": _f(m.get("roc_auc")),
+            "PR AUC": _f(m.get("pr_auc")),
+            "Log loss": _f(m.get("log_loss")),
+            "Calibration error": _f(m.get("calibration_error")),
+        }),
+        ("Bid optimizer (predicted)", {
+            "Profit lift %": _f(opt.get("expected_profit_lift_pct"), "{:.2%}"),
+            "Avg recommended CM": _f(opt.get("avg_recommended_bid_cm_if_won")),
+        }),
+        (feature_title, {
+            "Optional included": ", ".join(fb["optional_on"]) or "none",
+            "Optional excluded": ", ".join(fb["optional_off"]) or "none",
+        }),
+    ]
+    notifications.notify_success_grouped(
+        "train-model",
+        subject=f"{lead_type_name} ({lead_type_id})",
+        headline=headline,
+        groups=groups,
+        footer_extra=f"model `{result['model_path']}`",
+    )
 
 
 if __name__ == "__main__":

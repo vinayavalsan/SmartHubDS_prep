@@ -1,6 +1,41 @@
 # Changelog
 
 
+## 2026-07-09 (later)
+
+### Slack notifications: grouped layout (all three pipelines)
+- **Success messages are now grouped** instead of one long flat field list. New
+  `notifications.notify_success_grouped` renders a bold **headline** + titled
+  sections (bold subheader + 2-column fields) separated by dividers, with long
+  paths / definitions in the footer; the lead type moves into the header. A
+  text fallback is still sent for no-block clients.
+- **train-model** leads with the promotion decision; sections Model /
+  Performance / Bid optimizer / Features (count split + optional included /
+  excluded). **data-pull** → Volume / Watermark / Run. **build-features** →
+  Rows / Coverage / Time mix / Build.
+- `train.run_training` now returns `feature_cols`; the flow reports which
+  optional features were included vs excluded (mandatory is implied). The old
+  flat `notify_success` is unchanged and still used for failures.
+
+### Mandatory / optional feature selection (auto)
+- **Feature selection is now configurable per training run.** `[features]`
+  section in `config/smarthub.ini` (`auto_optional` / `home_optional`):
+  `all` (default) = every optional feature; `none` = mandatory core only;
+  a comma list = exactly those optional features (unknown names ignored +
+  warned).
+- **Mandatory auto core** (SmartFinancial's lead-matching criteria — home owner,
+  multiple vehicles, currently insured, accidents, DUI, SR-22, age — plus `bid`)
+  is always trained on and cannot be toggled off, enforced in
+  `features.mandatory_features` / `model_feature_columns`.
+- **Added `sr22_required`** as an auto model feature (was in the training table
+  but not the model input); also added to the serving `BidRequest`. Auto-only.
+- Toggling changes only what the **model consumes** — every feature is still
+  built into the training table, so flipping features needs **no re-pull or
+  re-build**. Training and serving both read `model_feature_columns`, so they
+  stay in lock-step. Home selection not enabled yet (mandatory core TBD with
+  Kiran); home keeps every feature.
+
+
 ## 2026-07-09 (cont'd)
 
 ### Model versioning + promotion gate

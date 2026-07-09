@@ -154,6 +154,99 @@ def notify_failure(pipeline: str, fields: dict, error: str | None = None) -> boo
     return notify(_FAILURE, pipeline, fields, error=error)
 
 
+def _field_blocks(fields: dict) -> list[dict]:
+    """2-column Block Kit field blocks from a dict; empty values are skipped."""
+    return [
+        {"type": "mrkdwn", "text": f"*{k}:*\n{v}"}
+        for k, v in fields.items()
+        if v not in (None, "", [])
+    ]
+
+
+def _build_grouped_payload(
+    status: str,
+    pipeline: str,
+    subject: str | None,
+    headline: str | None,
+    groups: list,
+    footer_extra: str | None,
+) -> dict:
+    """Block Kit message grouped into titled sections with dividers.
+
+    ``groups`` is an ordered list of ``(title, fields_dict)``; each renders as a
+    divider + a section with a bold title and a 2-column field grid. ``headline``
+    is a prominent mrkdwn line under the header (e.g. the promotion decision).
+    """
+    emoji = _EMOJI.get(status, "")
+    verb = "completed" if status == _SUCCESS else "FAILED"
+    subj = f" · {subject}" if subject else ""
+    header = f"SmartHub · {pipeline} · {verb}{subj}"
+
+    blocks: list[dict] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"{emoji} {header}"[:150],
+                "emoji": True,
+            },
+        }
+    ]
+    if headline:
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": headline}}
+        )
+
+    for title, fields in groups:
+        fb = _field_blocks(fields)
+        if not fb:
+            continue
+        blocks.append({"type": "divider"})
+        first = {"type": "section", "fields": fb[:10]}
+        if title:
+            first["text"] = {"type": "mrkdwn", "text": f"*{title}*"}
+        blocks.append(first)
+        for i in range(10, len(fb), 10):
+            blocks.append({"type": "section", "fields": fb[i:i + 10]})
+
+    ctx = f"env: `{_env_label()}` · {_utc_now_str()}"
+    if footer_extra:
+        ctx += f" · {footer_extra}"
+    blocks.append(
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]}
+    )
+
+    # Fallback text (notifications, screen readers, no-block clients).
+    lines = [f"{emoji} {header}"]
+    if headline:
+        lines.append(headline)
+    for title, fields in groups:
+        rendered = [f"{k}: {v}" for k, v in fields.items() if v not in (None, "", [])]
+        if not rendered:
+            continue
+        if title:
+            lines.append(f"— {title} —")
+        lines += rendered
+    lines.append(ctx)
+    return {"text": "\n".join(lines), "blocks": blocks}
+
+
+def notify_success_grouped(
+    pipeline: str,
+    *,
+    subject: str | None = None,
+    headline: str | None = None,
+    groups: list | None = None,
+    footer_extra: str | None = None,
+) -> bool:
+    """Notify success with a grouped, sectioned layout. Best-effort."""
+    return _post(
+        _build_grouped_payload(
+            _SUCCESS, pipeline, subject, headline, groups or [], footer_extra
+        )
+    )
+
+
 def _run_url(flow_run) -> str:
     """Best-effort Prefect UI URL for a flow run (blank if unknown)."""
     base = (

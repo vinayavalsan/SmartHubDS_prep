@@ -112,7 +112,7 @@ settings in the UI and nothing else; secrets in env"):
 | --- | --- | --- | --- |
 | **Secrets / connection** | SSH + Redshift creds, storage paths, passwords, DB URLs | **`.env`** | ops |
 | **Business settings** | `target_cm`, `bid_floor`, `bid_max_cap`, `min_source_quality` | **Postgres config store**, via the **Streamlit Config page** | business (Kiran) |
-| **Task configs** | model_type, training window, calibration, bid_step, data-pull knobs… | **`config/smarthub.ini`** (`[data_pull]`/`[feature_engineering]`/`[training]`/`[prediction]`) | devs (git) |
+| **Task configs** | model_type, training window, calibration, bid_step, feature selection, data-pull knobs… | **`config/smarthub.ini`** (`[data_pull]`/`[feature_engineering]`/`[features]`/`[training]`/`[prediction]`) | devs (git) |
 
 ### Business settings (UI)
 Only business knobs live in the typed registry (`core/config_store.py`) and are
@@ -138,6 +138,33 @@ Read in code via `smarthub.core.task_config` (e.g. `config.model_type()`,
 `config.BID_STEP`, `training_window_days()`). Override the file path with
 `SMARTHUB_TASK_CONFIG`. The ini ships in the Docker images (`COPY config`), so a
 worker rebuild picks up edits.
+
+### Feature selection (mandatory vs optional)
+Which features the **model** trains on is configurable per run via the
+`[features]` section of `config/smarthub.ini`, without touching code. Each lead
+type has a **mandatory core** (locked in `features.py`, always trained on, never
+toggleable) and an **optional set** listed in the ini:
+
+```ini
+[features]
+# auto mandatory core (locked, cannot be removed): home_owner, multi_vehicle,
+# num_vehicles, insured, num_auto_accidents, dui, sr22_required, age (+ bands), bid
+auto_optional = state, gender, marital_status, campaign_id, traffic_tier,
+    num_drivers, num_auto_violations, continuous_coverage_months, is_married,
+    created_hour, created_dayofweek, is_workday
+```
+
+The auto mandatory core is SmartFinancial's lead-matching criteria (home owner,
+multiple vehicles, currently insured, accidents, DUI, SR-22, age) plus `bid`.
+`auto_optional` accepts a comma list (train on exactly those), `all` (every
+optional feature — the default if the key is absent), or `none` (mandatory core
+only). Unknown names are ignored with a warning; a mandatory feature can never be
+dropped. Toggling changes only what the **model consumes** — every feature is
+still built into the training table, so no re-pull/re-build is needed, just a
+retrain. Training and serving both resolve features through
+`features.model_feature_columns`, so they stay in lock-step. (Home selection is
+not enabled yet — its mandatory core is TBD with Kiran, so home keeps all
+features.)
 
 ### Holiday calendar (`is_workday`)
 `is_workday` is a model feature. Weekends (Sat/Sun) are non-workdays computed in
@@ -290,13 +317,27 @@ Leave `SLACK_WEBHOOK_URL` blank to disable — notifications become a clean no-o
 Sending is **best-effort**: a Slack/network problem is logged and swallowed, so
 it can never break or fail a pull / feature build.
 
+**Layout.** All three success messages share one **grouped** layout: the lead
+type sits in the header, a bold **headline** leads with the key outcome, the rest
+is split into titled sections (bold subheader + 2-column fields) separated by
+dividers, and long paths / definitions go in the small footer. Built by
+`notifications.notify_success_grouped`.
+
 **On success:**
 
-- *data-pull* — lead type (auto/home + id), data window (`created_at` min→max),
-  run start/finish (UTC), rows fetched, watermark before→after, DuckDB/Parquet
-  row counts, and the exact stored file paths (per-day Parquet + DuckDB file).
-- *build-features* — lead type, version, row & feature counts, win rate,
-  training window, data date range, and the training-table output path.
+- *data-pull* — headline `N rows pulled · window`; sections **Volume** (rows
+  fetched, DuckDB/Parquet row counts), **Watermark** (before → after), **Run**
+  (start/finish UTC); footer carries the Parquet + DuckDB paths.
+- *build-features* — headline `N training rows · version (win rate)`; sections
+  **Rows** (raw→training, dropped, wins/losses), **Coverage**
+  (`expected_revenue`, age-missing, `traffic_tier` distinct), **Time mix**
+  (weekday/weekend/`is_workday` share), **Build** (window, feature count, data
+  range); footer carries the day-metric definitions + table path.
+- *train-model* — headline is the **promotion decision** (promoted/held +
+  version + reason); sections **Model** (algo, rows, data range, table),
+  **Performance** (ROC/PR AUC, log loss, calibration error), **Bid optimizer**
+  (profit lift %, avg CM), **Features** (count split + optional included /
+  excluded); footer carries the model file path.
 
 **On failure:** every failure point is caught by a Prefect `on_failure` hook on
 each flow (covers window resolution, the Redshift/SSH fetch, storage writes,
