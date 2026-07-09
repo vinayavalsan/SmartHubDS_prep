@@ -163,14 +163,28 @@ def currently_serving_model_path(lead_type_name: str) -> Path | None:
 def load_currently_serving_model(lead_type_name: str):
     """Load the currently-serving model + its manifest.
 
-    ``(None, None)`` if nothing has been promoted for this lead type yet.
+    ``(None, None)`` if nothing has been promoted for this lead type yet, or if
+    the model file can't be found in this environment.
+
+    The model file is resolved from ``version_path`` (i.e. the *current*
+    ``data/models`` location), NOT the ``model_path`` recorded in the manifest —
+    that stored path is absolute and environment-specific (e.g. ``/app/...`` from
+    a Docker training run), so trusting it breaks a later local/other-host load.
     """
-    manifest = currently_serving_manifest(lead_type_name)
-    if manifest is None:
+    version = currently_serving_version(lead_type_name)
+    if version is None:
+        return None, None
+    try:
+        manifest = load_manifest(lead_type_name, version)
+    except FileNotFoundError:
+        return None, None
+
+    model_file = version_path(lead_type_name, version)
+    if not model_file.exists():
         return None, None
     import joblib
 
-    model = joblib.load(manifest["model_path"])
+    model = joblib.load(model_file)
     return model, manifest
 
 

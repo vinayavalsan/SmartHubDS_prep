@@ -63,3 +63,5 @@ data/models/**/*.pkl
 # Auto model registry & weights
 data/models/auto/*.json
 data/models/auto/*.pkl
+data/leads
+mlruns

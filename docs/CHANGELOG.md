@@ -3,6 +3,29 @@
 
 ## 2026-07-09 (later)
 
+### Fix: registry loads the serving model portably (Docker → local)
+- `registry.load_currently_serving_model` no longer trusts the **absolute**
+  `model_path` recorded in the manifest (e.g. `/app/data/models/...` from a
+  Docker training run) — it now resolves the file via `version_path` in the
+  *current* `data/models` location. This fixes a `FileNotFoundError` crash when
+  running `train` locally against a model that was previously trained in the
+  container. Missing file → graceful `(None, None)` (bootstrap) instead of a
+  crash. `predict.resolve_model_uri` was already portable.
+
+### Manual run entry points for every stage
+- Each pipeline stage can now be run **directly from the CLI** (not just on the
+  Prefect schedule), for ad-hoc runs / backfills / debugging. Added console
+  scripts `smarthub-build-features` and `smarthub-train` (alongside the existing
+  `smarthub-pull`).
+- `feature_engineering/flow.py` gained an argparse `main()`
+  (`--lead-type-id` / `--lead-type-name` / `--window-days`), replacing the
+  hardcoded `__main__`. train already had `train.py:main`
+  (`--lead-type-id` / `--version` / `--no-mlflow`); data-pull already had
+  `smarthub-pull`.
+- Manual data-pull + train are Prefect-free; manual build-features runs the flow
+  locally (same artifact + Slack notification). Pipeline order still applies:
+  data-pull → build-features → train-model. README documents the commands.
+
 ### Slack notifications: grouped layout (all three pipelines)
 - **Success messages are now grouped** instead of one long flat field list. New
   `notifications.notify_success_grouped` renders a bold **headline** + titled

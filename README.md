@@ -278,17 +278,43 @@ registry.rollback("auto")                      # repoint at the prior version
 registry.rollback("auto", to_version="v1_2026-07-01T050000Z")  # or a specific one
 ```
 
-Run any flow once locally without Docker:
+### Run a stage manually (no schedule / no worker)
+
+The whole pipeline runs on the Prefect schedule, but you can also run any stage
+**directly from the command line** for ad-hoc runs, backfills, or debugging —
+same code as the deployments, just in-process. Keep the pipeline order in mind:
+**1) data-pull → 2) build-features → 3) train-model** (each reads the previous
+stage's output). All read `.env` for credentials/paths; build-features and train
+need the `ml` / `orchestration` extras.
 
 ```bash
-pip install -e ".[orchestration]"           # data-pull + build-features
-python -m smarthub.data_pull.flow           # pull (defaults to auto)
-python -m smarthub.feature_engineering.flow # build features (defaults to auto)
+pip install -e ".[orchestration,ml]"    # everything needed for manual runs
 
-pip install -e ".[orchestration,ml]"        # + model training
-python -m smarthub.train_and_predict.train --lead-type-id 6   # train auto
-python -m smarthub.train_and_predict.flow                     # train via Prefect
+# 1) data-pull — pull leads from Redshift into storage.
+#    Manual pull takes an explicit window and does NOT move the watermark.
+smarthub-pull --lead-type-id 6 --min-created-at "2026-07-01 00:00:00" \
+                                --max-created-at "2026-07-09 00:00:00"
+smarthub-pull --help                    # all options (window, listings, log level)
+
+# 2) build-features — rebuild the training table for a lead type / window.
+smarthub-build-features --lead-type-id 6                # auto (default)
+smarthub-build-features --lead-type-id 1                # home
+smarthub-build-features --lead-type-id 6 --window-days 0   # use ALL stored data
+#   (equivalent: python -m smarthub.feature_engineering.flow --lead-type-id 6)
+
+# 3) train-model — train + evaluate + (maybe) promote one lead type's model.
+smarthub-train --lead-type-id 6                         # auto
+smarthub-train --lead-type-id 1                         # home
+smarthub-train --lead-type-id 6 --no-mlflow             # skip MLflow logging
+smarthub-train --lead-type-id 6 --version 2026-07-09T073241Z   # pin training table
+#   (equivalent: python -m smarthub.train_and_predict.train --lead-type-id 6)
 ```
+
+Console scripts (`smarthub-pull`, `smarthub-build-features`, `smarthub-train`)
+are installed by `pip install -e .`. Manual data-pull and train runs are
+Prefect-free; manual build-features runs the flow locally (writes the same
+Prefect artifact + Slack notification). To reproduce a scheduled run end-to-end,
+run the three in order for the lead type you want.
 
 The bid-recommendation API (FastAPI) serves the trained model. With no
 `MODEL_URI` set it serves whichever version is currently promoted for the

@@ -28,6 +28,32 @@ def _save(lead_type_name="auto", roc_auc=0.70, profit=100.0, feature_cols=None):
     return manifest
 
 
+def test_load_currently_serving_resolves_path_in_current_env():
+    # A manifest saved in another environment records an absolute model_path
+    # (e.g. /app/... from a Docker run). Loading must resolve via version_path
+    # in THIS environment, not trust that stale absolute string.
+    import json
+
+    m = _save()
+    registry.promote("auto", m["version"])
+    mf = registry.manifest_path("auto", m["version"])
+    data = json.loads(mf.read_text())
+    data["model_path"] = "/app/data/models/auto/does-not-exist.pkl"
+    mf.write_text(json.dumps(data))
+
+    model, manifest = registry.load_currently_serving_model("auto")
+    assert model == {"fake": "model"}          # loaded via version_path
+    assert manifest["version"] == m["version"]
+
+
+def test_load_currently_serving_none_when_file_missing():
+    m = _save()
+    registry.promote("auto", m["version"])
+    registry.version_path("auto", m["version"]).unlink()   # pkl gone
+    # Graceful bootstrap, not a crash.
+    assert registry.load_currently_serving_model("auto") == (None, None)
+
+
 # --- Versioning ---------------------------------------------------------------
 
 

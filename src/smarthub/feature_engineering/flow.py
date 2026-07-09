@@ -281,5 +281,49 @@ def _notify_success(
     )
 
 
+def main(argv=None):
+    """Run build-features (STEP 2) directly from the command line.
+
+    Runs the same flow as the scheduled deployment, locally and in-process, so
+    you can rebuild the training table on demand for any lead type / window
+    without the Prefect worker:
+
+        python -m smarthub.feature_engineering.flow --lead-type-id 6   # auto
+        python -m smarthub.feature_engineering.flow --lead-type-id 1   # home
+        python -m smarthub.feature_engineering.flow --window-days 0     # all data
+    """
+    import argparse
+    import logging
+
+    from smarthub.feature_engineering import features as fe
+
+    parser = argparse.ArgumentParser(
+        description="Build the SmartHub training table (STEP 2)."
+    )
+    parser.add_argument(
+        "--lead-type-id", type=int, default=6, help="6=auto (default), 1=home"
+    )
+    parser.add_argument(
+        "--lead-type-name", default=None, help="override name (default: from id)"
+    )
+    parser.add_argument(
+        "--window-days", type=int, default=None,
+        help="rolling training window in days; 0=all data; default from ini",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
+    name = args.lead_type_name or fe.lead_type_name(args.lead_type_id)
+    build_features_flow(
+        lead_type_id=args.lead_type_id,
+        lead_type_name=name,
+        window_days=args.window_days,
+    )
+    print("Done.")
+    return 0
+
+
 if __name__ == "__main__":
-    build_features_flow(lead_type_id=6, lead_type_name="auto")
+    raise SystemExit(main())

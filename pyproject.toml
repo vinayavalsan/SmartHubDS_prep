@@ -41,6 +41,8 @@ ml = [
 
 [project.scripts]
 smarthub-pull = "smarthub.data_pull.pull:main"
+smarthub-build-features = "smarthub.feature_engineering.flow:main"
+smarthub-train = "smarthub.train_and_predict.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
