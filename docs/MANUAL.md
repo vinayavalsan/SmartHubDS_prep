@@ -106,11 +106,17 @@ smarthub-build-features --lead-type-id 1            # home
 smarthub-build-features --lead-type-id 6 --window-days 0    # use ALL stored data
 ```
 
-Equivalent module form:
+Equivalent module form (Prefect-free core):
 
 ```bash
-python -m smarthub.feature_engineering.flow --lead-type-id 6
+python -m smarthub.feature_engineering.build --lead-type-id 6
 ```
+
+> Manual build-features runs the **Prefect-free** core in
+> `feature_engineering/build.py` — no worker/server, no Prefect run — same as
+> data-pull and train. The Prefect deployment (`feature_engineering/flow.py`)
+> wraps the same core for automation and adds the run artifact + Slack
+> notification.
 
 Options:
 
@@ -252,10 +258,10 @@ registry.rollback("auto", to_version="v1_2026-07-01T050000Z")  # a specific one
 | | Scheduled (Prefect) | Manual (CLI) |
 | --- | --- | --- |
 | data-pull | window from watermark; advances it | explicit `--min/--max`; watermark untouched |
-| build-features | runs on the `features` queue | runs the flow locally |
+| build-features | runs on the `features` queue | runs the Prefect-free core in-process |
 | train-model | runs on the `training` queue | runs training in-process |
-| Slack / artifacts | yes | build-features yes; data-pull/train log to console (data-pull still alerts on failure) |
-| Prefect needed | worker + server | data-pull & train are Prefect-free; build-features runs the flow locally |
+| Slack / artifacts | yes | none — all three log to console (data-pull still alerts on failure) |
+| Prefect needed | worker + server | no — all three manual entry points are Prefect-free |
 
 ---
 

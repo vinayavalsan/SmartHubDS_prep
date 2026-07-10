@@ -3,6 +3,17 @@
 
 ## 2026-07-09 (later)
 
+### build-features manual run is now Prefect-free (Vinaya)
+- Extracted the build core into `feature_engineering/build.py` — load → build →
+  save with **no Prefect dependency** — mirroring `data_pull/pull.py` and
+  `train_and_predict/train.py`. `flow.py` is now a thin Prefect wrapper around
+  `build.run_build_features` (adds the run artifact, Slack notification, failure
+  hook, and the "run data-pull first" guidance artifact).
+- `smarthub-build-features` / `python -m smarthub.feature_engineering.build` now
+  run **without importing Prefect** — so all three manual stage entry points are
+  Prefect-free, and Prefect is only used for the scheduled deployments. Console
+  script repointed `flow:main` → `build:main`.
+
 ### Fix: registry loads the serving model portably (Docker → local)
 - `registry.load_currently_serving_model` no longer trusts the **absolute**
   `model_path` recorded in the manifest (e.g. `/app/data/models/...` from a
@@ -22,9 +33,9 @@
   hardcoded `__main__`. train already had `train.py:main`
   (`--lead-type-id` / `--version` / `--no-mlflow`); data-pull already had
   `smarthub-pull`.
-- Manual data-pull + train are Prefect-free; manual build-features runs the flow
-  locally (same artifact + Slack notification). Pipeline order still applies:
-  data-pull → build-features → train-model. README documents the commands.
+- All three manual entry points are Prefect-free (see the build-features core
+  extraction above). Pipeline order still applies: data-pull → build-features →
+  train-model. README + docs/MANUAL.md document the commands.
 
 ### Slack notifications: grouped layout (all three pipelines)
 - **Success messages are now grouped** instead of one long flat field list. New

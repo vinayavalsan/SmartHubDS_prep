@@ -300,7 +300,7 @@ smarthub-pull --help                    # all options (window, listings, log lev
 smarthub-build-features --lead-type-id 6                # auto (default)
 smarthub-build-features --lead-type-id 1                # home
 smarthub-build-features --lead-type-id 6 --window-days 0   # use ALL stored data
-#   (equivalent: python -m smarthub.feature_engineering.flow --lead-type-id 6)
+#   (equivalent: python -m smarthub.feature_engineering.build --lead-type-id 6)
 
 # 3) train-model — train + evaluate + (maybe) promote one lead type's model.
 smarthub-train --lead-type-id 6                         # auto
@@ -311,10 +311,12 @@ smarthub-train --lead-type-id 6 --version 2026-07-09T073241Z   # pin training ta
 ```
 
 Console scripts (`smarthub-pull`, `smarthub-build-features`, `smarthub-train`)
-are installed by `pip install -e .`. Manual data-pull and train runs are
-Prefect-free; manual build-features runs the flow locally (writes the same
-Prefect artifact + Slack notification). To reproduce a scheduled run end-to-end,
-run the three in order for the lead type you want.
+are installed by `pip install -e .`. **All three manual entry points are
+Prefect-free** — each stage has a Prefect-free core (`data_pull/pull.py`,
+`feature_engineering/build.py`, `train_and_predict/train.py`) that the CLI calls
+directly, while the matching `flow.py` wraps it for the scheduled deployment
+(Prefect run + artifact + Slack notification). To reproduce a scheduled run
+end-to-end, run the three in order for the lead type you want.
 
 The bid-recommendation API (FastAPI) serves the trained model. With no
 `MODEL_URI` set it serves whichever version is currently promoted for the
