@@ -65,3 +65,9 @@ data/models/auto/*.json
 data/models/auto/*.pkl
 data/leads
 mlruns
+
+# Ignore all data
+data/**
+
+# Keep the folder itself (optional)
+!data/.gitkeep
