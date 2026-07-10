@@ -1,13 +1,6 @@
-"""Data preparation for Anton training and prediction.
+"""Model input preparation for SmartHub training and serving.
 
-Training consumes the leakage-safe **training table** produced by
-``smarthub.feature_engineering`` (STEP 2) — the heavy cleaning / feature
-derivation already happened there. This module only:
-
-- selects the curated model feature columns for the lead type,
-- normalises dtypes consistently for train AND serve (parity), and
-- for serving, derives the same engineered features from a raw request via
-  ``feature_engineering.derive_serving_features``.
+This module loads, validates, and normalizes model-ready data.
 """
 
 from __future__ import annotations
@@ -21,12 +14,21 @@ from . import config
 
 
 def normalize_model_frame(df, numeric_features, categorical_features):
-    """Coerce dtypes the same way for training rows and prediction rows.
+    """Normalize numeric and categorical model feature types.
 
-    Numeric features -> numeric (NaN on failure; the sklearn imputer handles
-    NaN). Categorical features -> stripped strings with blanks/NaN as
-    ``"NAvail"`` (ids like campaign_id become strings so one-hot treats them as
-    categories, not magnitudes).
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Input dataframe.
+    numeric_features : list[str]
+        Numeric feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with normalized model feature types.
     """
     df = df.copy()
     for col in numeric_features:
@@ -40,11 +42,22 @@ def normalize_model_frame(df, numeric_features, categorical_features):
 
 
 def prepare_training_data(lead_type_id, lead_type_name, version=None):
-    """Load + prepare one lead type's training table for model fitting.
+    """Load and prepare a training table for model fitting.
 
-    Returns ``(frame, numeric, categorical, summary)`` where ``frame`` holds the
-    model feature columns + target + (if available) expected_revenue, ordered by
-    ``created_at`` when present so callers can do a time-based split.
+    Inputs
+    ------
+    lead_type_id : int
+        SmartHub lead type identifier.
+    lead_type_name : str
+        Human-readable lead type name.
+    version : str | None
+        Optional training-table or model version identifier.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, list[str], list[str], dict]
+        Prepared dataframe, numeric features, categorical features, and
+    preparation summary.
     """
     # Resolve which training-table version we're using (for model lineage).
     resolved_version = version
@@ -105,11 +118,22 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
 
 
 def drop_zero_variance(frame, numeric_features, categorical_features):
-    """Drop feature columns with a single distinct value (no signal).
+    """Remove features with no observed variation.
 
-    Returns ``(numeric, categorical, dropped)``. Computed on the given frame so
-    the fitted model only encodes columns that actually vary (e.g. all-'false'
-    insured/home_owner disappear automatically).
+    Inputs
+    ------
+    frame : pandas.DataFrame
+        Input dataframe.
+    numeric_features : list[str]
+        Numeric feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+
+    Returns
+    -------
+    tuple[list[str], list[str], list[str]]
+        Filtered numeric features, filtered categorical features, and
+    removed feature names.
     """
     dropped = [
         c
@@ -122,13 +146,24 @@ def drop_zero_variance(frame, numeric_features, categorical_features):
 
 
 def assert_trainable(frame, lead_type_name):
-    """Fail early (and clearly) if the target has fewer than two classes.
+    """Validate that the training target contains two classes.
 
-    A classifier needs both wins and losses. A single-class target usually means
-    the raw ``won`` column encodes losses as blank/NULL (dropped by
-    build_training_table) or that ``won`` isn't the right win/loss label — not a
-    model problem. Raising here gives a readable message instead of sklearn's
-    "needs samples of at least 2 classes".
+    Inputs
+    ------
+    frame : pandas.DataFrame
+        Input dataframe.
+    lead_type_name : str
+        Human-readable lead type name.
+
+    Returns
+    -------
+    list
+        Sorted target classes present in the dataframe.
+
+    Raises
+    ------
+    ValueError
+        If the target does not contain both outcome classes.
     """
     classes = sorted(frame[config.TARGET_COL].dropna().unique().tolist())
     if len(classes) < 2:
@@ -146,11 +181,19 @@ def assert_trainable(frame, lead_type_name):
 
 
 def serving_frame(records, lead_type_id):
-    """Build a model-ready frame from raw prediction records (dicts/DataFrame).
+    """Build a model-ready dataframe from serving records.
 
-    Runs the SAME feature derivation as training (via feature_engineering) so
-    the model sees identically-constructed features, then normalises + selects
-    the model columns for this lead type.
+    Inputs
+    ------
+    records : list[dict] | dict
+        Prediction records or record mappings.
+    lead_type_id : int
+        SmartHub lead type identifier.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Model-ready serving dataframe.
     """
     raw = records.copy() if isinstance(records, pd.DataFrame) else pd.DataFrame(records)
     derived = fe.derive_serving_features(raw)

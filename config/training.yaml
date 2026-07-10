@@ -1,0 +1,83 @@
+# Configuration for src/smarthub/train_and_predict/train.py.
+#
+# This file defines the complete model package used for training, offline
+# optimizer evaluation, and production bid recommendation. Secrets and database
+# connection details remain outside this file.
+
+training:
+  model_type: lightgbm
+  calibrate: true
+  drop_zero_variance: true
+  random_seed: 42
+
+split:
+  # Supported values: time, random
+  strategy: time
+
+  time:
+    # Hold out the most recent fraction of the chronologically ordered dataset.
+    test_size: 0.20
+
+  random:
+    test_size: 0.20
+    stratify: true
+
+models:
+  logistic_regression:
+    C: 1.0
+    solver: lbfgs
+    max_iter: 1000
+    class_weight: null
+
+  xgboost:
+    n_estimators: 400
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.9
+    colsample_bytree: 0.9
+    min_child_weight: 5
+    reg_lambda: 1.0
+    objective: binary:logistic
+    eval_metric: logloss
+    tree_method: hist
+
+  lightgbm:
+    n_estimators: 400
+    learning_rate: 0.05
+    num_leaves: 63
+    max_depth: -1
+    min_child_samples: 50
+    subsample: 0.9
+    subsample_freq: 1
+    colsample_bytree: 0.9
+    reg_lambda: 1.0
+    n_jobs: -1
+    verbose: -1
+
+
+optimizer:
+  target_cm: 0.25
+  minimum_bid: 0.25
+  bid_step: 0.25
+
+promotion:
+# Supported values:
+#   manual    - evaluate against the currently serving model, save the
+#               eligibility decision, and wait for explicit promotion.
+#   automatic - evaluate against the currently serving model and promote
+#               automatically when the policy passes.
+#   disabled  - skip serving-model evaluation and promotion-policy checks;
+#               train, evaluate, save reports/model, and log to MLflow only.
+  mode: automatic
+  min_roc_auc_regression: 0.01
+  min_profit_ratio: 0.98
+
+output:
+  report_root: data/model_evaluations
+  model_root: data/models
+
+mlflow:
+  tracking_db_path: data/mlflow.db
+  artifact_root: data/mlruns
+  experiment_name: anton_win_probability
+  registered_model_name: anton-win-probability-model

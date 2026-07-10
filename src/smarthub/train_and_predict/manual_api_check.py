@@ -1,18 +1,6 @@
-"""
-Manual client for the Anton FastAPI prediction service (NOT a pytest test).
+"""Manual client for the SmartHub bid prediction API.
 
-Renamed from test_predict.py so pytest does not collect + execute it (it makes a
-live HTTP call). Before running, start the API in another terminal — with no
-MODEL_URI set it serves whichever model is currently promoted to serve traffic
-for the requested lead_type_id (see registry.py); set MODEL_URI to override:
-
-    uvicorn smarthub.train_and_predict.predict:app --reload --port 8000
-    # or pin explicitly:
-    export MODEL_URI="data/models/auto/v3_2026-07-09T140501Z.pkl"   # or an MLflow URI
-
-Then run:
-
-    python -m smarthub.train_and_predict.manual_api_check
+This module submits a sample request for interactive endpoint verification.
 """
 
 import json

@@ -1,7 +1,6 @@
-"""Model builders for Anton.
+"""Model builders for SmartHub win-probability training.
 
-The feature lists are passed in (from ``feature_engineering.model_feature_columns``)
-rather than imported, so the same builder serves auto and home models.
+This module creates preprocessing pipelines and supported classifier families.
 """
 
 from __future__ import annotations
@@ -16,12 +15,23 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 def build_logistic_regression_model(
     numeric_features, categorical_features, model_params, calibrate=False
 ):
-    """Build the baseline Anton win-probability model (a full sklearn Pipeline).
+    """Build an unfitted logistic-regression pipeline.
 
-    Numeric: median-impute + standardize. Categorical: most-frequent-impute +
-    one-hot (unknown categories ignored at predict time). When ``calibrate`` is
-    set, the whole pipeline is wrapped in isotonic probability calibration so
-    ``predict_proba`` is well-calibrated for the profit optimizer.
+    Inputs
+    ------
+    numeric_features : list[str]
+        Numeric feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+    model_params : dict
+        Parameters passed to the classifier.
+    calibrate : bool
+        Whether to apply probability calibration.
+
+    Returns
+    -------
+    sklearn.pipeline.Pipeline
+        Unfitted classifier pipeline.
     """
     numeric_transformer = Pipeline(
         [
@@ -53,16 +63,85 @@ def build_logistic_regression_model(
     return _maybe_calibrate(pipeline, calibrate)
 
 
+def build_xgboost_model(
+    numeric_features, categorical_features, model_params, calibrate=False
+):
+    """Build an unfitted XGBoost pipeline.
+
+    Inputs
+    ------
+    numeric_features : list[str]
+        Numeric feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+    model_params : dict
+        Parameters passed to the classifier.
+    calibrate : bool
+        Whether to apply probability calibration.
+
+    Returns
+    -------
+    sklearn.pipeline.Pipeline
+        Unfitted classifier pipeline.
+    """
+    from sklearn.preprocessing import OrdinalEncoder
+    from xgboost import XGBClassifier
+
+    numeric_transformer = SimpleImputer(strategy="median")
+    categorical_transformer = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            (
+                "encoder",
+                OrdinalEncoder(
+                    handle_unknown="use_encoded_value",
+                    unknown_value=-1,
+                ),
+            ),
+        ]
+    )
+    preprocessor = ColumnTransformer(
+        [
+            ("numeric", numeric_transformer, list(numeric_features)),
+            (
+                "categorical",
+                categorical_transformer,
+                list(categorical_features),
+            ),
+        ]
+    )
+
+    ordered = list(numeric_features) + list(categorical_features)
+    monotone = tuple(1 if col == "bid" else 0 for col in ordered)
+
+    classifier = XGBClassifier(
+        monotone_constraints=monotone,
+        **model_params,
+    )
+    pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", classifier)])
+    return _maybe_calibrate(pipeline, calibrate)
+
+
 def build_lightgbm_model(
     numeric_features, categorical_features, model_params, calibrate=False
 ):
-    """Build a LightGBM win-probability model with a monotonic bid constraint.
+    """Build an unfitted LightGBM pipeline.
 
-    Numeric features are imputed; categoricals are imputed + ordinal-encoded
-    (kept one column each so the transformed matrix order matches the feature
-    order). ``P(win)`` is constrained to be **non-decreasing in `bid`** — without
-    this a tree can predict a lower win probability at a higher bid, which breaks
-    the bid optimizer.
+    Inputs
+    ------
+    numeric_features : list[str]
+        Numeric feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+    model_params : dict
+        Parameters passed to the classifier.
+    calibrate : bool
+        Whether to apply probability calibration.
+
+    Returns
+    -------
+    sklearn.pipeline.Pipeline
+        Unfitted classifier pipeline.
     """
     from lightgbm import LGBMClassifier
     from sklearn.preprocessing import OrdinalEncoder
@@ -96,7 +175,20 @@ def build_lightgbm_model(
 
 
 def _maybe_calibrate(pipeline, calibrate):
-    """Wrap in isotonic probability calibration when requested."""
+    """Apply isotonic probability calibration when enabled.
+
+    Inputs
+    ------
+    pipeline : Any
+        Classifier pipeline to calibrate.
+    calibrate : bool
+        Whether to apply probability calibration.
+
+    Returns
+    -------
+    Any
+        Original pipeline or calibrated classifier.
+    """
     if not calibrate:
         return pipeline
     from sklearn.calibration import CalibratedClassifierCV
@@ -107,16 +199,56 @@ def _maybe_calibrate(pipeline, calibrate):
     return CalibratedClassifierCV(pipeline, method="isotonic", cv=3)
 
 
+MODEL_BUILDERS = {
+    "logistic_regression": build_logistic_regression_model,
+    "xgboost": build_xgboost_model,
+    "lightgbm": build_lightgbm_model,
+}
+
+
 def build_model(
-    model_type, numeric_features, categorical_features, model_params, calibrate=False
+    model_type,
+    numeric_features,
+    categorical_features,
+    model_params,
+    calibrate=False,
 ):
-    """Dispatch to the requested model family."""
-    if model_type == "logistic_regression":
-        return build_logistic_regression_model(
-            numeric_features, categorical_features, model_params, calibrate
-        )
-    if model_type == "lightgbm":
-        return build_lightgbm_model(
-            numeric_features, categorical_features, model_params, calibrate
-        )
-    raise ValueError(f"Unknown model_type: {model_type!r}")
+    """Build the configured classifier pipeline.
+
+    Inputs
+    ------
+    model_type : str
+        Configured model family name.
+    numeric_features : list[str]
+        Numeric feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+    model_params : dict
+        Parameters passed to the classifier.
+    calibrate : bool
+        Whether to apply probability calibration.
+
+    Returns
+    -------
+    Any
+        Unfitted configured classifier pipeline.
+
+    Raises
+    ------
+    ValueError
+        If the configured model family is unsupported.
+    """
+    try:
+        builder = MODEL_BUILDERS[model_type]
+    except KeyError as exc:
+        supported = ", ".join(sorted(MODEL_BUILDERS))
+        raise ValueError(
+            f"Unknown model_type: {model_type!r}. Supported: {supported}."
+        ) from exc
+
+    return builder(
+        numeric_features,
+        categorical_features,
+        model_params,
+        calibrate,
+    )

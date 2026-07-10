@@ -1,37 +1,19 @@
-"""Versioned model registry + promotion gate for Anton.
+"""Versioned model registry and promotion controls for SmartHub.
 
-Problem this solves: ``train.py`` used to ``joblib.dump`` straight over
-``data/models/anton_model_<type>.pkl`` on every run. A bad training run (a
-data glitch, a schema regression) would silently overwrite a good model in
-production, with no comparison, no history, and no way back.
-
-Now every training run is saved as an **immutable, numbered, timestamped
-version** — ``data/models/<lead_type>/v<N>_<UTC timestamp>.pkl`` — with a
-JSON manifest of its metrics/lineage next to it
-(``v<N>_<timestamp>.json``). A separate pointer file, ``current.json``,
-records which version is the **currently-serving model**: the one
-``predict.load_model`` actually uses to answer requests. Training a new
-("challenger") model never moves that pointer by itself —
-``decide_promotion`` compares the challenger against the currently-serving
-model **on the same held-out test set** first (see ``train.run_training``),
-and only ``promote()`` moves the pointer when the challenger is at least as
-good. ``rollback()`` repoints ``current.json`` at an earlier version with no
-retraining needed.
+This module saves model versions, manages serving pointers, and supports rollback.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from smarthub.core import paths
-
-logger = logging.getLogger("smarthub.train_and_predict.registry")
 
 # Redirectable in tests the same way smarthub.core.io.TRAINING_DIR is.
 MODEL_DIR_ROOT = paths.data_dir() / "models"
@@ -40,38 +22,45 @@ _VERSION_RE = re.compile(r"^v(\d+)_")
 
 
 def model_dir(lead_type_name: str) -> Path:
-    """Per-lead-type model folder: data/models/<name>/."""
+    """Return the model directory for a lead type.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+
+    Returns
+    -------
+    pathlib.Path
+        Lead-type model directory.
+    """
     return MODEL_DIR_ROOT / lead_type_name.strip().lower()
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically.
-
-    Writes to a temp file in the same directory, then ``os.replace`` — so a
-    process killed or crashing mid-write can never leave a truncated/empty
-    file behind. A plain ``.write_text()`` on ``current.json`` once did
-    exactly that, and the resulting empty file crashed every subsequent
-    ``currently_serving_version()`` call (and, transitively, an entire
-    training run) with a raw ``JSONDecodeError`` instead of degrading
-    gracefully.
-    """
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(text)
-    os.replace(tmp_path, path)
-
-
 def _timestamp() -> str:
-    """UTC, filesystem-safe, lexicographically sortable timestamp."""
+    """Return a sortable UTC timestamp for model version names."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
 
 
 def _version_number(version: str) -> int:
+    """Extract the numeric sequence from a model version."""
     match = _VERSION_RE.match(version)
     return int(match.group(1)) if match else 0
 
 
 def list_versions(lead_type_name: str) -> list[str]:
-    """All saved version ids for a lead type, oldest -> newest."""
+    """List saved model versions from oldest to newest.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+
+    Returns
+    -------
+    list[str]
+        Model version identifiers ordered oldest to newest.
+    """
     folder = model_dir(lead_type_name)
     if not folder.exists():
         return []
@@ -80,21 +69,67 @@ def list_versions(lead_type_name: str) -> list[str]:
 
 
 def _next_version_number(lead_type_name: str) -> int:
+    """Return the next model version sequence number."""
     existing = [_version_number(v) for v in list_versions(lead_type_name)]
     return (max(existing) + 1) if existing else 1
 
 
 def version_path(lead_type_name: str, version: str) -> Path:
-    """Path to a version's ``.pkl`` model file."""
+    """Return the model artifact path for a version.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    version : str | None
+        Optional training-table or model version identifier.
+
+    Returns
+    -------
+    pathlib.Path
+        Model artifact path.
+    """
     return model_dir(lead_type_name) / f"{version}.pkl"
 
 
 def manifest_path(lead_type_name: str, version: str) -> Path:
-    """Path to a version's ``.json`` manifest file."""
+    """Return the manifest path for a model version.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    version : str | None
+        Optional training-table or model version identifier.
+
+    Returns
+    -------
+    pathlib.Path
+        Model manifest path.
+    """
     return model_dir(lead_type_name) / f"{version}.json"
 
 
 def load_manifest(lead_type_name: str, version: str) -> dict:
+    """Load a model-version manifest.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    version : str | None
+        Optional training-table or model version identifier.
+
+    Returns
+    -------
+    dict
+        Parsed model manifest.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the requested manifest does not exist.
+    """
     path = manifest_path(lead_type_name, version)
     if not path.exists():
         raise FileNotFoundError(
@@ -112,11 +147,40 @@ def save_version(
     optimizer_summary: dict | None,
     lineage: dict,
     model_params: dict,
+    promotion_mode: str,
+    promotion_eligible: bool | None,
+    promotion_decision_reason: str,
 ) -> dict:
-    """Save a new immutable model version. Does **not** promote it.
+    """Save a new immutable model version without promoting it.
 
-    Returns the manifest dict (includes ``version``, ``model_path``, and
-    everything passed in, so callers can log/compare/promote from it).
+    Inputs
+    ------
+    model : Any
+        Fitted model or model pipeline.
+    lead_type_name : str
+        Human-readable lead type name.
+    feature_cols : list[str]
+        Ordered model feature names.
+    metrics : dict
+        Model evaluation metrics.
+    optimizer_summary : dict | None
+        Offline optimizer summary metrics.
+    lineage : dict
+        Model and data lineage metadata.
+    model_params : dict
+        Parameters passed to the classifier.
+    promotion_mode : str
+        Promotion execution mode used for the training run.
+    promotion_eligible : bool | None
+        Whether the model passed the configured promotion policy, or ``None``
+        when promotion evaluation was disabled.
+    promotion_decision_reason : str
+        Explanation produced by the promotion policy.
+
+    Returns
+    -------
+    dict
+        Manifest for the saved model version.
     """
     import joblib  # lazy: registry.py must stay importable without the `ml` extra
 
@@ -139,48 +203,55 @@ def save_version(
         "optimizer_summary": optimizer_summary or {},
         "lineage": lineage,
         "model_params": model_params,
+        "promotion_mode": promotion_mode,
+        "promotion_eligible": promotion_eligible,
+        "promotion_decision_reason": promotion_decision_reason,
         "promoted": False,
         "promoted_at": None,
     }
-    _atomic_write_text(
-        manifest_path(lead_type_name, version),
-        json.dumps(manifest, indent=2, default=str),
+    manifest_path(lead_type_name, version).write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False, default=str)
     )
     return manifest
 
 
 def _serving_pointer_path(lead_type_name: str) -> Path:
+    """Return the currently-serving pointer path."""
     return model_dir(lead_type_name) / "current.json"
 
 
 def currently_serving_version(lead_type_name: str) -> str | None:
-    """The version id currently promoted to serve traffic, or ``None``.
+    """Return the currently-serving model version.
 
-    Also ``None`` (with a logged warning, not a raise) if the pointer file
-    exists but can't be parsed — e.g. left empty/truncated by a process
-    killed mid-write (see ``_atomic_write_text``, added after exactly this
-    took down an entire training run: a raw ``JSONDecodeError`` propagating
-    out of here, through ``load_currently_serving_model``, uncaught). A
-    corrupt pointer is treated the same as "nothing promoted yet" rather
-    than crashing every caller.
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+
+    Returns
+    -------
+    str | None
+        Serving version identifier, or ``None``.
     """
     pointer = _serving_pointer_path(lead_type_name)
     if not pointer.exists():
         return None
-    try:
-        return json.loads(pointer.read_text()).get("version")
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning(
-            "Corrupt/unreadable serving pointer for '%s' (%s): %s — "
-            "treating as nothing currently serving.",
-            lead_type_name,
-            pointer,
-            exc,
-        )
-        return None
+    return json.loads(pointer.read_text()).get("version")
 
 
 def currently_serving_manifest(lead_type_name: str) -> dict | None:
+    """Load the currently-serving model manifest.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+
+    Returns
+    -------
+    dict | None
+        Serving manifest, or ``None``.
+    """
     version = currently_serving_version(lead_type_name)
     if version is None:
         return None
@@ -191,21 +262,34 @@ def currently_serving_manifest(lead_type_name: str) -> dict | None:
 
 
 def currently_serving_model_path(lead_type_name: str) -> Path | None:
-    """Path to the currently-promoted model file, or ``None`` if none yet."""
+    """Return the currently-serving model artifact path.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Serving model path, or ``None``.
+    """
     version = currently_serving_version(lead_type_name)
     return version_path(lead_type_name, version) if version else None
 
 
 def load_currently_serving_model(lead_type_name: str):
-    """Load the currently-serving model + its manifest.
+    """Load the currently-serving model and manifest.
 
-    ``(None, None)`` if nothing has been promoted for this lead type yet, or if
-    the model file can't be found in this environment.
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
 
-    The model file is resolved from ``version_path`` (i.e. the *current*
-    ``data/models`` location), NOT the ``model_path`` recorded in the manifest —
-    that stored path is absolute and environment-specific (e.g. ``/app/...`` from
-    a Docker training run), so trusting it breaks a later local/other-host load.
+    Returns
+    -------
+    tuple[Any | None, dict | None]
+        Loaded model followed by its manifest, or two ``None`` values.
     """
     version = currently_serving_version(lead_type_name)
     if version is None:
@@ -225,7 +309,27 @@ def load_currently_serving_model(lead_type_name: str):
 
 
 def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
-    """Point the serving pointer at ``version``. Returns the pointer dict."""
+    """Promote a saved model version to serve traffic.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    version : str | None
+        Optional training-table or model version identifier.
+    reason : str
+        Human-readable reason for the operation.
+
+    Returns
+    -------
+    dict
+        Updated serving-pointer metadata.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the requested model version does not exist.
+    """
     if not manifest_path(lead_type_name, version).exists():
         raise FileNotFoundError(
             f"Cannot promote unknown version '{version}' for '{lead_type_name}'."
@@ -238,9 +342,8 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
     manifest["promoted"] = True
     manifest["promoted_at"] = promoted_at
     manifest["promotion_reason"] = reason
-    _atomic_write_text(
-        manifest_path(lead_type_name, version),
-        json.dumps(manifest, indent=2, default=str),
+    manifest_path(lead_type_name, version).write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False, default=str)
     )
 
     pointer = {
@@ -249,9 +352,8 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
         "previous_version": previous,
         "reason": reason,
     }
-    _atomic_write_text(
-        _serving_pointer_path(lead_type_name),
-        json.dumps(pointer, indent=2, default=str),
+    _serving_pointer_path(lead_type_name).write_text(
+        json.dumps(pointer, indent=2, ensure_ascii=False, default=str)
     )
     return pointer
 
@@ -261,9 +363,26 @@ def rollback(
     to_version: str | None = None,
     reason: str = "manual rollback",
 ) -> dict:
-    """Repoint the serving pointer at an earlier version — no retraining needed.
+    """Move the serving pointer to an earlier model version.
 
-    Defaults to the version immediately before the one currently serving.
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    to_version : str | None
+        Optional target model version for rollback.
+    reason : str
+        Human-readable reason for the operation.
+
+    Returns
+    -------
+    dict
+        Updated serving-pointer metadata.
+
+    Raises
+    ------
+    ValueError
+        If no valid earlier model version is available.
     """
     versions = list_versions(lead_type_name)
     serving_version = currently_serving_version(lead_type_name)
@@ -290,6 +409,8 @@ def rollback(
 
 @dataclass
 class PromotionDecision:
+    """Store a model-promotion decision and its comparison details."""
+
     promote: bool
     reason: str
     comparison: dict = field(default_factory=dict)
@@ -304,23 +425,27 @@ def decide_promotion(
     min_roc_auc_regression: float = 0.01,
     min_profit_ratio: float = 0.98,
 ) -> PromotionDecision:
-    """Decide whether the challenger should replace the currently-serving model.
+    """Compare challenger and serving metrics and decide promotion.
 
-    Both models must already have been scored by the caller **on the same
-    held-out test set** — that's what makes this a fair comparison instead of
-    comparing two numbers computed on two different data snapshots.
+    Inputs
+    ------
+    challenger_metrics : dict
+        Challenger model metrics.
+    challenger_optimizer : dict | None
+        Challenger optimizer metrics.
+    currently_serving_metrics : dict | None
+        Serving model metrics, when available.
+    currently_serving_optimizer : dict | None
+        Serving optimizer metrics, when available.
+    min_roc_auc_regression : float
+        Maximum permitted ROC AUC regression.
+    min_profit_ratio : float
+        Minimum challenger-to-serving profit ratio.
 
-    Policy:
-    - Nothing currently serving -> always promote (bootstrap case).
-    - ROC AUC must not regress by more than ``min_roc_auc_regression``.
-    - If both sides have an optimizer evaluation, the challenger's total
-      expected profit on that test set must be at least ``min_profit_ratio``
-      of the currently-serving model's (default: allow at most a 2% dip) —
-      profit is the metric the business cares about; ROC AUC is a guardrail
-      against a model that is "profitable" on this slice by being badly
-      miscalibrated.
-    - If an optimizer comparison isn't available on both sides, fall back to
-      the ROC AUC check alone.
+    Returns
+    -------
+    PromotionDecision
+        Promotion decision and comparison details.
     """
     if currently_serving_metrics is None:
         return PromotionDecision(
@@ -386,3 +511,56 @@ def decide_promotion(
         "on one or both sides.",
         comparison,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run manual model-registry operations from the command line.
+
+    Inputs
+    ------
+    argv : list[str] | None
+        Optional command-line argument sequence.
+
+    Returns
+    -------
+    int
+        Process exit status.
+    """
+    parser = argparse.ArgumentParser(description="Manage SmartHub model promotion.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    promote_parser = subparsers.add_parser(
+        "promote",
+        help="Promote a saved model version to currently serving.",
+    )
+    promote_parser.add_argument("--lead-type-name", required=True)
+    promote_parser.add_argument("--version", required=True)
+    promote_parser.add_argument(
+        "--reason",
+        default="manual promotion",
+        help="Reason recorded in the model manifest and serving pointer.",
+    )
+
+    args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+
+    if args.command == "promote":
+        pointer = promote(
+            args.lead_type_name,
+            args.version,
+            reason=args.reason,
+        )
+        logging.getLogger(__name__).info(
+            "Promoted %s for %s (previous=%s).",
+            pointer["version"],
+            args.lead_type_name,
+            pointer.get("previous_version"),
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

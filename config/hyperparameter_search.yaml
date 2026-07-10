@@ -1,0 +1,117 @@
+search:
+  scoring: neg_log_loss
+  n_trials: 50
+  cv_folds: 3
+  timeout_seconds: null
+  random_seed: 42
+  n_jobs: 1
+
+output:
+  root: data/hyperparameter_tuning
+
+models:
+  logistic_regression:
+    fixed_parameters:
+      max_iter: 5000
+
+    search_space:
+      C:
+        type: float
+        low: 0.0001
+        high: 100.0
+        log: true
+      solver:
+        type: categorical
+        choices:
+          - lbfgs
+          - liblinear
+
+  xgboost:
+    fixed_parameters:
+      eval_metric: logloss
+      n_jobs: -1
+
+    search_space:
+      n_estimators:
+        type: int
+        low: 200
+        high: 1000
+        step: 100
+      max_depth:
+        type: int
+        low: 3
+        high: 10
+      learning_rate:
+        type: float
+        low: 0.005
+        high: 0.2
+        log: true
+      min_child_weight:
+        type: int
+        low: 1
+        high: 10
+      subsample:
+        type: float
+        low: 0.6
+        high: 1.0
+      colsample_bytree:
+        type: float
+        low: 0.6
+        high: 1.0
+      reg_alpha:
+        type: float
+        low: 0.000001
+        high: 10.0
+        log: true
+      reg_lambda:
+        type: float
+        low: 0.000001
+        high: 20.0
+        log: true
+
+  lightgbm:
+    fixed_parameters:
+      verbosity: -1
+      n_jobs: -1
+
+    search_space:
+      n_estimators:
+        type: int
+        low: 200
+        high: 1000
+        step: 100
+      num_leaves:
+        type: int
+        low: 15
+        high: 127
+      max_depth:
+        type: int
+        low: 3
+        high: 12
+      learning_rate:
+        type: float
+        low: 0.005
+        high: 0.2
+        log: true
+      min_child_samples:
+        type: int
+        low: 10
+        high: 150
+      subsample:
+        type: float
+        low: 0.6
+        high: 1.0
+      colsample_bytree:
+        type: float
+        low: 0.6
+        high: 1.0
+      reg_alpha:
+        type: float
+        low: 0.000001
+        high: 10.0
+        log: true
+      reg_lambda:
+        type: float
+        low: 0.000001
+        high: 20.0
+        log: true

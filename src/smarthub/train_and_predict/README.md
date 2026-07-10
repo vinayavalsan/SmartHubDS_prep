@@ -1,340 +1,354 @@
-# SmartHub DS - ML Training and Prediction Folder
+# SmartHub Train and Predict
 
-## Overview
+This package trains Anton win-probability models, evaluates model quality, runs
+offline bid-optimizer evaluation, versions models, controls promotion, and serves
+bid recommendations.
 
-This folder contains the machine learning training and prediction components for the SmartHub Data Science project. Its primary objective is to train a model that predicts the probability of winning a lead at a given bid and to use that model to recommend the bid that maximizes expected profit.
+## Workflow
 
-This is **not** the complete SmartHub project. Instead, it is a self-contained module within the larger SmartHub codebase that focuses specifically on model development, evaluation, and prediction.
+The package is Step 3 of the SmartHub data-science pipeline:
 
-The current structure is intended as a **preliminary starting point**. As the project matures and new requirements emerge, the organization of this folder may evolve. Modules may be added, merged, or split to better support maintainability, testing, deployment, and future functionality. The goal of the current structure is simply to establish a clean separation of responsibilities while the project is still under active development.
+1. `data_pull` creates the raw lead dataset.
+2. `feature_engineering` creates versioned training tables.
+3. `train_and_predict`:
+   - loads a training-table version;
+   - prepares model features;
+   - splits the data into training and test sets;
+   - trains the configured classifier;
+   - evaluates predicted win probability;
+   - evaluates the bid optimizer on held-out rows;
+   - writes reports and model artifacts;
+   - evaluates promotion eligibility;
+   - optionally logs the run to MLflow.
 
----
+## Supported models
 
-## Folder Structure
+The training configuration supports:
 
-```text
-ml_training_prediction/
+- Logistic regression
+- XGBoost
+- LightGBM
 
-├── train.py
-├── predict.py
-├── preprocessing.py
-├── models.py
-├── metrics.py
-├── plots_and_reports.py
-├── mlflow_utils.py
-├── config.py
+XGBoost and LightGBM apply a positive monotonic constraint to `bid`, so the
+predicted win probability cannot decrease when the bid increases while all
+other inputs remain unchanged.
 
-├── models/
-│   └── anton_model.pkl
+Probability calibration can be enabled in `training.yaml`. The current
+implementation uses isotonic calibration. If calibration fails during training,
+the pipeline logs a warning and refits the model without calibration.
 
-├── model_evaluation/
+## Configuration
 
-├── mlruns/
-
-└── data/
-```
-
----
-
-## Overall Workflow
-
-Training workflow:
-
-```text
-Training Data
-      │
-      ▼
-Preprocessing
-      │
-      ▼
-Train ML Model
-      │
-      ▼
-Evaluate Model
-      │
-      ▼
-Run Bid Optimization Evaluation
-      │
-      ▼
-Generate Reports
-      │
-      ▼
-Save Model
-      │
-      ▼
-Log Training Run to MLflow
-```
-
-Prediction workflow:
+The primary configuration file is:
 
 ```text
-Incoming Lead
-      │
-      ▼
-Predict Win Probability
-      │
-      ▼
-Generate Candidate Bids
-      │
-      ▼
-Predict Win Probability
-for Every Candidate Bid
-      │
-      ▼
-Calculate Expected Profit
-      │
-      ▼
-Recommend Optimal Bid
+config/training.yaml
 ```
 
----
+Set `SMARTHUB_TRAINING_CONFIG` to use a different file.
 
-## Usage
+The configuration defines:
 
-Train a model for a specific lead type by passing `lead_type_id` as a command-line argument.
+- selected model and model parameters;
+- random seed;
+- calibration and zero-variance handling;
+- random or time-based train/test splitting;
+- optimizer target contribution margin, minimum bid, and bid step;
+- promotion mode and thresholds;
+- report and model directories;
+- MLflow tracking, artifact, experiment, and registered-model settings.
 
-For Auto leads:
+Supported promotion modes are:
+
+- `manual`: evaluate eligibility, save the model, and wait for an explicit
+  promotion command;
+- `automatic`: evaluate eligibility and automatically promote an eligible
+  model;
+- `disabled`: save the model without evaluating promotion eligibility.
+
+## Training
+
+Run training through the installed command:
 
 ```bash
-python train.py --lead_type_id 6
+smarthub-train --lead-type-id 6
 ```
 
-For Home leads:
+Supported lead type IDs currently include:
+
+- `6`: Auto
+- `1`: Home
+- `5`: Commercial
+
+Use a specific versioned training table:
 
 ```bash
-python train.py --lead_type_id 1
+smarthub-train --lead-type-id 6 --version <training-table-version>
 ```
 
-The training script passes this value into `preprocessing.clean_training_data()`, so the preprocessing module no longer hard-codes a specific lead type.
+Skip MLflow logging and registration:
 
-## Module Description
-
-### `train.py`
-
-The main entry point for model training.
-
-This script orchestrates the complete training workflow while keeping implementation details inside the supporting modules. It is intentionally designed to be easy to read and should describe the overall pipeline rather than contain complex logic at this stage of development; by the MVP phase, this design may evolve.
-
-Responsibilities include:
-
-- Load training data
-- Accept `lead_type_id` as a command-line argument
-- Clean and prepare data for the requested lead type
-- Generate dataset summaries
-- Split train/test data
-- Train the machine learning model
-- Evaluate model performance
-- Run bid optimization evaluation
-- Generate reports and plots
-- Save the trained model
-- Log the training run to MLflow
-
----
-
-### `predict.py`
-
-Contains the prediction and bid optimization logic.
-
-Responsibilities include:
-
-- Loading the trained model
-- FastAPI prediction endpoint
-- Bid optimization logic
-- Bid recommendation
-- Offline bid optimizer evaluation used by the training script
-
-The same bid optimization functions are reused during training to evaluate how much improvement the optimizer predicts over the current bids.
-
-The bid optimizer follows this process:
-
-```text
-Lead Features
-      │
-      ▼
-Generate Candidate Bids
-      │
-      ▼
-Predict Win Rate for Each Candidate Bid
-      │
-      ▼
-Calculate Expected Profit
-      │
-      ▼
-Choose Candidate Bid with Highest Expected Profit
+```bash
+smarthub-train --lead-type-id 6 --no-mlflow
 ```
 
-Expected profit is calculated as:
+The Prefect flow calls the same training workflow and publishes a markdown
+artifact containing model, optimizer, lineage, and promotion information.
 
-```text
-Expected Profit = Predicted Win Rate × (Expected Revenue - Bid)
-```
+## Data preparation and missing data
 
-The offline optimizer evaluation now reports additional metrics, including:
+`preprocessing.prepare_training_data` loads the requested training table and
+uses the feature definitions from `feature_engineering.features`.
 
-- Expected profit using the current bid
-- Expected profit using the recommended bid
-- Expected profit lift
-- Expected profit lift percentage
-- Predicted win-rate lift
-- Average, median, 10th percentile, and 90th percentile bid changes
-- Bid increase / decrease / unchanged counts and percentages
-- Average number of candidate bids evaluated
-- Selected bid percentile
-- Recommended CM distribution
-- Direction-level summaries for increased, decreased, and unchanged bids
+The preparation rules are:
 
-Important note: these are **offline predicted optimizer metrics**. They compare the current bid to the recommended bid using the trained model's predicted win rates. They do not represent measured production lift.
+- The target column is required. Training stops with an error when it is
+  missing.
+- Rows with a missing or nonnumeric target are removed.
+- Expected revenue is retained when available because it is required for the
+  offline optimizer evaluation, but it is not a win-probability model feature.
+- `created_at` is retained when available and is used to sort rows before a
+  time-based split.
+- Configured feature columns that are completely absent from the training table
+  are added as missing columns and listed in `missing_feature_columns`.
+- Numeric values are converted with `pandas.to_numeric(..., errors="coerce")`.
+  Invalid values therefore become missing.
+- Blank or missing categorical values are normalized to `NAvail`.
+- Features with zero observed variance may be removed after the train/test
+  split when `drop_zero_variance` is enabled.
 
----
+Missing values that remain after normalization are handled inside each model
+pipeline:
 
-### `preprocessing.py`
+- Logistic regression: numeric median imputation and categorical
+  most-frequent imputation, followed by scaling and one-hot encoding.
+- XGBoost and LightGBM: numeric median imputation and categorical
+  most-frequent imputation, followed by ordinal encoding.
+- Previously unseen categorical values are supported during prediction.
 
-Contains all preprocessing and feature engineering logic.
+The same normalization rules are applied when constructing the serving frame.
+This keeps training and online prediction inputs consistent.
 
-Examples include:
+## Train/test split
 
-- Filtering to the requested lead type passed from `train.py`
-- Missing value handling
-- Business default values
-- Target conversion
-- Feature preparation
+The split strategy is selected in `training.yaml`.
 
-No model training or prediction logic should exist in this module.
+### Random split
 
----
+The dataframe is shuffled using the configured random seed. Optional target
+stratification can preserve the overall win-rate distribution.
 
-### `models.py`
+### Time split
 
-Defines the machine learning models used by the project.
+The prepared dataframe is sorted by `created_at`. The newest configured
+fraction becomes the test set and the earlier rows become the training set.
 
-Currently this contains the baseline Logistic Regression model.
+The pipeline raises an error if the selected split produces an empty training
+or test dataset.
 
-As additional models are introduced, such as XGBoost or LightGBM, they can be added here without changing the rest of the training pipeline.
+## Model evaluation
 
----
-
-### `metrics.py`
-
-Computes numerical evaluation metrics for the trained model.
-
-Examples include:
+The held-out test set produces:
 
 - ROC AUC
 - PR AUC
-- Log Loss
-- Brier Score
-- Accuracy
-- Precision
-- Recall
-- F1 Score
-- Calibration Error
+- log loss
+- Brier score
+- accuracy
+- precision
+- recall
+- F1 score
+- observed win rate
+- average predicted win rate at historical bids
+- calibration error
+- average predicted win rate at recommended bids, when optimizer evaluation is
+  available
 
-This module focuses only on numerical evaluation and does not generate plots.
+The classification threshold used for accuracy, precision, recall, F1, and the
+confusion matrix is `0.5`.
 
----
+## Bid optimizer
 
-### `plots_and_reports.py`
-
-Generates all reports produced during training.
-
-This includes:
-
-Dataset summaries:
-
-- Feature statistics
-- Missing value summaries
-- Feature value distributions
-
-Model evaluation:
-
-- ROC Curve
-- Precision-Recall Curve
-- Calibration Curve
-- Probability Histogram
-- Confusion Matrix
-
-Bid optimization evaluation:
-
-- Expected profit improvement
-- Recommended bid changes
-- Predicted win-rate lift
-- Recommended CM distribution
-- Current vs recommended predicted win-rate scatter plot
-
-Output files include:
+The optimizer evaluates candidate bids from the configured minimum bid through:
 
 ```text
-model_evaluation/
+maximum bid = expected revenue * (1 - target CM)
+```
 
+Candidate bids are separated by the configured bid step. For each candidate:
+
+```text
+expected profit = predicted win probability * (expected revenue - bid)
+```
+
+The candidate with the largest expected profit is selected.
+
+Offline optimizer evaluation compares the historical bid with the recommended
+bid on held-out rows. It reports:
+
+- current and recommended total expected profit;
+- total and percentage expected-profit lift;
+- average predicted win rates at current and recommended bids;
+- average and median bid change;
+- percentages of bids increased, decreased, and unchanged;
+- average recommended contribution margin if the lead is won.
+
+These values are model-based offline estimates. They are not realized production
+results.
+
+## Reports
+
+Reports are written under the configured report root by lead type. Generated
+artifacts include:
+
+```text
 feature_summary.csv
 feature_value_counts.csv
+model_evaluation_summary.json
+optimizer_evaluation.csv                 # when optimizer evaluation is available
 roc_curve.png
 precision_recall_curve.png
 calibration_curve.png
 probability_histogram.png
 confusion_matrix.png
-optimizer_expected_profit_lift.png
-recommended_bid_change.png
-predicted_win_rate_lift.png
-recommended_cm_distribution.png
-current_vs_recommended_win_rate.png
-bid_optimizer_test_rows.csv
-model_evaluation_summary.json
+optimizer_expected_profit_lift.png       # when available
+recommended_bid_change.png               # when available
+recommended_cm_distribution.png          # when available
+current_vs_recommended_win_rate.png       # when available
 ```
 
-The `model_evaluation/` directory stores three types of outputs:
+`feature_summary.csv` includes feature type, missing count, missing percentage,
+number of unique values, mode, and numeric summary statistics where applicable.
+`feature_value_counts.csv` contains the most frequent values for discrete and
+categorical features.
 
-- **Dataset summaries**: `feature_summary.csv` and `feature_value_counts.csv` describe the raw data before cleaning.
-- **Model evaluation artifacts**: ROC, precision-recall, calibration, probability, and confusion-matrix outputs describe classifier quality.
-- **Bid optimizer artifacts**: optimizer plots and `bid_optimizer_test_rows.csv` describe the offline predicted behavior of recommended bids versus historical bids.
+## Model versioning and promotion
 
----
+Every completed training run saves an immutable model artifact and JSON
+manifest under the configured model directory. The manifest records:
 
-### `mlflow_utils.py`
+- model version and creation time;
+- feature columns;
+- model metrics;
+- optimizer summary;
+- training-data lineage;
+- model parameters;
+- promotion mode, eligibility, decision reason, and promotion status.
 
-Provides helper functions for logging training runs to MLflow.
+The serving model is identified by a `current.json` pointer for each lead type.
+Training compares a challenger with the currently-serving model when promotion
+evaluation is enabled. The currently-serving model is re-scored on the new
+run's held-out test set so the comparison uses the same rows.
 
-Responsibilities include:
+In manual mode, promote a saved version with:
 
-- Creating experiments
-- Starting runs
-- Logging parameters
-- Logging metrics
-- Uploading reports
-- Uploading trained models
-- Registering model versions
+```bash
+python -m smarthub.train_and_predict.registry promote \
+  --lead-type-name auto \
+  --version <model-version> \
+  --reason "approved after review"
+```
 
-Keeping all MLflow-related code in a single module keeps the training pipeline clean and easier to maintain.
+Promotion updates the selected version manifest and the serving pointer. The
+registry module also supports programmatic rollback to a previous saved
+version.
 
----
+## MLflow
 
-### `config.py`
+When MLflow logging is enabled, the training workflow logs:
 
-Stores project-wide configuration.
+- model parameters and selected features;
+- model evaluation metrics;
+- retained optimizer metrics;
+- lineage and configuration values;
+- report artifacts;
+- the fitted sklearn-compatible model;
+- an optional registered-model version.
 
-Examples include:
+The experiment artifact location must match the configured artifact root. The
+pipeline raises an error rather than silently writing an existing experiment to
+a different location.
 
-- Feature definitions
-- Target variable
-- Runtime training inputs such as `lead_type_id` are passed as script arguments, not hard-coded in `config.py`
-- Random seed
-- Bid optimization parameters
-- Model paths
-- Report paths
-- MLflow configuration
+## Hyperparameter search
 
-No implementation logic should be placed in this file.
+Manual Optuna search is available separately from the official training run:
 
----
+```bash
+python -m smarthub.train_and_predict.hyperparameter_search \
+  --lead-type-id 6 \
+  --model-type lightgbm
+```
 
-## Design Principles
+Optional arguments:
 
-The current organization follows several design principles:
+```text
+--version <training-table-version>
+--config <hyperparameter-search-yaml>
+```
 
-- **Single responsibility:** Each module is responsible for one well-defined task.
-- **Readability:** The training pipeline should be easy to follow without understanding every implementation detail.
-- **Reusability:** Common functionality, such as bid optimization and reporting, should be reusable across training and production prediction.
-- **Extensibility:** The structure should make it straightforward to introduce additional models, reports, evaluation metrics, or deployment methods.
-- **Reproducibility:** Training runs should be reproducible through fixed configuration and MLflow experiment tracking.
+The search writes:
 
-As the SmartHub platform grows, this folder is expected to evolve alongside it. The current layout should be viewed as a foundation rather than a final architecture.
+```text
+summary.json
+best_parameters.yaml
+```
+
+The generated YAML block is intended to be reviewed and copied into the normal
+training configuration. Hyperparameter search does not automatically replace
+the production training configuration or promote a model.
+
+## Prediction API
+
+Start the FastAPI application using the project deployment command or an ASGI
+server pointed at:
+
+```text
+smarthub.train_and_predict.predict:app
+```
+
+Endpoints:
+
+- `GET /health`: returns service status and the resolved model artifact.
+- `POST /recommend_bid`: validates lead and optimizer inputs, loads the serving
+  model, and returns the expected-profit-maximizing bid.
+
+Model resolution order is:
+
+1. `MODEL_URI` environment variable;
+2. explicitly pinned `prediction.active_model_version`;
+3. the currently-serving registry pointer.
+
+The request supplies `expected_revenue`, optimizer controls, and lead features.
+The API initializes the row with the minimum bid and then evaluates the complete
+candidate-bid grid.
+
+A sample request is available in `manual_api_check.py`.
+
+## Explainability
+
+`explain.py` is an optional, on-demand workflow and is not part of the live bid
+path. It currently supports LightGBM models and uses SHAP to identify the
+features that most affected one lead's prediction.
+
+SHAP contributions are calculated in the underlying model's log-odds space.
+The optional local LLM only converts the supplied numeric facts into plain
+language; it does not calculate the recommendation or model contribution.
+
+Heavy explainability dependencies are imported lazily so normal training and
+serving can run without the explainability extras installed.
+
+## Main modules
+
+- `train.py`: end-to-end training workflow and CLI.
+- `preprocessing.py`: training and serving input preparation.
+- `models.py`: sklearn-compatible model pipelines.
+- `metrics.py`: held-out model evaluation.
+- `optimizer.py`: candidate-bid generation and optimization.
+- `optimizer_evaluation.py`: offline optimizer comparison and summary.
+- `plots_and_reports.py`: report tables, plots, and saved summaries.
+- `registry.py`: immutable model versions, promotion, serving pointer, rollback.
+- `mlflow_utils.py`: MLflow experiment and artifact logging.
+- `hyperparameter_search.py`: manual Optuna search.
+- `predict.py`: serving model resolution and FastAPI endpoints.
+- `flow.py`: Prefect orchestration, artifacts, and notifications.
+- `explain.py`: optional LightGBM/SHAP explanation workflow.

@@ -1,13 +1,6 @@
-"""Prefect flow that trains the Anton model and runs the offline bid optimizer.
+"""Prefect orchestration for SmartHub model training.
 
-STEP 3 of the pipeline (after data-pull → build-features). One deployment, two
-schedules (auto / home). ``log_prints=True`` so every print() from the training
-pipeline (metrics tables, optimizer summary) lands in the Prefect run logs — you
-get maximum visibility. Failures are alerted to Slack via the shared
-``flow_failure_hook``; on success a rich Slack notification + a Prefect markdown
-artifact summarise the run.
-
-Requires the ``ml`` extra (scikit-learn, mlflow, matplotlib, joblib).
+This module runs training, publishes run summaries, and sends notifications.
 """
 
 from __future__ import annotations
@@ -18,11 +11,24 @@ from prefect.artifacts import create_markdown_artifact
 from smarthub.core import notifications
 from smarthub.feature_engineering import features as fe
 
-from . import train
+from . import config, train
 
 
 def _feature_breakdown(lead_type_id, feature_cols):
-    """Split the trained features into mandatory / optional-on / optional-off."""
+    """Summarize mandatory and optional features used by a model.
+
+    Inputs
+    ------
+    lead_type_id : int
+        SmartHub lead type identifier.
+    feature_cols : list[str]
+        Ordered model feature names.
+
+    Returns
+    -------
+    dict
+        Feature counts and optional-feature lists.
+    """
     feature_cols = list(feature_cols or [])
     mandatory = fe.mandatory_features(lead_type_id)
     optional_all = fe.optional_features(lead_type_id)
@@ -36,12 +42,26 @@ def _feature_breakdown(lead_type_id, feature_cols):
 
 
 @task(name="train-anton-model")
-def _train_task(lead_type_id, lead_type_name, version, register_mlflow):
-    """Run the full training + offline optimizer evaluation for one lead type."""
+def _train_task(lead_type_id, version, register_mlflow):
+    """Run model training and offline optimizer evaluation for one lead type.
+
+    Inputs
+    ------
+    lead_type_id : int
+        SmartHub lead type identifier.
+    version : str | None
+        Optional training-table or model version identifier.
+    register_mlflow : bool
+        Whether to log and register the run in MLflow.
+
+    Returns
+    -------
+    dict
+        Training workflow result.
+    """
     logger = get_run_logger()
     return train.run_training(
         lead_type_id=lead_type_id,
-        lead_type_name=lead_type_name,
         version=version,
         register_mlflow=register_mlflow,
         log=logger,
@@ -55,16 +75,27 @@ def _train_task(lead_type_id, lead_type_name, version, register_mlflow):
 )
 def train_flow(
     lead_type_id: int = 6,
-    lead_type_name: str = "auto",
     version: str | None = None,
     register_mlflow: bool = True,
 ) -> dict:
-    """Train + evaluate + score (offline optimizer) one lead type's model.
+    """Run the Prefect model-training flow for one lead type.
 
-    Depends on STEP 2 (build-features): if no training table exists yet, the
-    load fails and ``flow_failure_hook`` sends a "run build-features first" alert.
+    Inputs
+    ------
+    lead_type_id : int
+        SmartHub lead type identifier.
+    version : str | None
+        Optional training-table or model version identifier.
+    register_mlflow : bool
+        Whether to log and register the run in MLflow.
+
+    Returns
+    -------
+    dict
+        Completed flow summary.
     """
     logger = get_run_logger()
+    lead_type_name = config.lead_type_name(lead_type_id)
     logger.info(
         "STEP 3 train-model starting: lead_type=%s (%s), version=%s, mlflow=%s",
         lead_type_name,
@@ -73,7 +104,7 @@ def train_flow(
         register_mlflow,
     )
 
-    result = _train_task(lead_type_id, lead_type_name, version, register_mlflow)
+    result = _train_task(lead_type_id, version, register_mlflow)
 
     m = result["metrics"]
     opt = result["optimizer_summary"] or {}
@@ -98,10 +129,33 @@ def train_flow(
 
 
 def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
-    """Publish a Prefect markdown artifact summarising the training run."""
+    """Publish a Prefect markdown artifact for a training run.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    lead_type_id : int
+        SmartHub lead type identifier.
+    result : dict
+        Training-run result dictionary.
+    m : dict
+        Model evaluation metrics.
+    opt : dict
+        Optimizer summary metrics.
+    """
     prep = result["prep_summary"]
 
     def _f(value, fmt="{:.4f}"):
+        """Execute  f.
+
+        Inputs
+        ------
+        value : Any
+            Value to process.
+        fmt : str
+            Format string used for display.
+        """
         try:
             return fmt.format(float(value))
         except (TypeError, ValueError):
@@ -110,10 +164,33 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
     lineage = result.get("lineage", {})
     fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
     promoted = result.get("promoted")
-    status_label = (
-        "✅ PROMOTED to currently-serving"
-        if promoted
-        else "⏸ HELD (currently-serving model unchanged)"
+    eligible = result.get("promotion_eligible")
+    promotion_mode = result.get("promotion_mode")
+    if promotion_mode == "disabled":
+        status_label = "⏭ PROMOTION EVALUATION DISABLED"
+    elif promoted:
+        status_label = "✅ PROMOTED to currently-serving"
+    elif promotion_mode == "manual" and eligible:
+        status_label = "🟡 ELIGIBLE — awaiting manual promotion"
+    elif eligible:
+        status_label = "⏸ ELIGIBLE — promotion execution skipped"
+    else:
+        status_label = "⏸ NOT ELIGIBLE — currently-serving model unchanged"
+    total_profit = (
+        f"{_f(opt.get('current_bid_total_expected_profit'))} → "
+        f"{_f(opt.get('recommended_bid_total_expected_profit'))}"
+    )
+    avg_win_rate = (
+        f"{_f(opt.get('avg_current_bid_predicted_win_rate'))} → "
+        f"{_f(opt.get('avg_recommended_bid_predicted_win_rate'))}"
+    )
+    bid_direction = (
+        f"{_f(opt.get('bid_increase_pct'), '{:.2f}%')} / "
+        f"{_f(opt.get('bid_decrease_pct'), '{:.2f}%')} / "
+        f"{_f(opt.get('bid_unchanged_pct'), '{:.2f}%')}"
+    )
+    bid_change = (
+        f"{_f(opt.get('avg_bid_change'))} / " f"{_f(opt.get('median_bid_change'))}"
     )
     md = f"""# Train model — {lead_type_name}
 
@@ -124,6 +201,8 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 | --- | --- |
 | lead_type_id | {lead_type_id} |
 | model version | `{result.get('model_version')}` |
+| promotion mode | {promotion_mode} |
+| promotion eligible | {eligible} |
 | model | {lineage.get('model_type')} (calibrated={lineage.get('calibrated')}) |
 | rows trained | {prep.get('training_rows')} |
 | observed win rate | {_f(prep.get('win_rate'))} |
@@ -150,10 +229,13 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 | metric | value |
 | --- | --- |
 | rows evaluated | {opt.get('optimizer_rows', '—')} |
+| expected-profit lift | {_f(opt.get('expected_profit_lift_total'))} |
 | expected-profit lift % | {_f(opt.get('expected_profit_lift_pct'), '{:.2%}')} |
+| total expected profit: current → recommended | {total_profit} |
+| avg predicted win rate: current → recommended | {avg_win_rate} |
+| avg / median bid change | {bid_change} |
+| bid up / down / same | {bid_direction} |
 | avg recommended CM if won | {_f(opt.get('avg_recommended_bid_cm_if_won'))} |
-| bid up / down / same | {opt.get('bid_increase_count', '—')} / \
-{opt.get('bid_decrease_count', '—')} / {opt.get('bid_unchanged_count', '—')} |
 """
     create_markdown_artifact(
         key=f"train-model-{lead_type_name.strip().lower()}",
@@ -163,14 +245,32 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 
 
 def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
-    """Send the Slack 'training completed' notification, grouped for readability.
+    """Send the successful training-run notification.
 
-    Leads with the promotion decision, then groups the rest under titled
-    sections (Model / Performance / Bid optimizer / Features) instead of one
-    long flat field list.
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    lead_type_id : int
+        SmartHub lead type identifier.
+    result : dict
+        Training-run result dictionary.
+    m : dict
+        Model evaluation metrics.
+    opt : dict
+        Optimizer summary metrics.
     """
 
     def _f(value, fmt="{:.4f}"):
+        """Execute  f.
+
+        Inputs
+        ------
+        value : Any
+            Value to process.
+        fmt : str
+            Format string used for display.
+        """
         try:
             return fmt.format(float(value))
         except (TypeError, ValueError):
@@ -179,12 +279,23 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     lineage = result.get("lineage", {})
     fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
     promoted = result.get("promoted")
-    icon = ":white_check_mark:" if promoted else ":pause_button:"
-    state = (
-        "Promoted to serving"
-        if promoted
-        else "Held — currently-serving model unchanged"
-    )
+    eligible = result.get("promotion_eligible")
+    promotion_mode = result.get("promotion_mode")
+    if promotion_mode == "disabled":
+        icon = ":fast_forward:"
+        state = "Promotion evaluation disabled"
+    elif promoted:
+        icon = ":white_check_mark:"
+        state = "Promoted to serving"
+    elif promotion_mode == "manual" and eligible:
+        icon = ":large_yellow_circle:"
+        state = "Eligible — awaiting manual promotion"
+    elif eligible:
+        icon = ":pause_button:"
+        state = "Eligible — promotion execution skipped"
+    else:
+        icon = ":pause_button:"
+        state = "Not eligible — serving model unchanged"
     headline = (
         f"{icon} *{state}* · `{result.get('model_version')}`\n"
         f"{result.get('promotion_reason', '—')}"
@@ -194,13 +305,15 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
         f"Features · {fb['total']} "
         f"({fb['n_mandatory']} mandatory + {len(fb['optional_on'])} optional)"
     )
-    model_label = f"{lineage.get('model_type')} (cal={lineage.get('calibrated')})"
     groups = [
         (
             "Model",
             {
-                "Model": model_label,
+                "Model": f"{lineage.get('model_type')} "
+                f"(cal={lineage.get('calibrated')})",
                 "Rows trained": result["prep_summary"].get("training_rows"),
+                "Promotion mode": promotion_mode,
+                "Promotion eligible": eligible,
                 "Data range": (
                     f"{lineage.get('data_min_created_at')} → "
                     f"{lineage.get('data_max_created_at')}"
@@ -220,7 +333,28 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
         (
             "Bid optimizer (predicted)",
             {
-                "Profit lift %": _f(opt.get("expected_profit_lift_pct"), "{:.2%}"),
+                "Profit lift": _f(opt.get("expected_profit_lift_total")),
+                "Profit lift %": _f(
+                    opt.get("expected_profit_lift_pct"),
+                    "{:.2%}",
+                ),
+                "Expected profit": (
+                    f"{_f(opt.get('current_bid_total_expected_profit'))} → "
+                    f"{_f(opt.get('recommended_bid_total_expected_profit'))}"
+                ),
+                "Avg win rate": (
+                    f"{_f(opt.get('avg_current_bid_predicted_win_rate'))} → "
+                    f"{_f(opt.get('avg_recommended_bid_predicted_win_rate'))}"
+                ),
+                "Avg / median bid change": (
+                    f"{_f(opt.get('avg_bid_change'))} / "
+                    f"{_f(opt.get('median_bid_change'))}"
+                ),
+                "Bid up/down/same": (
+                    f"{_f(opt.get('bid_increase_pct'), '{:.2f}%')} / "
+                    f"{_f(opt.get('bid_decrease_pct'), '{:.2f}%')} / "
+                    f"{_f(opt.get('bid_unchanged_pct'), '{:.2f}%')}"
+                ),
                 "Avg recommended CM": _f(opt.get("avg_recommended_bid_cm_if_won")),
             },
         ),
@@ -242,4 +376,4 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
 
 
 if __name__ == "__main__":
-    train_flow(lead_type_id=6, lead_type_name="auto")
+    train_flow(lead_type_id=6)
