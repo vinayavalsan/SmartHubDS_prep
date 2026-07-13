@@ -21,7 +21,7 @@ If you run a stage before its input exists, it fails fast with a clear
 Install the package with the extras needed for all three stages:
 
 ```bash
-pip install -e ".[orchestration,ml]"
+pip install -e ".[orchestration,ml,validation]"
 ```
 
 This registers three console scripts:
@@ -92,13 +92,18 @@ Options:
 
 `smarthub-pull --help` lists them all.
 
+Every pull runs **data validation** on the fetched batch (warn + report only —
+it flags bad rows and missing-value patterns, never drops/fixes them or blocks
+the pull). The CLI logs a summary; the scheduled flow also writes a
+`data-quality-<type>` Prefect artifact and a "Data quality" section in the Slack
+message. Tune it in `config/smarthub.ini [validation]`.
+
 ---
 
 ## 3. Stage 2 — build-features
 
 Rebuilds the leakage-safe **training table** for one lead type from the
-accumulated leads. Runs the flow locally (writes the same Prefect artifact +
-Slack notification as the scheduled run).
+accumulated leads. Runs the Prefect-free core in-process (no worker/server).
 
 ```bash
 smarthub-build-features --lead-type-id 6            # auto (default)
@@ -275,4 +280,4 @@ registry.rollback("auto", to_version="v1_2026-07-01T050000Z")  # a specific one
   currently-serving model on ROC AUC / profit. Expected during early data churn;
   the previous model keeps serving. Force-serve a version with `MODEL_URI` or the
   `active_model_version` pin if needed.
-- **Console script not found** — re-run `pip install -e ".[orchestration,ml]"`.
+- **Console script not found** — re-run `pip install -e ".[orchestration,ml,validation]"`.

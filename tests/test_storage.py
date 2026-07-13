@@ -37,6 +37,40 @@ def test_duckdb_upsert_updates_in_place(tmp_path):
     assert len(out) == 3
 
 
+def test_duckdb_read_projects_columns(tmp_path):
+    db = tmp_path / "s.duckdb"
+    storage.append_duckdb(
+        _frame([1, 2], ["true", "false"], ["2026-06-20 02:00"] * 2), path=db
+    )
+    # Ask for a subset (plus a column that doesn't exist -> silently ignored).
+    out = storage.read_duckdb_table(path=db, columns=["id", "won", "nope"])
+    assert list(out.columns) == ["id", "won"]      # projected; missing col dropped
+    assert len(out) == 2
+
+
+def test_duckdb_read_columns_none_returns_all(tmp_path):
+    db = tmp_path / "s.duckdb"
+    storage.append_duckdb(_frame([1], ["true"], ["2026-06-20 02:00"]), path=db)
+    out = storage.read_duckdb_table(path=db, columns=None)
+    assert {"id", "won", "created_at"}.issubset(out.columns)
+
+
+def test_duckdb_window_projects_columns(tmp_path):
+    db = tmp_path / "s.duckdb"
+    df = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "created_at": pd.to_datetime(["2026-06-01", "2026-06-20"]),
+            "won": ["true", "false"],
+        }
+    )
+    storage.append_duckdb(df, path=db)
+    # Project to just id; window filter still works on the unselected created_at.
+    out = storage.read_duckdb_window(days=5, path=db, columns=["id"])
+    assert list(out.columns) == ["id"]
+    assert out["id"].tolist() == [2]               # only the recent row
+
+
 def test_duckdb_window(tmp_path):
     db = tmp_path / "s.duckdb"
     df = pd.DataFrame(

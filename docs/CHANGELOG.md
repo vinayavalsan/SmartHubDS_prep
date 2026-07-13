@@ -3,6 +3,39 @@
 
 ## 2026-07-09 (later)
 
+### Fix: build-features OOM (SIGKILL -9) — lean reads + worker memory
+- **Column-projected storage reads.** `read_duckdb_table` / `read_duckdb_window`
+  / `read_parquet_dataset` / `load_leads_raw` / `load_window_raw` take an
+  optional `columns=`; build-features now requests only the ~42 raw columns
+  `build_training_table` actually consumes (from `PRE_BID_FEATURES` + time/label
+  cols), dropping ~12 wide unused ones (`naics_code`, `sic_code`,
+  `health_conditions`, `life_*`, `annual_revenue`, outcome cols) *before* they
+  enter pandas. Output table unchanged (those columns were discarded anyway).
+  The DuckDB window still filters rows in SQL, so both column and row pushdown
+  keep peak memory down as the store grows (currently ~800k rows).
+- **Worker memory limit.** `docker-compose.prefect.yml` sets `mem_limit: 4g` /
+  `mem_reservation: 2g` on the worker (a too-low cap surfaced as flow runs
+  killed with exit -9). The Docker Desktop VM must have at least this allocated.
+
+### Data validation on the pull (D1)
+- New `smarthub/validation` package — validates each freshly-pulled
+  `lead_pings` batch, **warn + report only** (flags bad rows + catalogues
+  missing-value patterns; never drops/imputes/caps, never blocks the pull).
+  pandera for schema/range/domain rules; a pandas layer for cross-field
+  integrity and the null/blank catalogue. Detect-only, never mutates the frame.
+- Checks: schema drift, `id` uniqueness, numeric ranges (`age` 1–120,
+  `bid`/`exp_rev` ≥ 0, vehicle/driver/claim counts), categorical domains
+  (`state`/`gender`/`marital_status`), boolean-ish domains, cross-field rules
+  (`current_carrier` while `insured=false`; `won=true` without a bid;
+  `erred`+bid; lead-type completeness), and per-column missing rates. Batch
+  metrics include `pst_hour` populated %, `exp_rev` coverage, age-implausible
+  rate, and `won=false` count (should be 0).
+- Wired into the data-pull flow (per-lead-type `data-quality-<type>` Prefect
+  artifact + a "Data quality" group in the Slack notification) and the
+  `smarthub-pull` CLI (log summary). Threshold in
+  `config/smarthub.ini [validation] high_missing_threshold`. New `validation`
+  extra (pandera); worker image installs it; degrades gracefully if absent.
+
 ### CI/CD + quality gates
 - **GitHub Actions** (`.github/workflows/ci.yml`) — runs `flake8` + `pytest` on
   every push / PR across Python 3.11 and 3.12. Installs `.[dev]` + `joblib`

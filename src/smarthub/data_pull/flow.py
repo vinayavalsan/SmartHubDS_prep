@@ -19,11 +19,12 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 from prefect.variables import Variable
 
-from smarthub.core import storage
-from smarthub.core import notifications
+from smarthub.core import notifications, storage, task_config
 from smarthub.core.config import PullSettings, StorageSettings
 from smarthub.data_pull.pull import fetch_leads
 from smarthub.data_pull.windowing import compute_pull_window, format_dt, parse_dt
+from smarthub.validation import report as vreport
+from smarthub.validation import validate_leads
 
 WATERMARK_PREFIX = "smarthub_last_pull_timestamp"
 
@@ -74,6 +75,30 @@ def persist(df: pd.DataFrame) -> dict:
     return storage.save_pull(df, StorageSettings.from_env())
 
 
+@task(name="validate-leads")
+def validate(df: pd.DataFrame, lead_type_name: str):
+    """Validate the freshly-pulled batch (warn + report only; never gates).
+
+    Publishes a per-lead-type data-quality Prefect artifact and returns the
+    report so the success notification can carry a summary. Detect-only — it
+    does not drop/fix rows, and any error here must not fail the pull.
+    """
+    logger = get_run_logger()
+    threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
+    try:
+        rep = validate_leads(df, high_missing_threshold=threshold)
+    except Exception as exc:  # noqa: BLE001 - validation must never break a pull
+        logger.warning("Data validation skipped (error): %s", exc)
+        return None
+    vreport.log_summary(rep, logger)
+    create_markdown_artifact(
+        key=f"data-quality-{lead_type_name.strip().lower()}",
+        markdown=vreport.to_markdown(rep, lead_type_name),
+        description=f"Data quality for the latest {lead_type_name} pull",
+    )
+    return rep
+
+
 @task
 def update_watermark(df: pd.DataFrame, var_name: str, window_max: str) -> str:
     """Advance this lead type's watermark to the latest `created_at` pulled.
@@ -114,6 +139,7 @@ def data_pull_flow(
 
     previous_watermark = Variable.get(var_name, default="(none — first run)")
     df = fetch(min_s, max_s, lead_type_id, with_expected_revenue, selected_only)
+    quality = validate(df, lead_type_name)
     result = persist(df)
     watermark = update_watermark(df, var_name, max_s)
 
@@ -132,14 +158,14 @@ def data_pull_flow(
     )
     _notify_success(
         lead_type_name, lead_type_id, min_s, max_s, df, result,
-        previous_watermark, watermark, started_at,
+        previous_watermark, watermark, started_at, quality,
     )
     return {"lead_type": lead_type_name, "rows": int(len(df)), "watermark": watermark}
 
 
 def _notify_success(
     lead_type_name, lead_type_id, min_s, max_s, df, result,
-    prev_wm, new_wm, started_at,
+    prev_wm, new_wm, started_at, quality=None,
 ) -> None:
     """Send the Slack 'data pull completed' notification, grouped for readability.
 
@@ -169,6 +195,8 @@ def _notify_success(
             "Finished": _utc_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
         }),
     ]
+    if quality is not None:
+        groups.append(vreport.slack_group(quality))
     notifications.notify_success_grouped(
         "data-pull",
         subject=f"{lead_type_name} ({lead_type_id})",

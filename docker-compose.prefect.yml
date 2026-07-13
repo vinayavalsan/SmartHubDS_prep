@@ -49,6 +49,12 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
+    # Feature builds load a windowed slice of lead_pings into pandas; give the
+    # worker enough headroom (a too-low cap shows up as flow runs killed with
+    # SIGKILL / exit -9). Raise if the accumulated store grows large. The
+    # Docker Desktop VM must have at least this much RAM allocated.
+    mem_limit: 4g
+    mem_reservation: 2g
     depends_on:
       prefect-server:
         condition: service_healthy

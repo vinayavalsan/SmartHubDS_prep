@@ -129,9 +129,28 @@ def run(
         selected_only=selected_only,
         lead_type_id=lead_type_id,
     )
+    _validate(leads_df)
     results = storage.save_pull(leads_df, StorageSettings.from_env())
     logger.info("Persisted pull: %s", results)
     return leads_df
+
+
+def _validate(leads_df: pd.DataFrame) -> None:
+    """Run data validation on the fetched batch (warn + report only).
+
+    Detect-only: logs a summary and never drops rows or fails the pull.
+    """
+    try:
+        from smarthub.core import task_config
+        from smarthub.validation import report as vreport
+        from smarthub.validation import validate_leads
+
+        threshold = task_config.get_float(
+            "validation", "high_missing_threshold", 0.5
+        )
+        vreport.log_summary(validate_leads(leads_df, threshold), logger)
+    except Exception as exc:  # noqa: BLE001 - validation must never break a pull
+        logger.warning("Data validation skipped (error): %s", exc)
 
 
 def main(argv: list[str] | None = None) -> int:

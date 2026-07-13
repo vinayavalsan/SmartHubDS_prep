@@ -21,10 +21,32 @@ import pandas as pd
 
 from smarthub.core import io, storage
 from smarthub.core.config import StorageSettings, training_window_days
+from smarthub.feature_engineering import features as fe
 from smarthub.feature_engineering.features import build_training_table
 from smarthub.feature_engineering.features import lead_type_name as _lead_type_name
 
 logger = logging.getLogger(__name__)
+
+
+def _required_raw_columns() -> list[str]:
+    """Raw columns ``build_training_table`` actually consumes.
+
+    Projecting the storage read to just these keeps peak memory down — the wide
+    unused columns (naics/sic codes, life_*, health_conditions, …) are dropped
+    from the training table anyway, so they never need to enter pandas.
+    """
+    cols = list(fe.PRE_BID_FEATURES) + list(fe.TIME_FEATURES) + [
+        "id", "created_at", "pst_date", "pst_hour",
+        "won", fe.DECISION_COLUMN, "erred", "exp_rev", fe.REVENUE_COLUMN,
+    ]
+    seen: set[str] = set()
+    ordered = []
+    for c in cols:
+        if c not in seen:
+            seen.add(c)
+            ordered.append(c)
+    return ordered
+
 
 # Shown in the notification/artifact so the three day metrics aren't confused.
 _DAY_DEFS = (
@@ -40,14 +62,17 @@ def _pct(value) -> str:
 def _load_raw(window: int | None, log: logging.Logger) -> pd.DataFrame:
     """Load accumulated leads from storage (full table or recent window).
 
-    Raises ``storage.StorageError`` with the standard "run data-pull first"
-    message when there's no data yet (STEP 1 hasn't run).
+    Reads only the columns the training build needs (column projection) to keep
+    peak memory low on the wide ``lead_pings`` table. Raises
+    ``storage.StorageError`` with the standard "run data-pull first" message when
+    there's no data yet (STEP 1 hasn't run).
     """
     settings = StorageSettings.from_env()
+    columns = _required_raw_columns()
     try:
         if window and window > 0:
-            return storage.load_window_raw(settings, window)
-        return storage.load_leads_raw(settings)
+            return storage.load_window_raw(settings, window, columns=columns)
+        return storage.load_leads_raw(settings, columns=columns)
     except storage.StorageError as exc:
         log.error(storage.NO_DATA_MESSAGE)
         raise storage.StorageError(storage.NO_DATA_MESSAGE) from exc

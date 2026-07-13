@@ -190,14 +190,32 @@ def append_duckdb(
         con.close()
 
 
+def _projection(con, table: str, columns) -> str:
+    """SQL column list for a projected read; ``*`` when no (valid) columns given.
+
+    Only columns that actually exist in the table are selected, so a caller can
+    pass a superset without erroring on columns that were never pulled.
+    """
+    if not columns:
+        return "*"
+    have = set(_table_columns(con, table))
+    picked = [c for c in columns if c in have]
+    if not picked:
+        return "*"
+    return ", ".join(f'"{c}"' for c in picked)
+
+
 def read_duckdb_table(
-    table: str = LEADS_TABLE, path: str | os.PathLike[str] | None = None
+    table: str = LEADS_TABLE,
+    path: str | os.PathLike[str] | None = None,
+    columns: list[str] | None = None,
 ) -> pd.DataFrame:
     con = _connect(path)
     try:
         if not _table_exists(con, table):
             raise StorageError(f"Table '{table}' not found in {duckdb_path(path)}.")
-        return con.execute(f'SELECT * FROM "{table}"').df()
+        cols_sql = _projection(con, table, columns)
+        return con.execute(f'SELECT {cols_sql} FROM "{table}"').df()
     finally:
         con.close()
 
@@ -207,17 +225,24 @@ def read_duckdb_window(
     table: str = LEADS_TABLE,
     time_col: str = "created_at",
     path: str | os.PathLike[str] | None = None,
+    columns: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Rows within the most recent ``days``, anchored on ``max(time_col)``."""
+    """Rows within the most recent ``days``, anchored on ``max(time_col)``.
+
+    ``columns`` projects the SELECT (filtering still uses ``time_col`` even if
+    it isn't selected) — this keeps peak memory down on wide tables.
+    """
     con = _connect(path)
     try:
         if not _table_exists(con, table):
             raise StorageError(f"Table '{table}' not found in {duckdb_path(path)}.")
+        cols_sql = _projection(con, table, columns)
         latest = con.execute(f'SELECT max("{time_col}") FROM "{table}"').fetchone()[0]
         if latest is None:
-            return con.execute(f'SELECT * FROM "{table}" LIMIT 0').df()
+            return con.execute(f'SELECT {cols_sql} FROM "{table}" LIMIT 0').df()
         return con.execute(
-            f'SELECT * FROM "{table}" WHERE "{time_col}" >= ? - INTERVAL (?) DAY',
+            f'SELECT {cols_sql} FROM "{table}" '
+            f'WHERE "{time_col}" >= ? - INTERVAL (?) DAY',
             [latest, days],
         ).df()
     finally:
@@ -293,13 +318,27 @@ def append_parquet(
     return written
 
 
-def read_parquet_dataset(root: str | os.PathLike[str]) -> pd.DataFrame:
-    """Read and concatenate every per-day Parquet file under ``root``."""
+def read_parquet_dataset(
+    root: str | os.PathLike[str], columns: list[str] | None = None
+) -> pd.DataFrame:
+    """Read and concatenate every per-day Parquet file under ``root``.
+
+    ``columns`` projects the read (only those present are loaded), lowering
+    peak memory on wide datasets.
+    """
     root_path = paths.resolve(root)
     files = sorted(root_path.glob("*/*/*.parquet"))
     if not files:
         raise StorageError(f"No Parquet files found under {root_path}.")
-    return pd.concat((pd.read_parquet(f) for f in files), ignore_index=True)
+
+    def _read(f):
+        if not columns:
+            return pd.read_parquet(f)
+        available = set(pd.read_parquet(f, columns=[]).columns)
+        picked = [c for c in columns if c in available]
+        return pd.read_parquet(f, columns=picked or None)
+
+    return pd.concat((_read(f) for f in files), ignore_index=True)
 
 
 def parquet_exists(root: str | os.PathLike[str]) -> bool:
@@ -350,21 +389,28 @@ def save_pull(df: pd.DataFrame, settings: StorageSettings) -> dict[str, object]:
     return results
 
 
-def load_leads_raw(settings: StorageSettings) -> pd.DataFrame:
-    """Load the full accumulated leads frame from the preferred backend."""
+def load_leads_raw(
+    settings: StorageSettings, columns: list[str] | None = None
+) -> pd.DataFrame:
+    """Load the full accumulated leads frame from the preferred backend.
+
+    ``columns`` projects the read (only needed columns) to keep peak memory low.
+    """
     if settings.use_duckdb and duckdb_exists(path=settings.duckdb_path):
-        return read_duckdb_table(path=settings.duckdb_path)
+        return read_duckdb_table(path=settings.duckdb_path, columns=columns)
     if settings.use_parquet and parquet_exists(settings.parquet_dir):
-        return read_parquet_dataset(settings.parquet_dir)
+        return read_parquet_dataset(settings.parquet_dir, columns=columns)
     raise StorageError(NO_DATA_MESSAGE)
 
 
-def load_window_raw(settings: StorageSettings, days: int) -> pd.DataFrame:
+def load_window_raw(
+    settings: StorageSettings, days: int, columns: list[str] | None = None
+) -> pd.DataFrame:
     """Load the most recent ``days`` of leads from the preferred backend."""
     if settings.use_duckdb and duckdb_exists(path=settings.duckdb_path):
-        return read_duckdb_window(days, path=settings.duckdb_path)
+        return read_duckdb_window(days, path=settings.duckdb_path, columns=columns)
     if settings.use_parquet and parquet_exists(settings.parquet_dir):
-        df = read_parquet_dataset(settings.parquet_dir)
+        df = read_parquet_dataset(settings.parquet_dir, columns=columns)
         ts = pd.to_datetime(df["created_at"], errors="coerce")
         cutoff = ts.max() - pd.Timedelta(days=days)
         return df[ts >= cutoff]

@@ -1,0 +1,212 @@
+"""Validation rules: expected schema, per-column domains/ranges, cross-field.
+
+Two layers:
+- ``leads_schema()`` builds a **pandera** DataFrameSchema for the per-column
+  declarative rules (dtype coercion, numeric ranges, categorical domains,
+  ``id`` uniqueness). pandera is imported lazily so this module still imports
+  (and the pure-pandas checks below still run) if pandera isn't installed.
+- The pure-pandas functions (``missing_rates``, ``cross_field_checks``,
+  ``batch_metrics``) cover what pandera doesn't do cleanly: null/blank
+  cataloguing, cross-field integrity, and batch quality metrics.
+
+Everything here is detect-only; nothing mutates the data.
+"""
+
+from __future__ import annotations
+
+import pandas as pd
+
+from smarthub.data_pull import models
+
+# Columns the pull is expected to produce (drives schema-drift detection).
+EXPECTED_COLUMNS: tuple[str, ...] = tuple(c.key for c in models.LEADS_COLUMNS)
+
+# --- Domains ----------------------------------------------------------------
+US_STATES = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC", "PR", "GU", "VI", "AS", "MP",
+}
+GENDER_DOMAIN = {"Male", "Female", "Non-binary"}
+MARITAL_DOMAIN = {"Single", "Married", "Divorced", "Widowed"}
+# Accepted tokens for boolean-ish string columns (compared lower-cased).
+BOOL_TOKENS = {"true", "false", "t", "f", "1", "0", "yes", "no", "y", "n"}
+# Boolean-ish columns whose values should fall in BOOL_TOKENS.
+BOOLISH_COLUMNS = [
+    "insured", "home_owner", "dui", "sr22_required",
+    "pnc_bundle", "military_affiliation", "accepted",
+]
+
+# Plausible numeric ranges (min, max), inclusive. Anything outside is flagged.
+NUMERIC_RANGES = {
+    "age": (1, 200),
+    "num_vehicles": (0, 12),
+    "num_drivers": (0, 6),
+    "num_auto_violations": (0, 20),
+    "num_auto_accidents": (0, 20),
+    "num_auto_claims": (0, 20),
+    "num_home_claims": (0, 20),
+    "num_dependents": (0, 15),
+    "continuous_coverage_months": (0, 600),
+}
+# Columns that must simply be non-negative when present.
+NON_NEGATIVE = [
+    "bid", "exp_rev", "rev", "total_listings", "accepted_listings",
+    "household_income", "annual_revenue", "life_coverage_amount",
+    "num_employees", "response_ms",
+]
+
+
+def leads_schema():
+    """Build the pandera schema for per-column rules. Lazy pandera import.
+
+    ``required=False`` everywhere (a column may be absent — that's handled by
+    schema-drift detection, not here) and ``coerce=True`` so string numerics are
+    read as numbers. ``strict=False`` so extra columns don't error.
+    """
+    from pandera.pandas import Check, Column, DataFrameSchema
+
+    cols: dict = {
+        "id": Column(nullable=False, required=False, unique=True),
+        "state": Column(
+            str, Check.isin(US_STATES), nullable=True, required=False
+        ),
+        "gender": Column(
+            str, Check.isin(GENDER_DOMAIN), nullable=True, required=False
+        ),
+        "marital_status": Column(
+            str, Check.isin(MARITAL_DOMAIN), nullable=True, required=False
+        ),
+    }
+    for col, (lo, hi) in NUMERIC_RANGES.items():
+        cols[col] = Column(
+            float, Check.in_range(lo, hi), nullable=True,
+            required=False, coerce=True,
+        )
+    for col in NON_NEGATIVE:
+        cols[col] = Column(
+            float, Check.ge(0), nullable=True, required=False, coerce=True,
+        )
+    return DataFrameSchema(cols, strict=False, coerce=False)
+
+
+# --- Pure-pandas helpers ----------------------------------------------------
+
+
+def _null_or_blank(series: pd.Series) -> pd.Series:
+    """Boolean mask: NaN/None, or (for text) empty/whitespace-only strings."""
+    if series.dtype == object or pd.api.types.is_string_dtype(series):
+        stripped = series.astype("string").str.strip()
+        return stripped.isna() | (stripped == "")
+    return series.isna()
+
+
+def _lower(series: pd.Series) -> pd.Series:
+    return series.astype("string").str.strip().str.lower()
+
+
+def missing_rates(df: pd.DataFrame) -> dict[str, float]:
+    """Null/blank rate per column (0..1)."""
+    n = len(df)
+    if not n:
+        return {c: 0.0 for c in df.columns}
+    return {c: float(_null_or_blank(df[c]).mean()) for c in df.columns}
+
+
+def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
+    """Count rows violating cross-field integrity rules. Detect-only."""
+    n = len(df)
+    out: dict[str, int] = {}
+    if not n:
+        return out
+
+    def present(col):
+        return col in df.columns
+
+    # current_carrier populated while insured is false (Kiran: bad data).
+    if present("current_carrier") and present("insured"):
+        cc = ~_null_or_blank(df["current_carrier"])
+        not_insured = _lower(df["insured"]).isin({"false", "f", "0", "no", "n"})
+        out["current_carrier_when_not_insured"] = int((cc & not_insured).sum())
+
+    bid = pd.to_numeric(df["bid"], errors="coerce") if present("bid") else None
+    won = _lower(df["won"]) if present("won") else None
+
+    # won == true but no bid placed.
+    if bid is not None and won is not None:
+        out["won_true_without_bid"] = int(((won == "true") & (bid <= 0)).sum())
+
+    # erred == true but a bid was placed (should have short-circuited).
+    if present("erred") and bid is not None:
+        erred = _lower(df["erred"]).isin({"true", "t", "1", "yes", "y"})
+        out["erred_with_bid"] = int((erred & (bid > 0)).sum())
+
+    # accepted == true but won is null/blank.
+    if present("accepted") and won is not None:
+        accepted = _lower(df["accepted"]).isin({"true", "t", "1", "yes", "y"})
+        out["accepted_but_won_null"] = int((accepted & (won == "")).sum())
+
+    # Lead-type completeness.
+    if present("lead_type_id"):
+        lt = pd.to_numeric(df["lead_type_id"], errors="coerce")
+        if present("num_vehicles"):
+            miss_v = _null_or_blank(df["num_vehicles"])
+            out["auto_missing_num_vehicles"] = int(((lt == 6) & miss_v).sum())
+        if present("home_property_type"):
+            miss_h = _null_or_blank(df["home_property_type"])
+            out["home_missing_property_type"] = int(((lt == 1) & miss_h).sum())
+
+    return out
+
+
+def _rate(mask_sum: int, n: int) -> float:
+    return float(mask_sum / n) if n else 0.0
+
+
+def batch_metrics(df: pd.DataFrame) -> dict:
+    """Headline quality metrics for the batch (rates/counts)."""
+    n = len(df)
+    m: dict = {"rows": n}
+    if not n:
+        return m
+
+    if "erred" in df.columns:
+        erred = _lower(df["erred"]).isin({"true", "t", "1", "yes", "y"})
+        m["erred_rate"] = _rate(int(erred.sum()), n)
+    if "bid" in df.columns:
+        bid = pd.to_numeric(df["bid"], errors="coerce")
+        m["bid_zero_rate"] = _rate(int((bid <= 0).sum()), n)
+    if "exp_rev" in df.columns:
+        er = pd.to_numeric(df["exp_rev"], errors="coerce")
+        m["exp_rev_coverage"] = _rate(int((er > 0).sum()), n)
+    if "pst_hour" in df.columns:
+        m["pst_hour_populated"] = _rate(
+            int((~_null_or_blank(df["pst_hour"])).sum()), n
+        )
+    if "age" in df.columns:
+        age = pd.to_numeric(df["age"], errors="coerce")
+        lo, hi = NUMERIC_RANGES["age"]
+        implausible = age.notna() & ~age.between(lo, hi)
+        m["age_implausible_rate"] = _rate(int(implausible.sum()), n)
+    if "won" in df.columns:
+        won = _lower(df["won"])
+        m["won_false_count"] = int((won == "false").sum())  # should be 0
+    if "traffic_tier" in df.columns:
+        m["traffic_tier_distinct"] = int(df["traffic_tier"].nunique())
+    return m
+
+
+def schema_drift(df: pd.DataFrame) -> list[str]:
+    """Human-readable schema differences vs the expected pulled columns."""
+    have = set(df.columns)
+    expected = set(EXPECTED_COLUMNS)
+    issues = []
+    missing = sorted(expected - have)
+    extra = sorted(have - expected)
+    if missing:
+        issues.append(f"missing columns: {', '.join(missing)}")
+    if extra:
+        issues.append(f"unexpected columns: {', '.join(extra)}")
+    return issues

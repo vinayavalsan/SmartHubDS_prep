@@ -26,6 +26,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "flake8>=7.0"]
 orchestration = ["prefect>=3.0"]
+# Data validation (D1) — pandera schema/range/domain checks on the pull.
+validation = ["pandera>=0.20"]
 # Model training + serving (STEP 3, train_and_predict).
 ml = [
     "scikit-learn>=1.3",

@@ -172,6 +172,26 @@ code; **observed holidays** are listed in **`config/holidays.json`** (edit to
 add/remove dates — `SMARTHUB_HOLIDAYS` overrides the path, and the file is
 mountable to edit without a rebuild). Derived from `pst_date`.
 
+### Data validation (on every pull)
+
+Each data-pull validates the freshly-fetched `lead_pings` batch — **warn +
+report only**: it flags bad rows and catalogues missing-value patterns but never
+drops, imputes, or caps anything, and never blocks the pull. Lives in
+`smarthub/validation` (pandera for schema/range/domain rules + a pandas layer for
+cross-field integrity and the missing-value catalogue), invoked from both the
+Prefect flow and the `smarthub-pull` CLI.
+
+It checks: schema drift; `id` uniqueness; numeric ranges (e.g. `age` 1–120,
+`bid ≥ 0`); categorical domains (`state`, `gender`, `marital_status`); cross-field
+integrity (`current_carrier` populated while `insured=false`; `won=true` with no
+bid; lead-type completeness); and per-column null/blank rates (surfaces things
+like `pst_hour` being empty). Output: a per-lead-type `data-quality-<type>`
+Prefect artifact, a "Data quality" section in the data-pull Slack notification,
+and a log summary on the CLI. Tune the high-missing call-out in
+`config/smarthub.ini [validation] high_missing_threshold`. Needs the `validation`
+extra (`pip install -e ".[validation]"`); if pandera is absent, the schema checks
+degrade to a warning and the pandas checks still run.
+
 ## Testing & linting
 
 ```bash

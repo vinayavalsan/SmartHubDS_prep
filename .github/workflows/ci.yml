@@ -29,11 +29,11 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          # Base + dev; joblib is needed by the model registry (lazy import),
-          # exercised by the test-suite. The heavier ml/orchestration extras
+          # Base + dev + validation (pandera); joblib is needed by the model
+          # registry (lazy import). The heavier ml/orchestration extras
           # (sklearn, lightgbm, mlflow, prefect) are NOT required — those
-          # imports are guarded/lazy, so the suite runs on the base env.
-          pip install -e ".[dev]" joblib
+          # imports are guarded/lazy, so the suite runs on this env.
+          pip install -e ".[dev,validation]" joblib
 
       - name: Lint (flake8)
         run: flake8 src/smarthub tests
