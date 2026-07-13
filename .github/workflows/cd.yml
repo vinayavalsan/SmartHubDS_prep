@@ -1,6 +1,6 @@
 name: CD
 
-# Continuous delivery: on every push to main, run the quality gate, then build
+# Continuous delivery: on every push to smarthub.etl.pipeline, run the quality gate, then build
 # and push the worker + dashboard images to Docker Hub. The deployment server
 # pulls the new :latest images itself (Watchtower — see
 # docker-compose.prefect.yml), so no inbound access to the server is needed.
