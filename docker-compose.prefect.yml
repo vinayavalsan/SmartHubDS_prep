@@ -46,10 +46,11 @@ services:
   worker:
     container_name: prefect-worker
     restart: unless-stopped
-    # Pull the CD-built image from Docker Hub (set IMAGE_NS to your Docker Hub
-    # account in .env). `build:` is kept for local `docker compose build`.
-    # Watchtower auto-updates this container when a new :latest is pushed.
-    image: ${IMAGE_NS:-smarthub}/smarthub-worker:${IMAGE_TAG:-latest}
+    # Both images share ONE Docker Hub repo (IMAGE_REPO), split by a tag prefix:
+    # worker-* / dashboard-*. Set IMAGE_REPO=<account>/smarthub in .env.
+    # `build:` is kept for local `docker compose build`. Watchtower auto-updates
+    # this container when a new worker-${IMAGE_TAG} is pushed.
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     build:
@@ -80,7 +81,7 @@ services:
   dashboard:
     container_name: smarthub-dashboard
     restart: unless-stopped
-    image: ${IMAGE_NS:-smarthub}/smarthub-dashboard:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REPO:-smarthub/smarthub}:dashboard-${IMAGE_TAG:-latest}
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     build:

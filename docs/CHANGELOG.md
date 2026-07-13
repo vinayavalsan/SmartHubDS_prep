@@ -8,15 +8,18 @@
   then build the `worker` and `dashboard` images and push to **Docker Hub** as
   `:latest` and `:<sha>` (buildx + GH Actions layer cache). Secrets:
   `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
+- **Single Docker Hub repo, tag-prefixed** (free tier = 1 private repo). Both
+  images live in `${DOCKERHUB_USERNAME}/smarthub`, split by tag prefix:
+  `worker-latest`/`worker-<sha>` and `dashboard-latest`/`dashboard-<sha>`.
+  CD builds use separate buildx cache scopes so they don't thrash each other.
 - **Server auto-pull (Watchtower).** `docker-compose.prefect.yml` worker +
-  dashboard now reference the Docker Hub images
-  (`${IMAGE_NS}/smarthub-<svc>:${IMAGE_TAG:-latest}`, `build:` kept for local)
-  and carry the Watchtower enable label; a new `watchtower` service polls the
-  registry (default 300s) and recreates only those two containers on a new
-  `:latest`. No inbound access to the server required. The worker re-runs
-  `prefect deploy --all` on boot, so deployments re-register automatically.
-- `.env.example` documents `IMAGE_NS` / `IMAGE_TAG` / `WATCHTOWER_POLL_INTERVAL`;
-  README gains a CI/CD section.
+  dashboard reference `${IMAGE_REPO}:worker-${IMAGE_TAG}` /
+  `:dashboard-${IMAGE_TAG}` (`build:` kept for local) and carry the Watchtower
+  enable label; a new `watchtower` service polls the registry (default 300s) and
+  recreates only those two containers on a new `-latest`. No inbound access
+  required. The worker re-runs `prefect deploy --all` on boot.
+- `.env.example` documents `IMAGE_REPO` / `IMAGE_TAG` / `WATCHTOWER_POLL_INTERVAL`
+  (+ private-repo `docker login` note); README gains a CI/CD section.
 
 ### Fix: build-features OOM (SIGKILL -9) — lean reads + worker memory
 - **Column-projected storage reads.** `read_duckdb_table` / `read_duckdb_window`

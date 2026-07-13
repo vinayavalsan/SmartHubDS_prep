@@ -217,31 +217,39 @@ pre-commit run --all-files   # optional: check everything now
 
 **CI** — see above (flake8 + pytest on push/PR).
 
-**CD** (`.github/workflows/cd.yml`) — on every push to `main`: run the quality
-gate, then build the `worker` + `dashboard` images and push them to Docker Hub
-as `:latest` and `:<commit-sha>`. **No inbound access to the server is needed** —
-the deployment server pulls the new images itself:
+**CD** (`.github/workflows/cd.yml`) — on every push to the deploy branch: run
+the quality gate, then build the `worker` + `dashboard` images and push them to
+Docker Hub. Both images share **one repo** (`<account>/smarthub`) — the free
+tier's single private repo — differentiated by a **tag prefix**:
 
 ```
-push main → flake8 + pytest → build worker + dashboard → push Docker Hub
-          → Watchtower (on the server) pulls :latest → recreates the containers
-          → worker re-runs `prefect deploy --all` on boot
+<account>/smarthub:worker-latest      <account>/smarthub:worker-<sha>
+<account>/smarthub:dashboard-latest   <account>/smarthub:dashboard-<sha>
+```
+
+**No inbound access to the server is needed** — the server pulls the new images
+itself:
+
+```
+push → flake8 + pytest → build worker + dashboard → push to <account>/smarthub
+     → Watchtower (on the server) pulls the -latest tags → recreates the containers
+     → worker re-runs `prefect deploy --all` on boot
 ```
 
 Set up once:
 
 - **GitHub repo secrets:** `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (a Docker Hub
-  access token).
-- **On the server `.env`:** `IMAGE_NS=<your Docker Hub account>` (must match
-  `DOCKERHUB_USERNAME`); `IMAGE_TAG=latest` for rolling deploys.
+  access token with **Read & Write** — a read-only token fails the push).
+- **On the server `.env`:** `IMAGE_REPO=<account>/smarthub` (must equal
+  `${DOCKERHUB_USERNAME}/smarthub`); `IMAGE_TAG=latest` for rolling deploys.
+- **Private repo:** `docker login` on the host so Watchtower can pull it.
 - The `watchtower` service in `docker-compose.prefect.yml` polls Docker Hub
-  (default every 300s) and updates only the labelled containers (worker,
-  dashboard); Postgres and the Prefect server are left untouched.
+  (default 300s) and updates only the labelled containers (worker, dashboard);
+  Postgres and the Prefect server are left untouched.
 
 Rollback: set `IMAGE_TAG=<older sha>` on the server and `docker compose up -d`,
-or push a revert to `main`. Note `:latest`-on-push means `main` deploys straight
-to the environment — switch the CD trigger to tags if you later want a manual
-release gate.
+or push a revert. Note pushing deploys straight to the environment — switch the
+CD trigger to tags if you later want a manual release gate.
 
 ## Docker
 
