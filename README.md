@@ -175,8 +175,22 @@ mountable to edit without a rebuild). Derived from `pst_date`.
 ## Testing & linting
 
 ```bash
-pytest          # unit tests for metric math and config validation
-flake8          # style (max line length 88)
+pip install -e ".[dev]" joblib   # test deps (joblib: model-registry tests)
+pytest          # unit tests (metrics, features, storage, registry, notifications…)
+flake8          # style (.flake8: max line length 88)
+```
+
+The suite runs on the **base env** — the heavier `ml`/`orchestration` extras
+(sklearn, lightgbm, mlflow, prefect) aren't needed because those imports are
+lazy/guarded; only `joblib` is required (the model registry).
+
+**CI** (`.github/workflows/ci.yml`) runs flake8 + pytest on every push/PR across
+Python 3.11 and 3.12. **pre-commit** (`.pre-commit-config.yaml`) runs flake8 +
+hygiene hooks locally — enable it once with:
+
+```bash
+pip install pre-commit && pre-commit install
+pre-commit run --all-files   # optional: check everything now
 ```
 
 ## Docker

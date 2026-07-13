@@ -12,4 +12,3 @@ SQLAlchemy>=2.0
 sqlalchemy-redshift>=0.8.14
 duckdb>=0.10
 psycopg2-binary>=2.9   # Postgres driver for the config store
-paramiko==3.5.1

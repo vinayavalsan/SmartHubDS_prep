@@ -3,6 +3,16 @@
 
 ## 2026-07-09 (later)
 
+### CI/CD + quality gates
+- **GitHub Actions** (`.github/workflows/ci.yml`) — runs `flake8` + `pytest` on
+  every push / PR across Python 3.11 and 3.12. Installs `.[dev]` + `joblib`
+  (the suite runs on the base env; ml/orchestration imports are lazy/guarded).
+- **pre-commit** (`.pre-commit-config.yaml`) — flake8 + hygiene hooks
+  (trailing-whitespace, end-of-file, yaml/toml, merge-conflict, large-file
+  guard). Enable with `pre-commit install`.
+- **Fixed the duplicate/conflicting `paramiko`** pin in `requirements.txt`
+  (kept `>=3,<4`, matching `pyproject.toml`; dropped the stray `==3.5.1`).
+
 ### build-features manual run is now Prefect-free (Vinaya)
 - Extracted the build core into `feature_engineering/build.py` — load → build →
   save with **no Prefect dependency** — mirroring `data_pull/pull.py` and
