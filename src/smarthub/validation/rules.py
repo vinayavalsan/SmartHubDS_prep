@@ -5,7 +5,7 @@ Two layers:
   declarative rules (dtype coercion, numeric ranges, categorical domains,
   ``id`` uniqueness). pandera is imported lazily so this module still imports
   (and the pure-pandas checks below still run) if pandera isn't installed.
-- The pure-pandas functions (``missing_rates``, ``cross_field_checks``,
+- The pure-pandas functions (``missing  _rates``, ``cross_field_checks``,
   ``batch_metrics``) cover what pandera doesn't do cleanly: null/blank
   cataloguing, cross-field integrity, and batch quality metrics.
 

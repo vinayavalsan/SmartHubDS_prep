@@ -3,6 +3,21 @@
 
 ## 2026-07-09 (later)
 
+### CD: automated image build + push + server auto-pull
+- **`.github/workflows/cd.yml`** — on every push to `main`: run flake8 + pytest,
+  then build the `worker` and `dashboard` images and push to **Docker Hub** as
+  `:latest` and `:<sha>` (buildx + GH Actions layer cache). Secrets:
+  `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
+- **Server auto-pull (Watchtower).** `docker-compose.prefect.yml` worker +
+  dashboard now reference the Docker Hub images
+  (`${IMAGE_NS}/smarthub-<svc>:${IMAGE_TAG:-latest}`, `build:` kept for local)
+  and carry the Watchtower enable label; a new `watchtower` service polls the
+  registry (default 300s) and recreates only those two containers on a new
+  `:latest`. No inbound access to the server required. The worker re-runs
+  `prefect deploy --all` on boot, so deployments re-register automatically.
+- `.env.example` documents `IMAGE_NS` / `IMAGE_TAG` / `WATCHTOWER_POLL_INTERVAL`;
+  README gains a CI/CD section.
+
 ### Fix: build-features OOM (SIGKILL -9) — lean reads + worker memory
 - **Column-projected storage reads.** `read_duckdb_table` / `read_duckdb_window`
   / `read_parquet_dataset` / `load_leads_raw` / `load_window_raw` take an

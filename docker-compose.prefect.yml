@@ -46,6 +46,12 @@ services:
   worker:
     container_name: prefect-worker
     restart: unless-stopped
+    # Pull the CD-built image from Docker Hub (set IMAGE_NS to your Docker Hub
+    # account in .env). `build:` is kept for local `docker compose build`.
+    # Watchtower auto-updates this container when a new :latest is pushed.
+    image: ${IMAGE_NS:-smarthub}/smarthub-worker:${IMAGE_TAG:-latest}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
@@ -74,6 +80,9 @@ services:
   dashboard:
     container_name: smarthub-dashboard
     restart: unless-stopped
+    image: ${IMAGE_NS:-smarthub}/smarthub-dashboard:${IMAGE_TAG:-latest}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     build:
       context: .
       dockerfile: docker/Dockerfile.app
@@ -92,6 +101,18 @@ services:
       - "8500:8501"                 # http://localhost:8501  (Leads / Monitoring / Config)
     volumes:
       - ./data:/app/data
+
+  # CD auto-deploy: polls Docker Hub and recreates any labelled container
+  # (worker, dashboard) when a newer :latest image is pushed by the CD workflow.
+  # `--label-enable` scopes it to those two — postgres/prefect-server are left
+  # alone. Needs the Docker socket to manage sibling containers.
+  watchtower:
+    container_name: smarthub-watchtower
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --label-enable --cleanup --poll-interval ${WATCHTOWER_POLL_INTERVAL:-300}
 
 volumes:
   postgres-data:
