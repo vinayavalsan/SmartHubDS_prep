@@ -215,12 +215,15 @@ pre-commit run --all-files   # optional: check everything now
 
 ## CI/CD
 
-**CI** — see above (flake8 + pytest on push/PR).
+**One pipeline** (`.github/workflows/ci.yml`), two stages:
 
-**CD** (`.github/workflows/cd.yml`) — on every push to the deploy branch: run
-the quality gate, then build the `worker` + `dashboard` images and push them to
-Docker Hub. Both images share **one repo** (`<account>/smarthub`) — the free
-tier's single private repo — differentiated by a **tag prefix**:
+- **`lint-test`** — flake8 + pytest across Python 3.11 and 3.12, on every
+  push/PR.
+- **`build-push`** — `needs: lint-test`, so it only starts **after the whole
+  test matrix passes** (never in parallel, never on a red build), and only on a
+  push to the deploy branch. Builds the `worker` + `dashboard` images and pushes
+  them to Docker Hub. Both images share **one repo** (`<account>/smarthub`) —
+  the free tier's single private repo — differentiated by a **tag prefix**:
 
 ```
 <account>/smarthub:worker-latest      <account>/smarthub:worker-<sha>
@@ -235,6 +238,20 @@ push → flake8 + pytest → build worker + dashboard → push to <account>/smar
      → Watchtower (on the server) pulls the -latest tags → recreates the containers
      → worker re-runs `prefect deploy --all` on boot
 ```
+
+**Local vs server (build vs pull).** `SMARTHUB_ENV` in `.env` decides where the
+worker/dashboard images come from, and `install.sh` acts on it:
+
+- `SMARTHUB_ENV=local` (default) — **builds from source**, no pull, no
+  Watchtower: `docker compose -f docker-compose.prefect.yml -f
+  docker-compose.local.yml up -d --build`.
+- `SMARTHUB_ENV=staging|prod` — **pulls** the CD-built images from Docker Hub and
+  runs Watchtower: `docker compose -f docker-compose.prefect.yml --profile prod
+  up -d --pull always`.
+
+The base compose pulls (image-only); `docker-compose.local.yml` adds `build:`
+for the local path. Watchtower sits behind the `prod` profile so it never runs
+locally (it would pull the Hub image and clobber your local build).
 
 Set up once:
 

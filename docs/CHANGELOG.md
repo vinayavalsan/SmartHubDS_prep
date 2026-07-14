@@ -3,6 +3,24 @@
 
 ## 2026-07-09 (later)
 
+### Local build vs server pull (SMARTHUB_ENV)
+- `SMARTHUB_ENV` now decides image source. `local` (default) **builds from
+  source** via a new `docker-compose.local.yml` override (adds `build:`) — no
+  pull, no Watchtower. `staging`/`prod` **pulls** the CD-built images from
+  Docker Hub and runs Watchtower. `install.sh` picks the right compose files +
+  flags automatically.
+- Base `docker-compose.prefect.yml` is now pull-only (removed `build:` from
+  worker/dashboard); Watchtower moved behind a `prod` compose profile so it
+  never runs locally and clobbers a local build. `.env.example` documents
+  `SMARTHUB_ENV`.
+
+### CI + CD merged into one gated pipeline
+- Folded the build/push into `ci.yml` (renamed **CI/CD**) as a `build-push` job
+  with `needs: lint-test` — images now build **only after the full test matrix
+  passes**, once, instead of a separate `cd.yml` racing CI in parallel (which
+  ran the tests twice). `build-push` is gated to pushes on the deploy branch;
+  `cd.yml` removed. `cancel-in-progress: false` so a deploy is never interrupted.
+
 ### CD: automated image build + push + server auto-pull
 - **`.github/workflows/cd.yml`** — on every push to `main`: run flake8 + pytest,
   then build the `worker` and `dashboard` images and push to **Docker Hub** as

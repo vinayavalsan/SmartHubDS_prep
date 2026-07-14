@@ -10,6 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 COMPOSE_FILE="docker-compose.prefect.yml"
+LOCAL_OVERRIDE="docker-compose.local.yml"
 # Host ports the stack binds (free these on --down).
 HOST_PORTS=(4200 8501)
 REQUIRED_VARS=(
@@ -60,7 +61,10 @@ daemon_up() { docker info >/dev/null 2>&1; }
 if [[ "${1:-}" == "--down" ]]; then
   if daemon_up; then
     info "Stopping the stack ..."
-    $COMPOSE -f "$COMPOSE_FILE" down --remove-orphans || true
+    # Include the local override + prod profile so every service (incl.
+    # Watchtower) is torn down regardless of which mode brought it up.
+    $COMPOSE -f "$COMPOSE_FILE" -f "$LOCAL_OVERRIDE" --profile prod \
+      down --remove-orphans || true
   else
     info "Docker daemon not running — containers already stopped; freeing ports only."
   fi
@@ -121,10 +125,19 @@ daemon_up || fail "Docker daemon is not running. Start Docker / Rancher Desktop 
 green "✓ docker daemon running"
 
 echo
-info "Starting the Prefect stack ($COMPOSE_FILE) ..."
-$COMPOSE -f "$COMPOSE_FILE" up --build -d
+# SMARTHUB_ENV decides where images come from:
+#   local (default) -> BUILD from source (no pull, no Watchtower)
+#   staging/prod    -> PULL from Docker Hub + run Watchtower auto-update
+SMARTHUB_ENV="${SMARTHUB_ENV:-local}"
+if [[ "$SMARTHUB_ENV" == "local" ]]; then
+  info "SMARTHUB_ENV=local → building images from source (no pull, no Watchtower)."
+  $COMPOSE -f "$COMPOSE_FILE" -f "$LOCAL_OVERRIDE" up -d --build
+else
+  info "SMARTHUB_ENV=$SMARTHUB_ENV → pulling images from Docker Hub + Watchtower."
+  $COMPOSE -f "$COMPOSE_FILE" --profile prod up -d --pull always
+fi
 
 echo
-green "Up."
+green "Up ($SMARTHUB_ENV)."
 info "Prefect UI: http://localhost:4200   Dashboard (Leads/Monitoring/Config): http://localhost:8500"
 info "Logs:  docker logs prefect-worker -f"

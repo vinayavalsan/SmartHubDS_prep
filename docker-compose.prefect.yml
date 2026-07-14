@@ -46,16 +46,13 @@ services:
   worker:
     container_name: prefect-worker
     restart: unless-stopped
-    # Both images share ONE Docker Hub repo (IMAGE_REPO), split by a tag prefix:
-    # worker-* / dashboard-*. Set IMAGE_REPO=<account>/smarthub in .env.
-    # `build:` is kept for local `docker compose build`. Watchtower auto-updates
-    # this container when a new worker-${IMAGE_TAG} is pushed.
+    # PULL from Docker Hub by default (server/prod). Both images share ONE repo
+    # (IMAGE_REPO), split by tag prefix worker-* / dashboard-*. For local builds
+    # from source, add docker-compose.local.yml (adds `build:`) — install.sh
+    # does this automatically when SMARTHUB_ENV=local.
     image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.worker
     # Feature builds load a windowed slice of lead_pings into pandas; give the
     # worker enough headroom (a too-low cap shows up as flow runs killed with
     # SIGKILL / exit -9). Raise if the accumulated store grows large. The
@@ -84,9 +81,6 @@ services:
     image: ${IMAGE_REPO:-smarthub/smarthub}:dashboard-${IMAGE_TAG:-latest}
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.app
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,13 +98,19 @@ services:
       - ./data:/app/data
 
   # CD auto-deploy: polls Docker Hub and recreates any labelled container
-  # (worker, dashboard) when a newer :latest image is pushed by the CD workflow.
+  # (worker, dashboard) when a newer image is pushed by the CD workflow.
   # `--label-enable` scopes it to those two — postgres/prefect-server are left
   # alone. Needs the Docker socket to manage sibling containers.
+  #
+  # `prod` profile ONLY: it must NOT run for local builds, or it would pull the
+  # Hub image and overwrite the image you just built from source. It starts only
+  # when the stack is brought up with `--profile prod` (install.sh does this for
+  # non-local SMARTHUB_ENV).
   watchtower:
     container_name: smarthub-watchtower
     image: containrrr/watchtower
     restart: unless-stopped
+    profiles: ["prod"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: --label-enable --cleanup --poll-interval ${WATCHTOWER_POLL_INTERVAL:-300}
