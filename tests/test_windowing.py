@@ -13,7 +13,7 @@ NOW = datetime(2026, 6, 25, 12, 0, 0)
 
 
 def test_first_run_uses_backfill_lookback():
-    # No watermark -> window is [now - lookback, now].
+    """With no watermark, the window spans the backfill lookback up to now."""
     min_dt, max_dt = compute_pull_window(
         NOW, last_ts=None, overlap_hours=8, default_lookback_hours=168
     )
@@ -22,6 +22,7 @@ def test_first_run_uses_backfill_lookback():
 
 
 def test_subsequent_run_overlaps_watermark():
+    """A subsequent run starts the window at the watermark minus the overlap."""
     last = datetime(2026, 6, 25, 10, 0, 0)
     min_dt, max_dt = compute_pull_window(
         NOW, last_ts=last, overlap_hours=8, default_lookback_hours=168
@@ -31,7 +32,7 @@ def test_subsequent_run_overlaps_watermark():
 
 
 def test_lower_bound_clamped_to_now():
-    # A watermark in the future shouldn't produce min > max.
+    """A future watermark is clamped so the lower bound never exceeds now."""
     future = datetime(2026, 6, 26, 0, 0, 0)
     min_dt, max_dt = compute_pull_window(
         NOW, last_ts=future, overlap_hours=0, default_lookback_hours=168
@@ -40,6 +41,7 @@ def test_lower_bound_clamped_to_now():
 
 
 def test_parse_format_roundtrip():
+    """format_dt and parse_dt round-trip through the canonical DT_FORMAT."""
     s = "2026-06-25 12:00:00"
     assert format_dt(parse_dt(s)) == s
     assert DT_FORMAT == "%Y-%m-%d %H:%M:%S"

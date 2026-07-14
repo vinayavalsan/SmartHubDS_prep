@@ -4,6 +4,7 @@ from smarthub.core import task_config
 
 
 def test_reads_sections_and_types(tmp_path, monkeypatch):
+    """task_config reads typed values from the ini, defaulting when absent."""
     ini = tmp_path / "t.ini"
     ini.write_text(
         "[training]\n"
@@ -30,6 +31,7 @@ def test_reads_sections_and_types(tmp_path, monkeypatch):
 
 
 def test_missing_file_returns_defaults(monkeypatch):
+    """A missing ini file makes every getter return its default."""
     monkeypatch.setenv("SMARTHUB_TASK_CONFIG", "/no/such/file.ini")
     task_config.reload()
     try:

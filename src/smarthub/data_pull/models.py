@@ -232,13 +232,23 @@ def _as_datetime(value: DateLike) -> datetime:
 
 
 def coerce_leads_dtypes(df: pd.DataFrame) -> pd.DataFrame:
-    """Force each `lead_pings` column to its ORM-declared dtype.
+    """Force each ``lead_pings`` column to its ORM-declared dtype.
 
-    Makes the on-disk schema **stable regardless of nulls**: a string column that
+    Makes the on-disk schema stable regardless of nulls: a string column that
     happens to be all-null in one pull is still typed as text, so a later pull
-    with real strings (e.g. `home_property_type = 'Single Family Home'`) won't
-    hit a DuckDB type-conversion error. Columns not in the model (e.g. the
-    expected-revenue join outputs) are left untouched.
+    with real strings (e.g. ``home_property_type = 'Single Family Home'``)
+    won't hit a DuckDB type-conversion error. Columns not in the model (e.g.
+    the expected-revenue join outputs) are left untouched.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Pulled leads frame with raw column values.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy with model columns coerced to their declared dtypes.
     """
     out = df.copy()
     for column in LeadPing.__table__.columns:
@@ -262,11 +272,22 @@ def leads_select(
     max_created_at: DateLike,
     lead_type_id: int | None = None,
 ) -> Select:
-    """Build the base leads query: selected columns where created_at is in range.
+    """Build the base leads query: selected columns within a created_at range.
 
-    Bounds may be ``datetime`` objects or ``"YYYY-MM-DD HH:MM:SS"`` strings.
-    Pass ``lead_type_id`` to restrict to one lead type (e.g. 6=auto, 1=home);
-    ``None`` pulls all types.
+    Inputs
+    ------
+    min_created_at : str | datetime
+        Inclusive lower bound for ``created_at`` (``YYYY-MM-DD HH:MM:SS``
+        string or a ``datetime``).
+    max_created_at : str | datetime
+        Exclusive upper bound for ``created_at``.
+    lead_type_id : int | None
+        Restrict to one lead type (e.g. 6=auto, 1=home); ``None`` pulls all.
+
+    Returns
+    -------
+    sqlalchemy.Select
+        Ordered SELECT over the curated leads columns.
     """
     lower, upper = _as_datetime(min_created_at), _as_datetime(max_created_at)
     stmt = (
@@ -283,11 +304,20 @@ def expected_revenue_subquery(selected_only: bool = True):
     """Per-ping expected revenue aggregated from the listings.
 
     Sums ``est_payout`` (expected buyer payment = expected revenue) and
-    ``payout`` (realized) per ``lead_ping_id``.
+    ``payout`` (realized) per ``lead_ping_id``. ASSUMPTION (confirm with the
+    team): expected revenue is the sum over ``selected = 'true'`` listings; set
+    ``selected_only=False`` to sum over all listings instead. See CONTEXT.md §4
+    open questions.
 
-    ASSUMPTION (confirm with the team): expected revenue is the sum over
-    ``selected = 'true'`` listings. Set ``selected_only=False`` to sum over all
-    listings instead. See CONTEXT.md §4 open questions.
+    Inputs
+    ------
+    selected_only : bool
+        Sum over selected listings only when ``True``; all listings otherwise.
+
+    Returns
+    -------
+    sqlalchemy.Subquery
+        Subquery aliased ``listing_expected_revenue``.
     """
     stmt = (
         select(
@@ -311,9 +341,25 @@ def leads_with_expected_revenue_select(
 ) -> Select:
     """Leads query LEFT JOINed to per-ping expected revenue from the listings.
 
-    Adds ``expected_revenue``, ``realized_payout`` and ``num_selected_listings``
-    columns. Pings with no matching listings get NULLs (outer join). Pass
-    ``lead_type_id`` to restrict to one lead type; ``None`` pulls all types.
+    Adds ``expected_revenue``, ``realized_payout`` and
+    ``num_selected_listings`` columns. Pings with no matching listings get
+    NULLs (outer join).
+
+    Inputs
+    ------
+    min_created_at : str | datetime
+        Inclusive lower bound for ``created_at``.
+    max_created_at : str | datetime
+        Exclusive upper bound for ``created_at``.
+    selected_only : bool
+        Aggregate expected revenue over selected listings only.
+    lead_type_id : int | None
+        Restrict to one lead type; ``None`` pulls all types.
+
+    Returns
+    -------
+    sqlalchemy.Select
+        Ordered SELECT with the expected-revenue columns joined in.
     """
     lower, upper = _as_datetime(min_created_at), _as_datetime(max_created_at)
     subq = expected_revenue_subquery(selected_only)

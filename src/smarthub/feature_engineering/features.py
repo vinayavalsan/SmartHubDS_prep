@@ -114,7 +114,18 @@ LEAD_TYPE_NAMES = {LEAD_TYPE_AUTO: "auto", LEAD_TYPE_HOME: "home"}
 
 
 def lead_type_name(lead_type_id: int) -> str:
-    """Human name for a lead type id (falls back to ``type_<id>``)."""
+    """Human name for a lead type id (falls back to ``type_<id>``).
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id (e.g. 6=auto, 1=home).
+
+    Returns
+    -------
+    str
+        The lead type name, or ``type_<id>`` if unknown.
+    """
     return LEAD_TYPE_NAMES.get(lead_type_id, f"type_{lead_type_id}")
 
 
@@ -212,12 +223,34 @@ _OPTIONAL_NONE = "none"
 
 
 def mandatory_features(lead_type_id: int) -> set[str]:
-    """Model features that are always trained on for a lead type (never toggled)."""
+    """Model features always trained on for a lead type (never toggled).
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id.
+
+    Returns
+    -------
+    set[str]
+        The mandatory feature names for that lead type.
+    """
     return set(MANDATORY_FEATURES.get(lead_type_id, {DECISION_COLUMN}))
 
 
 def optional_features(lead_type_id: int) -> set[str]:
-    """The full set of toggleable (non-mandatory) model features for a lead type."""
+    """The full set of toggleable (non-mandatory) model features.
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id.
+
+    Returns
+    -------
+    set[str]
+        Optional feature names eligible for that lead type.
+    """
     if lead_type_id == LEAD_TYPE_AUTO:
         drop = HOME_ONLY_FEATURES
     elif lead_type_id == LEAD_TYPE_HOME:
@@ -232,9 +265,21 @@ def _configured_optional(lead_type_id: int, optional_universe: set[str]) -> set[
     """Which OPTIONAL features are enabled for this lead type, from config.
 
     Reads ``config/smarthub.ini`` ``[features] <lead_type>_optional``:
-    - absent / ``"all"``  -> every optional feature (backwards-compatible default),
-    - ``"none"`` / empty  -> no optional features (mandatory core only),
-    - comma list          -> exactly those (unknown names are ignored + warned).
+    absent / ``"all"`` -> every optional feature (backwards-compatible
+    default); ``"none"`` / empty -> no optional features (mandatory core
+    only); comma list -> exactly those (unknown names are ignored + warned).
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id whose config key is read.
+    optional_universe : set[str]
+        Eligible optional feature names for this lead type.
+
+    Returns
+    -------
+    set[str]
+        The enabled optional features.
     """
     from smarthub.core import task_config
 
@@ -265,12 +310,23 @@ def model_feature_columns(
 
     Auto-only features (vehicles/drivers/violations…) are dropped for home;
     home-only features (home_property_type, num_home_claims) are dropped for
-    auto — so one code path trains the right model per lead type.
+    auto — so one code path trains the right model per lead type. MANDATORY
+    features are always kept; OPTIONAL features are included only when enabled.
+    The mandatory core can never be dropped here, whatever the config says.
+    Training and serving both call this, so they stay identical.
 
-    Feature selection: MANDATORY features are always kept; OPTIONAL features are
-    included only when enabled. ``optional_enabled`` overrides the config lookup
-    (used in tests). The mandatory core can never be dropped here, whatever the
-    config says. Training and serving both call this, so they stay identical.
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id to select features for.
+    optional_enabled : set[str] | None
+        Overrides the config lookup for enabled optional features (tests);
+        ``None`` reads the config.
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        The ``(numeric, categorical)`` model feature name lists.
     """
     if lead_type_id == LEAD_TYPE_AUTO:
         drop = HOME_ONLY_FEATURES
@@ -295,11 +351,22 @@ def model_feature_columns(
 def add_time_features(out: pd.DataFrame) -> list[str]:
     """Add ``created_hour`` / ``created_dayofweek`` in **Pacific** time.
 
-    Kiran: don't use UTC — the call-centre operational day runs to ~5:30pm PT, so
-    UTC would flip the date. So prefer the Pacific columns:
-    ``created_dayofweek`` from ``pst_date`` and ``created_hour`` from ``pst_hour``.
-    Falls back to ``created_at`` (UTC) if the Pacific columns are absent, and
-    leaves values untouched for a live request that already carries them.
+    Kiran: don't use UTC — the call-centre operational day runs to ~5:30pm PT,
+    so UTC would flip the date. Prefers the Pacific columns:
+    ``created_dayofweek`` from ``pst_date`` and ``created_hour`` from
+    ``pst_hour``. Falls back to ``created_at`` (UTC) if the Pacific columns are
+    absent, and leaves values untouched for a live request that already carries
+    them.
+
+    Inputs
+    ------
+    out : pandas.DataFrame
+        Frame mutated in place with the time feature columns.
+
+    Returns
+    -------
+    list[str]
+        Names of the time feature columns that were added.
     """
     added = []
     created = (
@@ -332,12 +399,21 @@ def add_time_features(out: pd.DataFrame) -> list[str]:
 
 
 def add_is_workday(out: pd.DataFrame) -> list[str]:
-    """Add ``is_workday`` (1/0) from ``pst_date`` (else ``created_at``) in place.
+    """Add ``is_workday`` (1/0) from ``pst_date`` (else ``created_at``).
 
-    Weekends are non-workdays (Sat/Sun) plus observed holidays (see
-    ``smarthub.core.holidays``). Uses ``pst_date`` — the Pacific business day —
-    so day boundaries match how the marketplace runs. Returns ``["is_workday"]``
-    if a usable date column was present, else ``[]``.
+    Weekends (Sat/Sun) plus observed holidays (see ``smarthub.core.holidays``)
+    are non-workdays. Uses ``pst_date`` — the Pacific business day — so day
+    boundaries match how the marketplace runs. Added in place.
+
+    Inputs
+    ------
+    out : pandas.DataFrame
+        Frame mutated in place with the ``is_workday`` column.
+
+    Returns
+    -------
+    list[str]
+        ``["is_workday"]`` if a usable date column was present, else ``[]``.
     """
     from smarthub.core import holidays
 
@@ -356,11 +432,21 @@ def add_is_workday(out: pd.DataFrame) -> list[str]:
 def derive_serving_features(df: pd.DataFrame) -> pd.DataFrame:
     """Apply the SAME engineered features used in training to a scoring frame.
 
-    Train/serve parity hook: online prediction and the training build go through
-    the same derivation (time parts, is_workday, is_married, multi_vehicle,
-    age_missing, age_cohort_*), so a model never sees features computed a
-    different way than it was trained on. Returns a new frame; callers select
-    ``model_feature_columns(...)`` afterwards.
+    Train/serve parity hook: online prediction and the training build go
+    through the same derivation (time parts, is_workday, is_married,
+    multi_vehicle, age_missing, age_cohort_*), so a model never sees features
+    computed a different way than it was trained on.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Scoring frame with raw ping-time columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A new frame with engineered features added; callers then select
+        ``model_feature_columns(...)``.
     """
     out = df.copy()
     add_time_features(out)
@@ -370,7 +456,19 @@ def derive_serving_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _derive_features(out: pd.DataFrame) -> list[str]:
-    """Add engineered features in place; return the names that were added."""
+    """Add engineered features in place; return the names that were added.
+
+    Inputs
+    ------
+    out : pandas.DataFrame
+        Frame mutated in place with ``is_married``, ``multi_vehicle``,
+        ``age_missing``, the cleaned ``age`` and one-hot ``age_cohort_*``.
+
+    Returns
+    -------
+    list[str]
+        Names of the engineered columns that were added.
+    """
     added = []
     if "marital_status" in out.columns:
         ms = out["marital_status"].astype("string").str.strip().str.lower()
@@ -407,9 +505,9 @@ def build_training_table(
     lead_type_id: int | None = None,
     drop_zero_variance: bool = False,
 ) -> pd.DataFrame:
-    """Assemble the leakage-safe training table from raw `lead_pings` rows.
+    """Assemble the leakage-safe training table from raw ``lead_pings`` rows.
 
-    Target definition (matches the warehouse: `won` is only ever 'true' or
+    Target definition (matches the warehouse: ``won`` is only ever 'true' or
     NULL — losses are never written as 'false'):
 
     - A bid is **placed** when ``bid > 0``. A placed bid either **won**
@@ -417,15 +515,27 @@ def build_training_table(
       'false' -> ``won_flag = 0``).
     - Rows with **no bid placed** (``bid`` <= 0 or missing, and not a win) are
       not bidding decisions and are excluded.
-    - Optional `lead_type_id` filter.
-    - Selects ping-time features + engineered features + bid + expected_revenue,
-      target `won_flag`. **Nothing is dropped by default** — set
-      ``drop_zero_variance=True`` to also drop single-valued feature columns.
-    - Engineered: ``is_married`` (from marital_status), ``multi_vehicle``
-      (from num_vehicles), and one-hot ``age_cohort_<band>`` 0/1 columns
-      (banded from age).
-    - When ``lead_type_id`` is given, the table is **lead-type-clean**: the auto
+    - Selects ping-time features + engineered features + bid + expected_revenue
+      and target ``won_flag``. Nothing is dropped by default.
+    - Engineered: ``is_married`` (from marital_status), ``multi_vehicle`` (from
+      num_vehicles), and one-hot ``age_cohort_<band>`` 0/1 columns (banded from
+      age).
+    - When ``lead_type_id`` is given, the table is lead-type-clean: the auto
       table drops home-only columns and the home table drops auto-only columns.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Raw accumulated ``lead_pings`` rows.
+    lead_type_id : int | None
+        Optional lead type filter; ``None`` keeps all types.
+    drop_zero_variance : bool
+        Also drop single-valued feature columns when ``True``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The leakage-safe training table, index reset.
     """
     out = df.copy()
 

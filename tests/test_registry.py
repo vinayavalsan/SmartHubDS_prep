@@ -16,6 +16,7 @@ def _isolated_model_dir(tmp_path, monkeypatch):
 
 
 def _save(lead_type_name="auto", roc_auc=0.70, profit=100.0, feature_cols=None):
+    """Save a fake model version and return its manifest."""
     manifest = registry.save_version(
         {"fake": "model"},
         lead_type_name,
@@ -29,9 +30,7 @@ def _save(lead_type_name="auto", roc_auc=0.70, profit=100.0, feature_cols=None):
 
 
 def test_load_currently_serving_resolves_path_in_current_env():
-    # A manifest saved in another environment records an absolute model_path
-    # (e.g. /app/... from a Docker run). Loading must resolve via version_path
-    # in THIS environment, not trust that stale absolute string.
+    """Serving model loads via version_path, ignoring a stale absolute path."""
     import json
 
     m = _save()
@@ -47,6 +46,7 @@ def test_load_currently_serving_resolves_path_in_current_env():
 
 
 def test_load_currently_serving_none_when_file_missing():
+    """Missing pkl yields (None, None) instead of crashing."""
     m = _save()
     registry.promote("auto", m["version"])
     registry.version_path("auto", m["version"]).unlink()   # pkl gone
@@ -58,6 +58,7 @@ def test_load_currently_serving_none_when_file_missing():
 
 
 def test_versions_are_numbered_and_timestamped_and_never_overwritten():
+    """Versions are numbered sequentially and never overwritten."""
     m1 = _save()
     m2 = _save()
     m3 = _save()
@@ -75,6 +76,7 @@ def test_versions_are_numbered_and_timestamped_and_never_overwritten():
 
 
 def test_version_numbering_is_per_lead_type():
+    """Version numbering is counted independently per lead type."""
     auto1 = _save("auto")
     home1 = _save("home")
     auto2 = _save("auto")
@@ -85,6 +87,7 @@ def test_version_numbering_is_per_lead_type():
 
 
 def test_nothing_currently_serving_before_any_promotion():
+    """Nothing is serving until a version is promoted."""
     _save()
     assert registry.currently_serving_version("auto") is None
     assert registry.currently_serving_model_path("auto") is None
@@ -96,6 +99,7 @@ def test_nothing_currently_serving_before_any_promotion():
 
 
 def test_promote_sets_serving_pointer():
+    """promote sets the serving pointer and records the reason."""
     m1 = _save()
     registry.promote("auto", m1["version"], reason="first model")
 
@@ -107,11 +111,13 @@ def test_promote_sets_serving_pointer():
 
 
 def test_promote_unknown_version_raises():
+    """promote raises FileNotFoundError for an unknown version."""
     with pytest.raises(FileNotFoundError):
         registry.promote("auto", "v99_doesnotexist", reason="x")
 
 
 def test_rollback_to_previous_version():
+    """rollback reverts the serving pointer to the previous version."""
     m1 = _save()
     m2 = _save()
     registry.promote("auto", m1["version"])
@@ -123,6 +129,7 @@ def test_rollback_to_previous_version():
 
 
 def test_rollback_to_explicit_version():
+    """rollback can target an explicit version."""
     m1 = _save()
     _save()
     m3 = _save()
@@ -133,6 +140,7 @@ def test_rollback_to_explicit_version():
 
 
 def test_rollback_at_earliest_version_raises():
+    """rollback raises when there is no earlier version to revert to."""
     m1 = _save()
     registry.promote("auto", m1["version"])
     with pytest.raises(ValueError, match="nothing to roll back to"):
@@ -140,6 +148,7 @@ def test_rollback_at_earliest_version_raises():
 
 
 def test_rollback_without_anything_serving_raises():
+    """rollback raises when nothing is currently serving."""
     _save()
     with pytest.raises(ValueError, match="No currently-serving model"):
         registry.rollback("auto")
@@ -149,6 +158,7 @@ def test_rollback_without_anything_serving_raises():
 
 
 def test_decide_promotion_bootstraps_with_nothing_currently_serving():
+    """decide_promotion promotes when nothing is currently serving."""
     decision = registry.decide_promotion(
         challenger_metrics={"roc_auc": 0.5},
         challenger_optimizer={},
@@ -160,6 +170,7 @@ def test_decide_promotion_bootstraps_with_nothing_currently_serving():
 
 
 def test_decide_promotion_blocks_on_roc_auc_regression():
+    """decide_promotion blocks a challenger whose ROC AUC regressed."""
     decision = registry.decide_promotion(
         challenger_metrics={"roc_auc": 0.60},
         challenger_optimizer={"recommended_bid_total_expected_profit": 1000},
@@ -173,6 +184,7 @@ def test_decide_promotion_blocks_on_roc_auc_regression():
 
 
 def test_decide_promotion_blocks_on_profit_regression():
+    """decide_promotion blocks a challenger below the profit-ratio floor."""
     decision = registry.decide_promotion(
         challenger_metrics={"roc_auc": 0.70},
         challenger_optimizer={"recommended_bid_total_expected_profit": 80},
@@ -187,6 +199,7 @@ def test_decide_promotion_blocks_on_profit_regression():
 
 
 def test_decide_promotion_allows_small_profit_dip_within_tolerance():
+    """decide_promotion allows a small profit dip within tolerance."""
     decision = registry.decide_promotion(
         challenger_metrics={"roc_auc": 0.70},
         challenger_optimizer={"recommended_bid_total_expected_profit": 99},
@@ -199,6 +212,7 @@ def test_decide_promotion_allows_small_profit_dip_within_tolerance():
 
 
 def test_decide_promotion_promotes_on_clear_improvement():
+    """decide_promotion promotes on a clear AUC and profit improvement."""
     decision = registry.decide_promotion(
         challenger_metrics={"roc_auc": 0.75},
         challenger_optimizer={"recommended_bid_total_expected_profit": 150},
@@ -210,6 +224,7 @@ def test_decide_promotion_promotes_on_clear_improvement():
 
 
 def test_decide_promotion_falls_back_to_auc_when_no_optimizer_data():
+    """decide_promotion falls back to ROC AUC when no optimizer data exists."""
     decision = registry.decide_promotion(
         challenger_metrics={"roc_auc": 0.70},
         challenger_optimizer={},
@@ -222,6 +237,7 @@ def test_decide_promotion_falls_back_to_auc_when_no_optimizer_data():
 
 
 def test_decide_promotion_unprofitable_serving_model_any_nonnegative_challenger_ok():
+    """Any non-negative challenger beats an unprofitable serving model."""
     decision = registry.decide_promotion(
         challenger_metrics={"roc_auc": 0.70},
         challenger_optimizer={"recommended_bid_total_expected_profit": 0},

@@ -11,16 +11,19 @@ from smarthub.core.config_store import (
 
 
 def _store(tmp_path):
+    """Return a ConfigStore backed by a temp SQLite database."""
     return ConfigStore(f"sqlite:///{tmp_path / 'config.db'}")
 
 
 def test_get_returns_registry_default(tmp_path):
+    """get returns the registry default when no override is stored."""
     store = _store(tmp_path)
     assert store.get("target_cm") == 0.25
     assert store.get("bid_max_cap") == 100.0
 
 
 def test_set_then_get_typed(tmp_path):
+    """set coerces string values to the param's typed default (float)."""
     store = _store(tmp_path)
     store.set("target_cm", "0.4", updated_by="nimesh")   # string coerces to float
     assert store.get("target_cm") == 0.4
@@ -30,6 +33,7 @@ def test_set_then_get_typed(tmp_path):
 
 
 def test_validation_rejects_out_of_range(tmp_path):
+    """set raises ConfigError when a value falls outside the allowed range."""
     store = _store(tmp_path)
     with pytest.raises(ConfigError):
         store.set("target_cm", 1.5)     # > max 1.0
@@ -38,8 +42,7 @@ def test_validation_rejects_out_of_range(tmp_path):
 
 
 def test_configparam_cast_int_and_choices():
-    # Int coercion + choice validation at the param level (covers the
-    # machinery even though the business registry is all floats).
+    """ConfigParam.cast handles int coercion and choice validation."""
     p_int = ConfigParam("n", "int", 1, "", minimum=1, maximum=10)
     assert p_int.cast("5") == 5 and isinstance(p_int.cast("5"), int)
     with pytest.raises(ConfigError):
@@ -51,6 +54,7 @@ def test_configparam_cast_int_and_choices():
 
 
 def test_unknown_key_raises(tmp_path):
+    """get/set raise ConfigError for a key not in the registry."""
     store = _store(tmp_path)
     with pytest.raises(ConfigError):
         store.get("does_not_exist")
@@ -59,7 +63,7 @@ def test_unknown_key_raises(tmp_path):
 
 
 def test_registry_is_business_only(tmp_path):
-    # UI exposes business settings only; task knobs must NOT be in the registry.
+    """Registry holds only business settings, never task knobs."""
     for task_key in ("model_type", "recency_window_days", "active_model_version",
                      "holiday_calendar", "exploration_variance_pct"):
         assert task_key not in REGISTRY_BY_KEY
@@ -69,6 +73,7 @@ def test_registry_is_business_only(tmp_path):
 
 
 def test_env_scoping_is_independent(tmp_path):
+    """Values set per environment are stored and read independently."""
     store = _store(tmp_path)
     store.set("target_cm", 0.3, env="staging")
     store.set("target_cm", 0.5, env="prod")
@@ -77,6 +82,7 @@ def test_env_scoping_is_independent(tmp_path):
 
 
 def test_history_is_appended(tmp_path):
+    """Every set writes an audit row to the history table."""
     store = _store(tmp_path)
     store.set("target_cm", 0.2)
     store.set("target_cm", 0.3)
@@ -93,6 +99,7 @@ def test_history_is_appended(tmp_path):
 
 
 def test_resolved_lists_all_params_with_metadata(tmp_path):
+    """resolved lists every param with its value and override metadata."""
     store = _store(tmp_path)
     store.set("target_cm", 0.33, updated_by="vinaya")
     resolved = {r["key"]: r for r in store.resolved()}

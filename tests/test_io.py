@@ -6,6 +6,7 @@ from smarthub.core import io
 
 
 def test_versioned_training_tables(tmp_path, monkeypatch):
+    """Training tables are versioned, kept side by side, and loadable."""
     # Redirect the training dir to a temp location.
     monkeypatch.setattr(io, "TRAINING_DIR", tmp_path / "training")
 
@@ -30,6 +31,7 @@ def test_versioned_training_tables(tmp_path, monkeypatch):
 
 
 def test_training_manifest_written_and_loadable(tmp_path, monkeypatch):
+    """Saving a training table writes a loadable manifest with metadata."""
     monkeypatch.setattr(io, "TRAINING_DIR", tmp_path / "training")
     df = pd.DataFrame({"id": [1, 2], "won_flag": [1, 0]})
     meta = {"training_window_days": 21, "won_rate": 0.5}
@@ -44,6 +46,7 @@ def test_training_manifest_written_and_loadable(tmp_path, monkeypatch):
 
 
 def test_load_training_table_missing(tmp_path, monkeypatch):
+    """load_training_table raises DataNotFoundError when nothing is saved."""
     monkeypatch.setattr(io, "TRAINING_DIR", tmp_path / "training")
     try:
         io.load_training_table("home")

@@ -30,7 +30,20 @@ WATERMARK_PREFIX = "smarthub_last_pull_timestamp"
 
 
 def watermark_variable(lead_type_name: str) -> str:
-    """Per-lead-type watermark Variable name (lowercase, underscore-safe)."""
+    """Build the watermark Variable name for a lead type.
+
+    Lowercased and underscore-safe, one watermark per lead type.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type name (e.g. ``"auto"``); whitespace/case are normalised.
+
+    Returns
+    -------
+    str
+        Variable name ``smarthub_last_pull_timestamp_<lead_type_name>``.
+    """
     return f"{WATERMARK_PREFIX}_{lead_type_name.strip().lower()}"
 
 
@@ -41,7 +54,22 @@ def _utc_now_naive() -> datetime:
 
 @task(retries=2, retry_delay_seconds=30)
 def resolve_window(var_name: str, overlap_hours: float, default_lookback_hours: float):
-    """Read this lead type's watermark and compute the (min, max) pull window."""
+    """Read this lead type's watermark and compute the pull window.
+
+    Inputs
+    ------
+    var_name : str
+        Watermark Variable name for this lead type.
+    overlap_hours : float
+        Hours to re-pull before the watermark, for late-resolving outcomes.
+    default_lookback_hours : float
+        Backfill lookback used on the first run (no watermark yet).
+
+    Returns
+    -------
+    tuple[str, str]
+        The ``(min, max)`` window bounds formatted as datetime strings.
+    """
     raw = Variable.get(var_name, default=None)
     last_ts = parse_dt(raw) if raw else None
     min_dt, max_dt = compute_pull_window(
@@ -58,7 +86,26 @@ def fetch(
     with_expected_revenue: bool,
     selected_only: bool,
 ):
-    """Pull lead_pings for one lead type over the window via the ORM pull."""
+    """Pull lead_pings for one lead type over the window via the ORM pull.
+
+    Inputs
+    ------
+    min_s : str
+        Inclusive lower bound for ``created_at`` (datetime string).
+    max_s : str
+        Exclusive upper bound for ``created_at`` (datetime string).
+    lead_type_id : int
+        Lead type to restrict the pull to (e.g. 6=auto, 1=home).
+    with_expected_revenue : bool
+        Whether to join per-ping expected revenue from the listings.
+    selected_only : bool
+        Aggregate expected revenue over selected listings only.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The pulled leads frame.
+    """
     return fetch_leads(
         PullSettings.from_env(),
         min_s,
@@ -71,7 +118,18 @@ def fetch(
 
 @task
 def persist(df: pd.DataFrame) -> dict:
-    """Upsert the pulled frame into the configured storage backend(s)."""
+    """Upsert the pulled frame into the configured storage backend(s).
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        The pulled leads frame to store.
+
+    Returns
+    -------
+    dict
+        Storage result (written paths and row counts).
+    """
     return storage.save_pull(df, StorageSettings.from_env())
 
 
@@ -79,9 +137,21 @@ def persist(df: pd.DataFrame) -> dict:
 def validate(df: pd.DataFrame, lead_type_name: str):
     """Validate the freshly-pulled batch (warn + report only; never gates).
 
-    Publishes a per-lead-type data-quality Prefect artifact and returns the
-    report so the success notification can carry a summary. Detect-only — it
-    does not drop/fix rows, and any error here must not fail the pull.
+    Publishes a per-lead-type data-quality Prefect artifact so the success
+    notification can carry a summary. Detect-only: it does not drop/fix rows,
+    and any error here must not fail the pull.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        The freshly-pulled leads batch.
+    lead_type_name : str
+        Lead type name, used in the artifact key and description.
+
+    Returns
+    -------
+    ValidationReport | None
+        The validation report, or ``None`` if validation raised.
     """
     logger = get_run_logger()
     threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
@@ -101,10 +171,24 @@ def validate(df: pd.DataFrame, lead_type_name: str):
 
 @task
 def update_watermark(df: pd.DataFrame, var_name: str, window_max: str) -> str:
-    """Advance this lead type's watermark to the latest `created_at` pulled.
+    """Advance this lead type's watermark to the latest ``created_at`` pulled.
 
-    If the window had no rows, the previous watermark is kept unchanged (so we
-    don't skip a gap) — falling back to the window max only if none was set.
+    If the window had no rows, the previous watermark is kept unchanged (so a
+    gap is not skipped), falling back to the window max only if none was set.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        The pulled frame; its max ``created_at`` becomes the new watermark.
+    var_name : str
+        Watermark Variable name for this lead type.
+    window_max : str
+        Window upper bound, used as a fallback when no watermark exists.
+
+    Returns
+    -------
+    str
+        The new watermark value that was stored.
     """
     if df is not None and not df.empty and "created_at" in df.columns:
         latest = pd.to_datetime(df["created_at"]).max()
@@ -124,11 +208,31 @@ def data_pull_flow(
     with_expected_revenue: bool = True,
     selected_only: bool = True,
 ) -> dict:
-    """Scheduled pull for ONE lead type: resolve → fetch → persist → watermark.
+    """Scheduled pull for ONE lead type: resolve, fetch, persist, watermark.
 
     On any unhandled failure, ``flow_failure_hook`` sends a Slack alert. On
     success, a Slack notification reports the lead type, window, row count and
     stored file paths.
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id to pull (e.g. 6=auto, 1=home).
+    lead_type_name : str
+        Human name for the lead type, used in watermarks and reports.
+    overlap_hours : float
+        Hours to re-pull before the watermark, for late-resolving outcomes.
+    default_lookback_hours : float
+        Backfill lookback used on the first run.
+    with_expected_revenue : bool
+        Whether to join per-ping expected revenue from the listings.
+    selected_only : bool
+        Aggregate expected revenue over selected listings only.
+
+    Returns
+    -------
+    dict
+        Summary with ``lead_type``, ``rows`` and ``watermark``.
     """
     logger = get_run_logger()
     started_at = _utc_now_naive()
@@ -167,10 +271,33 @@ def _notify_success(
     lead_type_name, lead_type_id, min_s, max_s, df, result,
     prev_wm, new_wm, started_at, quality=None,
 ) -> None:
-    """Send the Slack 'data pull completed' notification, grouped for readability.
+    """Send the Slack 'data pull completed' notification, grouped for reading.
 
     Leads with a headline (rows + window), then groups the rest under titled
     sections (Volume / Watermark / Run); storage paths go in the footer.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type name shown in the subject.
+    lead_type_id : int
+        Lead type id shown in the subject.
+    min_s : str
+        Window lower bound (datetime string).
+    max_s : str
+        Window upper bound (datetime string).
+    df : pandas.DataFrame
+        The pulled frame, used for the row count.
+    result : dict
+        Storage result (paths and row counts).
+    prev_wm : str
+        Watermark value before this pull.
+    new_wm : str
+        Watermark value after this pull.
+    started_at : datetime
+        UTC time the run started.
+    quality : ValidationReport | None
+        Optional validation report to append as a group.
     """
     rows = int(len(df))
     parquet_paths = result.get("parquet_paths") or []
@@ -209,7 +336,27 @@ def _notify_success(
 def _report(
     lead_type_name, lead_type_id, min_s, max_s, df, result, prev_wm, new_wm
 ) -> None:
-    """Publish a Prefect markdown artifact summarising this pull."""
+    """Publish a Prefect markdown artifact summarising this pull.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type name for the artifact key and heading.
+    lead_type_id : int
+        Lead type id shown in the summary.
+    min_s : str
+        Window lower bound (datetime string).
+    max_s : str
+        Window upper bound (datetime string).
+    df : pandas.DataFrame
+        The pulled frame, used for row and win counts.
+    result : dict
+        Storage result (row counts).
+    prev_wm : str
+        Watermark value before this pull.
+    new_wm : str
+        Watermark value after this pull.
+    """
     rows = int(len(df))
     won = "-"
     if rows and "won" in df.columns:

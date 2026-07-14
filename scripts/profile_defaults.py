@@ -31,7 +31,18 @@ from smarthub.feature_engineering import features  # noqa: E402
 
 
 def norm(s: pd.Series) -> pd.Series:
-    """Strip strings and treat blanks as missing."""
+    """Strip strings and treat blanks as missing.
+
+    Inputs
+    ------
+    s : pd.Series
+        Series to normalize.
+
+    Returns
+    -------
+    pd.Series
+        The series with text stripped and blanks set to NA.
+    """
     if s.dtype == object or str(s.dtype).startswith("string"):
         s = s.astype("string").str.strip()
         s = s.mask(s.eq(""))
@@ -39,6 +50,18 @@ def norm(s: pd.Series) -> pd.Series:
 
 
 def main(argv=None) -> int:
+    """Profile suspected default values across the training universe.
+
+    Inputs
+    ------
+    argv : list[str], optional
+        Command-line arguments; defaults to ``sys.argv``.
+
+    Returns
+    -------
+    int
+        Process exit code (0 on success, 1 if no files found).
+    """
     parser = argparse.ArgumentParser(description="Suspected default-value profiler.")
     parser.add_argument("--parquet-dir", default="data/leads")
     parser.add_argument("--lead-type-id", type=int, default=6)

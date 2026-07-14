@@ -1,19 +1,10 @@
 """Holiday calendar for the ``is_workday`` feature.
 
-Design (per Kiran/Vinaya):
-- **Weekends (Sat/Sun) are always non-workdays — computed in code**, no config.
-- **Observed holidays** live in a git-versioned JSON file
-  (``config/holidays.json``) so they're transparent (not hardcoded) and editable
-  without touching code. Path overridable via ``SMARTHUB_HOLIDAYS``; mount the
-  file to edit without a rebuild.
-
-If a non-dev ever needs to edit dates from a UI, swap the JSON backend for a
-``smarthub_holidays`` table — ``is_workday`` / ``holiday_dates`` stay the same.
-
-File format (either shape works)::
-
-    {"holidays": [{"date": "2026-01-01", "label": "New Year's Day"}, ...]}
-    ["2026-01-01", "2026-12-25", ...]
+Weekends (Sat/Sun) are always non-workdays, computed in code. Observed
+holidays live in a git-versioned JSON file (``config/holidays.json``, path
+overridable via ``SMARTHUB_HOLIDAYS``) so they are transparent and editable
+without a code change. The file may be ``{"holidays": [{"date", "label"},
+...]}`` or a bare list of ISO date strings.
 """
 
 from __future__ import annotations
@@ -38,6 +29,7 @@ def holidays_path() -> str:
 
 
 def _parse(entry) -> date | None:
+    """Parse a holiday entry (dict or string) to a date, or None."""
     raw = entry.get("date") if isinstance(entry, dict) else entry
     try:
         return datetime.strptime(str(raw).strip()[:10], "%Y-%m-%d").date()
@@ -47,7 +39,14 @@ def _parse(entry) -> date | None:
 
 @lru_cache(maxsize=1)
 def holiday_dates() -> frozenset[date]:
-    """Observed holiday dates from the JSON file (empty if absent/unreadable)."""
+    """Observed holiday dates loaded from the JSON file.
+
+    Returns
+    -------
+    frozenset[date]
+        The observed holiday dates; empty when the file is absent or
+        unreadable. Cached; call :func:`reload` after editing the file.
+    """
     path = holidays_path()
     if not os.path.exists(path):
         logger.info("Holiday file not found at %s; weekends-only.", path)
@@ -68,6 +67,7 @@ def reload() -> None:
 
 
 def is_holiday(day: date) -> bool:
+    """Return True when ``day`` is an observed holiday."""
     return day in holiday_dates()
 
 

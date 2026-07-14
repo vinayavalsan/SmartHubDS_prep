@@ -17,8 +17,7 @@ from smarthub.data_pull.models import (
 
 
 def _compiled_sql(stmt) -> str:
-    # Redshift speaks the PostgreSQL dialect; compiling against it confirms the
-    # ORM produces valid SQL without needing a live database.
+    """Compile a statement to PostgreSQL-dialect SQL (Redshift-compatible)."""
     return str(
         stmt.compile(
             dialect=postgresql.dialect(),
@@ -28,6 +27,7 @@ def _compiled_sql(stmt) -> str:
 
 
 def test_leads_select_targets_lead_pings_table():
+    """leads_select queries lead_pings and selects the expected columns."""
     sql = _compiled_sql(leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00"))
     assert "FROM lead_pings" in sql
     for col in LEADS_COLUMNS:
@@ -35,6 +35,7 @@ def test_leads_select_targets_lead_pings_table():
 
 
 def test_leads_select_applies_date_range():
+    """leads_select applies the created_at date-range bounds."""
     sql = _compiled_sql(leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00"))
     assert "lead_pings.created_at >=" in sql
     assert "lead_pings.created_at <" in sql
@@ -42,6 +43,7 @@ def test_leads_select_applies_date_range():
 
 
 def test_leads_select_lead_type_filter():
+    """leads_select adds a lead_type_id filter only when requested."""
     sql_all = _compiled_sql(leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00"))
     assert "lead_pings.lead_type_id =" not in sql_all
 
@@ -52,6 +54,7 @@ def test_leads_select_lead_type_filter():
 
 
 def test_expected_revenue_join_lead_type_filter():
+    """Expected-revenue query applies the lead_type_id filter over the join."""
     sql = _compiled_sql(
         leads_with_expected_revenue_select(
             "2026-06-07 00:00:00", "2026-06-20 00:00:00", lead_type_id=1
@@ -62,17 +65,20 @@ def test_expected_revenue_join_lead_type_filter():
 
 
 def test_leads_select_excludes_pii_columns():
+    """leads_select never selects PII columns."""
     sql = _compiled_sql(leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00"))
     for pii in ("ip_address", "user_agent", "date_of_birth", "trusted_form_token"):
         assert f"lead_pings.{pii}" not in sql
 
 
 def test_leads_select_accepts_datetime_objects():
+    """leads_select accepts datetime objects as bounds."""
     stmt = leads_select(datetime(2026, 6, 7), datetime(2026, 6, 20))
     assert "FROM lead_pings" in _compiled_sql(stmt)
 
 
 def test_expected_revenue_join_query():
+    """Expected-revenue query joins the listings aggregate with a left join."""
     sql = _compiled_sql(
         leads_with_expected_revenue_select("2026-06-07 00:00:00", "2026-06-20 00:00:00")
     )
@@ -86,6 +92,7 @@ def test_expected_revenue_join_query():
 
 
 def test_expected_revenue_join_all_listings():
+    """selected_only=False drops the listings selected filter."""
     sql = _compiled_sql(
         leads_with_expected_revenue_select(
             "2026-06-07 00:00:00", "2026-06-20 00:00:00", selected_only=False
@@ -95,13 +102,13 @@ def test_expected_revenue_join_all_listings():
 
 
 def test_listing_fk_points_to_lead_pings():
+    """LeadPingListing.lead_ping_id foreign-keys to LeadPing.id."""
     fks = list(LeadPingListing.__table__.c.lead_ping_id.foreign_keys)
     assert fks and fks[0].column is LeadPing.__table__.c.id
 
 
 def test_coerce_leads_dtypes_stable_schema():
-    # An all-null string column must still be typed as string (not numeric),
-    # so a later pull with real strings won't break the DuckDB schema.
+    """coerce_leads_dtypes assigns stable dtypes, keeping all-null as string."""
     df = pd.DataFrame(
         {
             "id": ["1", "2"],

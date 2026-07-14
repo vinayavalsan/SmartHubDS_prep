@@ -23,10 +23,23 @@ from smarthub.monitoring import _ui
 
 @st.cache_data
 def load_data():
+    """Load and cache the accumulated leads dataframe."""
     return io.load_leads()
 
 
 def ordered_state_list(df) -> list[str]:
+    """List distinct states with ``"NAvail"`` sorted last.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Leads data with a ``state`` column.
+
+    Returns
+    -------
+    list[str]
+        Sorted state codes, with ``"NAvail"`` appended when present.
+    """
     states = sorted([s for s in df["state"].dropna().unique() if s != "NAvail"])
     if "NAvail" in df["state"].values:
         states.append("NAvail")
@@ -39,6 +52,24 @@ def ordered_state_list(df) -> list[str]:
 
 
 def _build_plot_type_1_data(df, feature_col, metric_col, legend_col):
+    """Aggregate a metric by a feature (optionally split by a legend column).
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data.
+    feature_col : str
+        Column placed on the x-axis.
+    metric_col : str
+        Metric to aggregate.
+    legend_col : str
+        Column to split by, or ``"None"``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Plot-ready data with string-cast grouping columns.
+    """
     group_cols = [feature_col]
     if legend_col != "None" and legend_col != feature_col:
         group_cols.append(legend_col)
@@ -51,6 +82,24 @@ def _build_plot_type_1_data(df, feature_col, metric_col, legend_col):
 
 
 def _figure_type_1(plot_df, feature_col, metric_col, legend_col):
+    """Build the Plot Type 1 line figure from aggregated data.
+
+    Inputs
+    ------
+    plot_df : pd.DataFrame
+        Aggregated plot data.
+    feature_col : str
+        Column on the x-axis.
+    metric_col : str
+        Metric on the y-axis.
+    legend_col : str
+        Column used for color, or ``"None"``.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The styled line figure.
+    """
     use_legend = legend_col != "None" and legend_col in plot_df.columns
     fig = px.line(
         plot_df,
@@ -73,6 +122,13 @@ def _figure_type_1(plot_df, feature_col, metric_col, legend_col):
 
 
 def display_plot_type_1(df):
+    """Render the Plot Type 1 controls and charts (metric by any feature).
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data to plot.
+    """
     st.markdown("### Plot Type 1")
     col1, col2, col3 = st.columns(3)
 
@@ -122,6 +178,24 @@ _FREQ_MAP = {"1 hr": "h", "1 day": "D"}
 
 
 def _build_plot_type_2_data(df, freq_label, metric_col, legend_col):
+    """Aggregate a metric over time buckets (optionally split by a legend).
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data with ``created_at``.
+    freq_label : str
+        Bucket size label (key of ``_FREQ_MAP``).
+    metric_col : str
+        Metric to aggregate.
+    legend_col : str
+        Column to split by, or ``"None"``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Time-bucketed, plot-ready data.
+    """
     source = df.copy()
     source["created_at_bucket"] = source["created_at"].dt.floor(_FREQ_MAP[freq_label])
     group_cols = ["created_at_bucket"]
@@ -135,6 +209,24 @@ def _build_plot_type_2_data(df, freq_label, metric_col, legend_col):
 
 
 def _figure_type_2(plot_df, metric_col, legend_col, freq_label):
+    """Build the Plot Type 2 time-series line figure.
+
+    Inputs
+    ------
+    plot_df : pd.DataFrame
+        Aggregated time-series data.
+    metric_col : str
+        Metric on the y-axis.
+    legend_col : str
+        Column used for color, or ``"None"``.
+    freq_label : str
+        Bucket size label shown in the title.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The styled line figure.
+    """
     use_legend = legend_col != "None" and legend_col in plot_df.columns
     fig = px.line(
         plot_df,
@@ -157,6 +249,13 @@ def _figure_type_2(plot_df, metric_col, legend_col, freq_label):
 
 
 def display_plot_type_2(df):
+    """Render the Plot Type 2 controls and time-series charts.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data; requires a ``created_at`` column.
+    """
     st.markdown("### Plot Type 2 - Time Series")
     if "created_at" not in df.columns:
         st.info("created_at column is required for Plot Type 2.")
@@ -202,6 +301,26 @@ _BUCKET_OPTIONS = {"$0.50": 0.5, "$1": 1, "$2": 2, "$5": 5, "$10": 10}
 
 
 def _build_plot_type_3_data(df, x_col, bucket_size, metric_col, legend_col):
+    """Bin a dollar-valued column and aggregate a metric per bucket.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data.
+    x_col : str
+        Dollar-valued column to bucket.
+    bucket_size : float
+        Width of each bucket.
+    metric_col : str
+        Metric to aggregate.
+    legend_col : str
+        Column to split by, or ``"None"``.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, str]
+        The plot-ready data and the bucket-upper column name.
+    """
     source = df.dropna(subset=[x_col]).copy()
     if source.empty:
         return source, "bucket_upper"
@@ -224,6 +343,28 @@ def _build_plot_type_3_data(df, x_col, bucket_size, metric_col, legend_col):
 def _figure_type_3(
     plot_df, x_label, bucket_upper_col, metric_col, legend_col, size_lbl
 ):
+    """Build the Plot Type 3 bucketed line figure.
+
+    Inputs
+    ------
+    plot_df : pd.DataFrame
+        Aggregated, bucketed data.
+    x_label : str
+        Human-readable name of the bucketed metric.
+    bucket_upper_col : str
+        Column holding each bucket's upper bound.
+    metric_col : str
+        Metric on the y-axis.
+    legend_col : str
+        Column used for color, or ``"None"``.
+    size_lbl : str
+        Bucket-width label shown in the title.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The styled line figure.
+    """
     use_legend = legend_col != "None" and legend_col in plot_df.columns
     fig = px.line(
         plot_df,
@@ -247,6 +388,13 @@ def _figure_type_3(
 
 
 def display_plot_type_3(df):
+    """Render the Plot Type 3 controls and dollar-bucketed charts.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data; requires a profit/bid/payout/revenue column.
+    """
     st.markdown("### Plot Type 3 - Metric Value Series")
     x_axis_options = [lbl for lbl, col in _X_AXIS_MAP.items() if col in df.columns]
     if not x_axis_options:
@@ -310,6 +458,22 @@ def display_plot_type_3(df):
 
 
 def _winrate_curve_figure(curves, title, show_delta):
+    """Build the cumulative win-rate curve figure.
+
+    Inputs
+    ------
+    curves : pd.DataFrame
+        Win-rate-vs-threshold curves.
+    title : str
+        Figure title.
+    show_delta : bool
+        Whether to include the win-rate delta curve.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The styled line figure.
+    """
     value_cols = ["winrate_below", "winrate_above"]
     if show_delta:
         value_cols.append("winrate_delta")
@@ -327,6 +491,13 @@ def _winrate_curve_figure(curves, title, show_delta):
 
 
 def display_plot_type_4(df):
+    """Render the Plot Type 4 controls and cumulative win-rate curves.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data; requires ``bid`` and ``won`` columns.
+    """
     st.markdown("### Plot Type 4 - Cumulative win-rate curves")
     st.caption(
         "Win rate when bidding at/under (winrate_below) vs over (winrate_above) "
@@ -377,6 +548,13 @@ def display_plot_type_4(df):
 
 
 def display_funnel(df):
+    """Render the accept/reject funnel chart.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data.
+    """
     st.markdown("### Accept / reject funnel")
     funnel = funnel_counts(df)
     fig = px.funnel(funnel, x="count", y="stage")
@@ -394,6 +572,18 @@ def display_funnel(df):
 
 
 def _render_filters(df):
+    """Render the sidebar filters and return the filtered leads.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Full leads data to filter.
+
+    Returns
+    -------
+    pd.DataFrame
+        The subset matching the active sidebar selections.
+    """
     st.sidebar.header("Filters")
 
     lead_types = sorted(df["lead_type_id"].dropna().unique())
@@ -451,6 +641,13 @@ def _render_filters(df):
 
 
 def _render_metrics(df):
+    """Render the headline metric tiles for the filtered leads.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Filtered leads data to summarize.
+    """
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Rows", f"{len(df):,}")
     c2.metric("Unique ids", df["id"].nunique())
@@ -466,6 +663,7 @@ def _render_metrics(df):
 
 
 def main():
+    """Run the Leads dashboard page (load, filter, and plot)."""
     st.title("SmartHub Leads")
     if st.button("🔄 Reload Data"):
         st.cache_data.clear()

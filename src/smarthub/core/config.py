@@ -22,6 +22,7 @@ class ConfigError(RuntimeError):
 
 
 def _require(name: str) -> str:
+    """Return the trimmed value of env var ``name``; raise if unset/blank."""
     value = os.getenv(name)
     if value is None or value.strip() == "":
         raise ConfigError(
@@ -33,6 +34,8 @@ def _require(name: str) -> str:
 
 @dataclass(frozen=True)
 class SSHSettings:
+    """SSH connection settings loaded from the environment."""
+
     host: str
     user: str
     private_key_path: Path
@@ -41,6 +44,18 @@ class SSHSettings:
 
     @classmethod
     def from_env(cls) -> "SSHSettings":
+        """Build SSH settings from ``SSH_*`` environment variables.
+
+        Returns
+        -------
+        SSHSettings
+            Settings populated from the ``SSH_*`` environment variables.
+
+        Raises
+        ------
+        ConfigError
+            If a required variable is unset or the key file is missing.
+        """
         key_path = Path(os.path.expanduser(_require("SSH_PRIVATE_KEY_PATH")))
         if not key_path.exists():
             raise ConfigError(f"SSH private key not found at: {key_path}")
@@ -56,6 +71,8 @@ class SSHSettings:
 
 @dataclass(frozen=True)
 class RedshiftSettings:
+    """Redshift connection settings loaded from the environment."""
+
     host: str
     database: str
     user: str
@@ -65,6 +82,18 @@ class RedshiftSettings:
 
     @classmethod
     def from_env(cls) -> "RedshiftSettings":
+        """Build Redshift settings from ``REDSHIFT_*`` env variables.
+
+        Returns
+        -------
+        RedshiftSettings
+            Settings populated from the ``REDSHIFT_*`` env variables.
+
+        Raises
+        ------
+        ConfigError
+            If a required variable is unset or blank.
+        """
         return cls(
             host=_require("REDSHIFT_HOST"),
             database=_require("REDSHIFT_DB"),
@@ -84,6 +113,18 @@ class PullSettings:
 
     @classmethod
     def from_env(cls) -> "PullSettings":
+        """Build combined SSH + Redshift settings from the environment.
+
+        Returns
+        -------
+        PullSettings
+            The combined SSH and Redshift settings.
+
+        Raises
+        ------
+        ConfigError
+            If any required variable is unset or invalid.
+        """
         return cls(
             ssh=SSHSettings.from_env(),
             redshift=RedshiftSettings.from_env(),
@@ -107,6 +148,19 @@ class StorageSettings:
 
     @classmethod
     def from_env(cls) -> "StorageSettings":
+        """Build storage settings from the environment.
+
+        Returns
+        -------
+        StorageSettings
+            Settings from ``STORAGE_BACKEND``, ``DUCKDB_PATH``,
+            ``PARQUET_DIR`` and ``PARTITION_DATE_COL``.
+
+        Raises
+        ------
+        ConfigError
+            If ``STORAGE_BACKEND`` is not duckdb, parquet or both.
+        """
         backend = os.getenv("STORAGE_BACKEND", "both").strip().lower()
         if backend not in _VALID_BACKENDS:
             raise ConfigError(
@@ -122,10 +176,12 @@ class StorageSettings:
 
     @property
     def use_duckdb(self) -> bool:
+        """True when the DuckDB backend is enabled."""
         return self.backend in ("duckdb", "both")
 
     @property
     def use_parquet(self) -> bool:
+        """True when the Parquet backend is enabled."""
         return self.backend in ("parquet", "both")
 
 
@@ -135,9 +191,14 @@ DEFAULT_TRAINING_WINDOW_DAYS = 21
 def training_window_days() -> int:
     """Rolling training window in days for the feature build (0 = all data).
 
-    Task knob — lives in ``config/smarthub.ini`` ``[feature_engineering]
-    training_window_days`` (via ``task_config``); falls back to the default
-    (21) if unset. The market is non-stationary (CONTEXT.md §7).
+    Reads ``[feature_engineering] training_window_days`` from
+    ``config/smarthub.ini`` (via ``task_config``); falls back to the default
+    of 21 when unset. The market is non-stationary (CONTEXT.md §7).
+
+    Returns
+    -------
+    int
+        Number of days in the rolling window (0 means all data).
     """
     from smarthub.core import task_config
 

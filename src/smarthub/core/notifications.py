@@ -1,21 +1,11 @@
-"""Slack notifications for the SmartHub pipelines (success + failure).
+"""Slack notifications for the SmartHub pipelines (success and failure).
 
-Sends to a Slack **Incoming Webhook** whose URL lives in ``SLACK_WEBHOOK_URL``
-(a Tier-1 secret in ``.env``). Design goals:
-
-- **Best-effort:** every send is wrapped so a notification problem (bad URL,
-  Slack down, network blip) is logged and swallowed — it must never break or
-  fail a data pull / feature build.
-- **Cleanly disabled:** with no webhook configured, calls are no-ops.
-- **Dependency-free:** uses only the standard library (``urllib``), so it works
-  everywhere the package runs (worker, CLI, tests) without extra installs.
-
-Env vars:
-- ``SLACK_WEBHOOK_URL``        — Incoming Webhook URL (required to enable).
-- ``SLACK_ENV_LABEL``         — label shown on every message (e.g. ``prod``,
-                                 ``staging``, ``local``); defaults to hostname.
-- ``SLACK_MENTION_ON_FAILURE``— optional Slack id to @-mention on failures,
-                                 e.g. ``<@U123ABC>`` or ``<!subteam^S123>``.
+Posts to a Slack Incoming Webhook whose URL lives in ``SLACK_WEBHOOK_URL``.
+Sends are best-effort (any failure is logged and swallowed so a notification
+problem never breaks a pipeline) and cleanly disabled (no-ops) when no webhook
+is configured. Uses only the standard library so it works everywhere the
+package runs. ``SLACK_ENV_LABEL`` sets the message label (defaults to the
+hostname) and ``SLACK_MENTION_ON_FAILURE`` an optional @-mention on failures.
 """
 
 from __future__ import annotations
@@ -46,19 +36,35 @@ def slack_enabled() -> bool:
 
 
 def _webhook_url() -> str:
+    """Return the configured Slack webhook URL (stripped, may be empty)."""
     return os.environ.get(WEBHOOK_ENV, "").strip()
 
 
 def _env_label() -> str:
+    """Return the environment label, defaulting to the hostname."""
     return os.environ.get(ENV_LABEL_ENV, "").strip() or socket.gethostname()
 
 
 def _utc_now_str() -> str:
+    """Return the current UTC time as a display string."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _post(payload: dict) -> bool:
-    """POST a Slack payload. Returns True on success; never raises."""
+    """POST a Slack payload to the configured webhook.
+
+    Best-effort: logs and swallows any error, never raising.
+
+    Inputs
+    ------
+    payload : dict
+        The Slack message payload to send as JSON.
+
+    Returns
+    -------
+    bool
+        True when delivered; False when disabled or the send failed.
+    """
     url = _webhook_url()
     if not url:
         logger.info("Slack webhook not configured; skipping notification.")
@@ -79,7 +85,24 @@ def _post(payload: dict) -> bool:
 
 
 def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) -> dict:
-    """Build a Block Kit message with a text fallback."""
+    """Build a Block Kit Slack message with a plain-text fallback.
+
+    Inputs
+    ------
+    status : str
+        ``success`` or ``failure``; selects the emoji and verb.
+    pipeline : str
+        Pipeline name shown in the header.
+    fields : dict
+        Label/value pairs rendered as a field grid (empty values skipped).
+    error : str | None
+        Error text shown in a code block (truncated if very long).
+
+    Returns
+    -------
+    dict
+        A payload with ``text`` and ``blocks`` keys.
+    """
     emoji = _EMOJI.get(status, "")
     verb = "completed" if status == _SUCCESS else "FAILED"
     header = f"SmartHub · {pipeline} · {verb}"
@@ -140,17 +163,62 @@ def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) 
 
 
 def notify(status: str, pipeline: str, fields: dict, error: str | None = None) -> bool:
-    """Send a Slack notification. Best-effort; returns True if delivered."""
+    """Send a Slack notification (best-effort).
+
+    Inputs
+    ------
+    status : str
+        ``success`` or ``failure``.
+    pipeline : str
+        Pipeline name shown in the header.
+    fields : dict
+        Label/value pairs to display.
+    error : str | None
+        Optional error text to include.
+
+    Returns
+    -------
+    bool
+        True when delivered.
+    """
     return _post(_build_payload(status, pipeline, fields, error))
 
 
 def notify_success(pipeline: str, fields: dict) -> bool:
-    """Notify that a pipeline run completed successfully."""
+    """Notify that a pipeline run completed successfully.
+
+    Inputs
+    ------
+    pipeline : str
+        Pipeline name shown in the header.
+    fields : dict
+        Label/value pairs to display.
+
+    Returns
+    -------
+    bool
+        True when delivered.
+    """
     return notify(_SUCCESS, pipeline, fields)
 
 
 def notify_failure(pipeline: str, fields: dict, error: str | None = None) -> bool:
-    """Notify that a pipeline run failed."""
+    """Notify that a pipeline run failed.
+
+    Inputs
+    ------
+    pipeline : str
+        Pipeline name shown in the header.
+    fields : dict
+        Label/value pairs to display.
+    error : str | None
+        Optional error text to include.
+
+    Returns
+    -------
+    bool
+        True when delivered.
+    """
     return notify(_FAILURE, pipeline, fields, error=error)
 
 
@@ -171,11 +239,28 @@ def _build_grouped_payload(
     groups: list,
     footer_extra: str | None,
 ) -> dict:
-    """Block Kit message grouped into titled sections with dividers.
+    """Build a Block Kit message grouped into titled sections with dividers.
 
-    ``groups`` is an ordered list of ``(title, fields_dict)``; each renders as a
-    divider + a section with a bold title and a 2-column field grid. ``headline``
-    is a prominent mrkdwn line under the header (e.g. the promotion decision).
+    Inputs
+    ------
+    status : str
+        ``success`` or ``failure``.
+    pipeline : str
+        Pipeline name shown in the header.
+    subject : str | None
+        Optional subject appended to the header.
+    headline : str | None
+        Prominent mrkdwn line under the header (e.g. the decision).
+    groups : list
+        Ordered ``(title, fields_dict)`` pairs; each renders as a divider
+        plus a titled 2-column field grid.
+    footer_extra : str | None
+        Extra text appended to the context footer.
+
+    Returns
+    -------
+    dict
+        A payload with ``text`` and ``blocks`` keys.
     """
     emoji = _EMOJI.get(status, "")
     verb = "completed" if status == _SUCCESS else "FAILED"
@@ -239,7 +324,26 @@ def notify_success_grouped(
     groups: list | None = None,
     footer_extra: str | None = None,
 ) -> bool:
-    """Notify success with a grouped, sectioned layout. Best-effort."""
+    """Notify success with a grouped, sectioned layout (best-effort).
+
+    Inputs
+    ------
+    pipeline : str
+        Pipeline name shown in the header.
+    subject : str | None
+        Optional subject appended to the header.
+    headline : str | None
+        Prominent mrkdwn line under the header.
+    groups : list | None
+        Ordered ``(title, fields_dict)`` pairs to render.
+    footer_extra : str | None
+        Extra text appended to the context footer.
+
+    Returns
+    -------
+    bool
+        True when delivered.
+    """
     return _post(
         _build_grouped_payload(
             _SUCCESS, pipeline, subject, headline, groups or [], footer_extra
@@ -260,10 +364,20 @@ def _run_url(flow_run) -> str:
 
 
 def flow_failure_hook(flow, flow_run, state) -> None:
-    """Prefect ``on_failure`` hook — notify Slack when a flow run fails.
+    """Prefect ``on_failure`` hook that notifies Slack when a flow fails.
 
-    Attach with ``@flow(..., on_failure=[flow_failure_hook])``. Pulls the lead
-    type from the run's parameters so alerts are self-identifying. Never raises.
+    Attach with ``@flow(..., on_failure=[flow_failure_hook])``. Pulls the
+    lead type from the run's parameters so alerts are self-identifying.
+    Never raises.
+
+    Inputs
+    ------
+    flow : Flow
+        The Prefect flow whose name is used as the pipeline label.
+    flow_run : FlowRun
+        The failed run; supplies parameters, name and deployment id.
+    state : State
+        The terminal state; its message is used as the error text.
     """
     try:
         params = dict(getattr(flow_run, "parameters", {}) or {})

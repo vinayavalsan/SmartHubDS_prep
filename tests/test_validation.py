@@ -8,6 +8,7 @@ from smarthub.validation import report as vreport
 
 
 def _raw():
+    """Return a raw lead batch seeded with one of each validation problem."""
     return pd.DataFrame(
         {
             "id": [1, 2, 2],                       # duplicate id (2)
@@ -30,6 +31,7 @@ def _raw():
 
 
 def _find(report, column, needle):
+    """Return rule violations matching a column and a check-name substring."""
     return [
         v for v in report.rule_violations
         if v.column == column and needle in v.check
@@ -37,6 +39,7 @@ def _find(report, column, needle):
 
 
 def test_flags_range_domain_and_uniqueness():
+    """Range, domain, and uniqueness violations are flagged."""
     pytest.importorskip("pandera")             # schema layer needs pandera
     rep = validate_leads(_raw())
     assert rep.schema_checked is True          # pandera installed in CI/dev
@@ -47,7 +50,7 @@ def test_flags_range_domain_and_uniqueness():
 
 
 def test_check_labels_are_clean_and_stable():
-    # isin dumps the whole domain set (unstable ordering) unless normalised.
+    """Check labels are normalised and free of unstable isin/set dumps."""
     pytest.importorskip("pandera")
     rep = validate_leads(_raw())
     for v in rep.rule_violations:
@@ -55,11 +58,13 @@ def test_check_labels_are_clean_and_stable():
 
 
 def test_cross_field_current_carrier_when_not_insured():
+    """Cross-field check flags carriers present while not insured."""
     rep = validate_leads(_raw())
     assert rep.cross_field["current_carrier_when_not_insured"] == 2
 
 
 def test_cross_field_won_true_without_bid():
+    """Cross-field check flags won='true' rows with no bid."""
     raw = _raw()
     raw.loc[raw["id"] == 1, "won"] = "true"
     raw.loc[raw["id"] == 1, "bid"] = 0.0
@@ -68,6 +73,7 @@ def test_cross_field_won_true_without_bid():
 
 
 def test_missing_catalogue_and_high_missing():
+    """Missing-value catalogue and high-missing columns are reported."""
     rep = validate_leads(_raw(), high_missing_threshold=0.5)
     assert rep.missing["pst_hour"] == 1.0        # 100% empty
     assert "pst_hour" in rep.high_missing
@@ -75,6 +81,7 @@ def test_missing_catalogue_and_high_missing():
 
 
 def test_batch_metrics():
+    """Batch metrics count rows, illegal 'false', and coverage rates."""
     rep = validate_leads(_raw())
     m = rep.metrics
     assert m["rows"] == 3
@@ -85,12 +92,14 @@ def test_batch_metrics():
 
 
 def test_schema_drift_detects_missing_expected_column():
+    """Schema drift is reported when an expected column is missing."""
     raw = _raw().drop(columns=["state"])
     rep = validate_leads(raw)
     assert any("missing columns" in i and "state" in i for i in rep.schema_issues)
 
 
 def test_clean_batch_passes():
+    """A clean batch produces no rule or cross-field violations."""
     raw = pd.DataFrame(
         {
             "id": [1, 2],
@@ -114,6 +123,7 @@ def test_clean_batch_passes():
 
 
 def test_report_renderers_do_not_crash():
+    """Markdown and Slack report renderers run without crashing."""
     rep = validate_leads(_raw())
     md = vreport.to_markdown(rep, "auto")
     assert "Data quality — auto" in md
@@ -123,6 +133,7 @@ def test_report_renderers_do_not_crash():
 
 
 def test_validate_never_mutates_input():
+    """validate_leads never mutates its input frame."""
     raw = _raw()
     before = raw.copy()
     validate_leads(raw)

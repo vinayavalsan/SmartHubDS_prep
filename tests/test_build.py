@@ -10,14 +10,14 @@ from smarthub.feature_engineering import build
 
 
 def test_build_module_is_prefect_free():
-    # The manual/core path must not depend on Prefect (Vinaya: Prefect only in
-    # automation). The wrapper flow.py is where Prefect lives.
+    """Core build path must not import Prefect (automation-only dependency)."""
     src = pathlib.Path(build.__file__).read_text()
     assert "import prefect" not in src
     assert "from prefect" not in src
 
 
 def test_build_metadata_counts():
+    """build_metadata reports correct row/win/loss counts and coverage."""
     table = pd.DataFrame(
         {
             "won_flag": [1, 0, 1],
@@ -44,6 +44,7 @@ def test_build_metadata_counts():
 
 
 def test_run_build_features_raises_when_no_data(monkeypatch):
+    """run_build_features propagates StorageError when no data is available."""
     monkeypatch.setattr(
         build.StorageSettings, "from_env", classmethod(lambda cls: object())
     )

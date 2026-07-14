@@ -11,8 +11,13 @@ _CONFIGURED = False
 def configure_logging(level: str | None = None) -> None:
     """Configure root logging once, idempotently.
 
-    Level is taken from the ``level`` argument, then the ``LOG_LEVEL`` env var,
-    then defaults to ``INFO``.
+    Subsequent calls are no-ops.
+
+    Inputs
+    ------
+    level : str | None
+        Log level name; falls back to the ``LOG_LEVEL`` env var, then
+        ``INFO``.
     """
     global _CONFIGURED
     if _CONFIGURED:
@@ -28,5 +33,17 @@ def configure_logging(level: str | None = None) -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
+    """Return a logger for ``name``, ensuring logging is configured.
+
+    Inputs
+    ------
+    name : str
+        Logger name, typically ``__name__``.
+
+    Returns
+    -------
+    logging.Logger
+        The named logger.
+    """
     configure_logging()
     return logging.getLogger(name)

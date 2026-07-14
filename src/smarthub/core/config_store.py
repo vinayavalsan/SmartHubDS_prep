@@ -1,16 +1,10 @@
 """Runtime (Tier-2) configuration store, backed by the shared Postgres.
 
-Business/tuning knobs Kiran edits from the config UI live **here** — not secrets
-or the DB connection itself (those stay in the environment; see CONTEXT.md §10 /
-PLAN). Values are:
-
-- **typed & validated** against the ``REGISTRY`` below,
-- **env-scoped** (``staging`` / ``prod``) with per-scope overrides + global
-  fallback,
-- **versioned** — every write is appended to a history table for audit/rollback.
-
-The connection URL comes from ``SMARTHUB_CONFIG_DB_URL`` (defaults to the shared
-Postgres inside the Docker network). Tests point it at SQLite.
+Holds business/tuning knobs edited from the config UI (not secrets or the DB
+connection, which stay in the environment). Values are typed and validated
+against ``REGISTRY``, env-scoped (``staging``/``prod``) with a global fallback,
+and versioned to a history table for audit and rollback. The connection URL
+comes from ``SMARTHUB_CONFIG_DB_URL``; tests point it at SQLite.
 """
 
 from __future__ import annotations
@@ -42,6 +36,7 @@ ENVIRONMENTS = ("staging", "prod")
 
 
 def config_db_url() -> str:
+    """Return the config DB URL from the environment, or the default."""
     return os.getenv("SMARTHUB_CONFIG_DB_URL", DEFAULT_CONFIG_DB_URL)
 
 
@@ -62,7 +57,23 @@ class ConfigParam:
     choices: tuple | None = None
 
     def cast(self, raw: Any) -> Any:
-        """Cast ``raw`` to this param's type and validate; raise ConfigError."""
+        """Cast ``raw`` to this parameter's type and validate it.
+
+        Inputs
+        ------
+        raw : Any
+            The value to cast (e.g. a string from JSON or the UI).
+
+        Returns
+        -------
+        Any
+            The value cast to ``int``, ``float``, ``bool`` or ``str``.
+
+        Raises
+        ------
+        ConfigError
+            If ``raw`` cannot be cast, or falls outside min/max or choices.
+        """
         try:
             if self.type == "bool":
                 value = (
@@ -134,6 +145,7 @@ history_table = Table(
 
 
 def _require(key: str) -> ConfigParam:
+    """Return the registered :class:`ConfigParam` for ``key`` or raise."""
     param = REGISTRY_BY_KEY.get(key)
     if param is None:
         raise ConfigError(f"Unknown config key: {key!r}")
@@ -144,11 +156,41 @@ class ConfigStore:
     """Read/write the Tier-2 config table (creates it if absent)."""
 
     def __init__(self, url: str | None = None):
+        """Open the config DB, creating the tables if absent.
+
+        Inputs
+        ------
+        url : str | None
+            SQLAlchemy URL; defaults to ``config_db_url()`` when omitted.
+        """
         self.engine = create_engine(url or config_db_url(), future=True)
         _metadata.create_all(self.engine)
 
     def get(self, key: str, env: str = "prod", scope: str = "global") -> Any:
-        """Resolve a value: (env,scope) → (env,'global') → registry default."""
+        """Resolve a config value with scope fallback.
+
+        Looks up ``(env, scope)``, then ``(env, 'global')``, then the
+        registry default.
+
+        Inputs
+        ------
+        key : str
+            Registered config key to resolve.
+        env : str
+            Environment scope, e.g. ``prod`` or ``staging``.
+        scope : str
+            Sub-scope; falls back to ``global`` when no override exists.
+
+        Returns
+        -------
+        Any
+            The typed, validated value for the key.
+
+        Raises
+        ------
+        ConfigError
+            If ``key`` is not registered.
+        """
         param = _require(key)
         with self.engine.begin() as conn:
             row = conn.execute(
@@ -182,7 +224,31 @@ class ConfigStore:
         scope: str = "global",
         updated_by: str = "unknown",
     ) -> Any:
-        """Validate + upsert a value, appending to history. Returns typed value."""
+        """Validate and upsert a value, appending a history row.
+
+        Inputs
+        ------
+        key : str
+            Registered config key to write.
+        value : Any
+            New value; cast and validated against the registry.
+        env : str
+            Environment scope to write to.
+        scope : str
+            Sub-scope to write to.
+        updated_by : str
+            Identifier recorded in the audit history.
+
+        Returns
+        -------
+        Any
+            The typed, validated value that was stored.
+
+        Raises
+        ------
+        ConfigError
+            If ``key`` is not registered or ``value`` fails validation.
+        """
         param = _require(key)
         typed = param.cast(value)
         payload = json.dumps(typed)
@@ -213,7 +279,22 @@ class ConfigStore:
         return typed
 
     def resolved(self, env: str = "prod", scope: str = "global") -> list[dict]:
-        """Every registered param with its current value + metadata (for the UI)."""
+        """List every registered param with its current value and metadata.
+
+        Inputs
+        ------
+        env : str
+            Environment scope to resolve values for.
+        scope : str
+            Sub-scope to resolve values for.
+
+        Returns
+        -------
+        list[dict]
+            One dict per registered param, with keys such as ``key``,
+            ``type``, ``value``, ``default``, ``overridden`` and audit
+            fields (for the UI).
+        """
         with self.engine.begin() as conn:
             rows = conn.execute(
                 select(

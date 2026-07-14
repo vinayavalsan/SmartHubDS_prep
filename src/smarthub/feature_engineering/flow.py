@@ -23,7 +23,22 @@ from .build import _DAY_DEFS, _pct, run_build_features
 
 @task(name="build-training-table")
 def _build_task(lead_type_id, lead_type_name, window_days):
-    """Run the Prefect-free build core inside a tracked Prefect task."""
+    """Run the Prefect-free build core inside a tracked Prefect task.
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id to build.
+    lead_type_name : str
+        Lead type name (may be ``None`` to derive from the id).
+    window_days : int | None
+        Rolling training window in days; config default when ``None``.
+
+    Returns
+    -------
+    dict
+        The build result from ``run_build_features``.
+    """
     return run_build_features(
         lead_type_id=lead_type_id,
         lead_type_name=lead_type_name,
@@ -40,13 +55,26 @@ def build_features_flow(
 ) -> dict:
     """Build and save the training table for one lead type (STEP 2).
 
-    ``window_days`` overrides the rolling training window; when ``None`` it falls
-    back to ``training_window_days`` in config/smarthub.ini (default 21).
-    ``0`` = all data.
-
     On "no data yet" it publishes a clear "run data-pull first" artifact and
-    fails; ``flow_failure_hook`` sends the Slack alert. On success it publishes a
-    run-summary artifact and a Slack notification.
+    fails; ``flow_failure_hook`` sends the Slack alert. On success it publishes
+    a run-summary artifact and a Slack notification.
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id to build (6=auto, 1=home).
+    lead_type_name : str
+        Human name for the lead type.
+    window_days : int | None
+        Overrides the rolling training window; falls back to
+        ``training_window_days`` in config/smarthub.ini (default 21).
+        ``0`` = all data.
+
+    Returns
+    -------
+    dict
+        Summary with ``lead_type``, ``version``, ``rows``, ``columns`` and
+        ``path``.
     """
     try:
         result = _build_task(lead_type_id, lead_type_name, window_days)
@@ -90,7 +118,19 @@ def _blocked_artifact() -> None:
 
 
 def _report(lead_type_name: str, version: str, metadata: dict, path: str) -> None:
-    """Publish a Prefect markdown artifact summarising this feature build."""
+    """Publish a Prefect markdown artifact summarising this feature build.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type name for the artifact key and heading.
+    version : str
+        Training-table version string.
+    metadata : dict
+        Build metadata rendered into the summary table.
+    path : str
+        Output path of the saved training table.
+    """
     feats = metadata.get("feature_columns", [])
     won_rate = metadata.get("won_rate")
     won_rate_str = f"{won_rate:.3f}" if isinstance(won_rate, float) else "-"
@@ -131,11 +171,24 @@ _Day metrics: {_DAY_DEFS}._
 def _notify_success(
     lead_type_name, lead_type_id, version, metadata, path
 ) -> None:
-    """Send the Slack 'feature build completed' notification, grouped for reading.
+    """Send the Slack 'feature build completed' notification, grouped.
 
     Leads with a headline (training rows + version + win rate), then groups the
     rest under titled sections (Rows / Coverage / Time mix / Build). Day-metric
     definitions and the output path go in the footer.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type name shown in the subject.
+    lead_type_id : int
+        Lead type id shown in the subject.
+    version : str
+        Training-table version string.
+    metadata : dict
+        Build metadata rendered into the notification groups.
+    path : str
+        Output path of the saved training table.
     """
     feats = metadata.get("feature_columns", [])
     won_rate = metadata.get("won_rate")

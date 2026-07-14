@@ -6,6 +6,7 @@ from smarthub.core.config import ConfigError, RedshiftSettings, SSHSettings
 
 
 def test_redshift_settings_missing_var_raises(monkeypatch):
+    """RedshiftSettings.from_env raises when a required env var is missing."""
     for var in (
         "REDSHIFT_HOST",
         "REDSHIFT_DB",
@@ -18,6 +19,7 @@ def test_redshift_settings_missing_var_raises(monkeypatch):
 
 
 def test_redshift_settings_from_env(monkeypatch):
+    """RedshiftSettings.from_env reads host/port and applies default timeout."""
     monkeypatch.setenv("REDSHIFT_HOST", "redshift.example.com")
     monkeypatch.setenv("REDSHIFT_DB", "analytics")
     monkeypatch.setenv("REDSHIFT_USER", "anton")
@@ -31,6 +33,7 @@ def test_redshift_settings_from_env(monkeypatch):
 
 
 def test_ssh_settings_missing_key_file_raises(monkeypatch, tmp_path):
+    """SSHSettings.from_env raises when the private key file does not exist."""
     monkeypatch.setenv("SSH_HOST", "bastion.example.com")
     monkeypatch.setenv("SSH_USER", "ec2-user")
     monkeypatch.setenv("SSH_PRIVATE_KEY_PATH", str(tmp_path / "does_not_exist"))
@@ -39,10 +42,10 @@ def test_ssh_settings_missing_key_file_raises(monkeypatch, tmp_path):
 
 
 def test_training_window_days_from_ini_and_default(monkeypatch, tmp_path):
+    """training_window_days comes from the ini; defaults to 21 when absent."""
     from smarthub.core import task_config
     from smarthub.core.config import training_window_days
 
-    # Task knob: comes from config/smarthub.ini; default 21 when absent.
     monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(tmp_path / "absent.ini"))
     task_config.reload()
     assert training_window_days() == 21               # default
@@ -60,6 +63,7 @@ def test_training_window_days_from_ini_and_default(monkeypatch, tmp_path):
 
 
 def test_ssh_settings_ok(monkeypatch, tmp_path):
+    """SSHSettings.from_env returns settings with defaults when key exists."""
     key = tmp_path / "id_rsa"
     key.write_text("dummy")
     monkeypatch.setenv("SSH_HOST", "bastion.example.com")

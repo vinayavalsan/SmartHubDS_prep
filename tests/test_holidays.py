@@ -6,6 +6,7 @@ from smarthub.core import holidays
 
 
 def test_weekends_and_holidays(tmp_path, monkeypatch):
+    """Weekends and configured holidays are treated as non-workdays."""
     f = tmp_path / "h.json"
     f.write_text('{"holidays": [{"date": "2026-01-01", "label": "New Year"}]}')
     monkeypatch.setenv("SMARTHUB_HOLIDAYS", str(f))
@@ -21,6 +22,7 @@ def test_weekends_and_holidays(tmp_path, monkeypatch):
 
 
 def test_plain_list_format(tmp_path, monkeypatch):
+    """The holiday file may be a plain list of date strings."""
     f = tmp_path / "h.json"
     f.write_text('["2026-12-25"]')
     monkeypatch.setenv("SMARTHUB_HOLIDAYS", str(f))
@@ -32,6 +34,7 @@ def test_plain_list_format(tmp_path, monkeypatch):
 
 
 def test_missing_file_is_weekends_only(monkeypatch):
+    """A missing holiday file falls back to weekends-only."""
     monkeypatch.setenv("SMARTHUB_HOLIDAYS", "/no/such/file.json")
     holidays.reload()
     try:

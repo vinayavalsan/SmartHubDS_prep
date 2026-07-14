@@ -19,6 +19,18 @@ def require_password(
     """Return True only once the correct admin password has been entered.
 
     If no password is configured, editing stays locked (fail closed).
+
+    Inputs
+    ------
+    env_var : str
+        Environment variable holding the expected password.
+    session_key : str
+        Session-state key used to remember a successful login.
+
+    Returns
+    -------
+    bool
+        Whether the user is authenticated for the current session.
     """
     expected = os.getenv(env_var)
     if not expected:

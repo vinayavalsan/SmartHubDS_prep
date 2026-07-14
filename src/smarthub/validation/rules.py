@@ -5,7 +5,7 @@ Two layers:
   declarative rules (dtype coercion, numeric ranges, categorical domains,
   ``id`` uniqueness). pandera is imported lazily so this module still imports
   (and the pure-pandas checks below still run) if pandera isn't installed.
-- The pure-pandas functions (``missing  _rates``, ``cross_field_checks``,
+- The pure-pandas functions (``missing_rates``, ``cross_field_checks``,
   ``batch_metrics``) cover what pandera doesn't do cleanly: null/blank
   cataloguing, cross-field integrity, and batch quality metrics.
 
@@ -60,11 +60,17 @@ NON_NEGATIVE = [
 
 
 def leads_schema():
-    """Build the pandera schema for per-column rules. Lazy pandera import.
+    """Build the pandera schema for per-column rules (lazy pandera import).
 
     ``required=False`` everywhere (a column may be absent — that's handled by
-    schema-drift detection, not here) and ``coerce=True`` so string numerics are
-    read as numbers. ``strict=False`` so extra columns don't error.
+    schema-drift detection, not here) and ``coerce=True`` so string numerics
+    are read as numbers. ``strict=False`` so extra columns don't error.
+
+    Returns
+    -------
+    pandera.pandas.DataFrameSchema
+        Schema enforcing dtypes, numeric ranges, categorical domains, and
+        ``id`` uniqueness.
     """
     from pandera.pandas import Check, Column, DataFrameSchema
 
@@ -108,7 +114,18 @@ def _lower(series: pd.Series) -> pd.Series:
 
 
 def missing_rates(df: pd.DataFrame) -> dict[str, float]:
-    """Null/blank rate per column (0..1)."""
+    """Compute the null/blank rate per column.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Raw batch to profile.
+
+    Returns
+    -------
+    dict[str, float]
+        Column name to missing rate in ``0..1``.
+    """
     n = len(df)
     if not n:
         return {c: 0.0 for c in df.columns}
@@ -116,7 +133,18 @@ def missing_rates(df: pd.DataFrame) -> dict[str, float]:
 
 
 def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
-    """Count rows violating cross-field integrity rules. Detect-only."""
+    """Count rows violating cross-field integrity rules. Detect-only.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Raw batch to check.
+
+    Returns
+    -------
+    dict[str, int]
+        Rule name to the number of rows violating it.
+    """
     n = len(df)
     out: dict[str, int] = {}
     if not n:
@@ -166,7 +194,18 @@ def _rate(mask_sum: int, n: int) -> float:
 
 
 def batch_metrics(df: pd.DataFrame) -> dict:
-    """Headline quality metrics for the batch (rates/counts)."""
+    """Compute headline quality metrics (rates/counts) for the batch.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Raw batch to summarize.
+
+    Returns
+    -------
+    dict
+        Metric name to value, always including ``rows``.
+    """
     n = len(df)
     m: dict = {"rows": n}
     if not n:
@@ -199,7 +238,19 @@ def batch_metrics(df: pd.DataFrame) -> dict:
 
 
 def schema_drift(df: pd.DataFrame) -> list[str]:
-    """Human-readable schema differences vs the expected pulled columns."""
+    """Describe schema differences vs the expected pulled columns.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Raw batch whose columns are compared against ``EXPECTED_COLUMNS``.
+
+    Returns
+    -------
+    list[str]
+        Human-readable lines for missing and unexpected columns (empty if
+        none).
+    """
     have = set(df.columns)
     expected = set(EXPECTED_COLUMNS)
     issues = []

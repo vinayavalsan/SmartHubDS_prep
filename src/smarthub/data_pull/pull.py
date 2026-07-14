@@ -45,9 +45,21 @@ logger = get_logger(__name__)
 def _build_engine(rs: RedshiftSettings, local_port: int) -> Engine:
     """Create a SQLAlchemy engine that connects through the open SSH tunnel.
 
-    A ``creator`` is used so the actual socket goes through ``localhost`` on the
+    A ``creator`` is used so the socket goes through ``localhost`` on the
     tunnel's local port while SQLAlchemy still uses the Redshift dialect to
     compile queries.
+
+    Inputs
+    ------
+    rs : RedshiftSettings
+        Redshift connection settings (database, user, password, timeout).
+    local_port : int
+        Local port the SSH tunnel is forwarding to Redshift.
+
+    Returns
+    -------
+    sqlalchemy.engine.Engine
+        Engine bound to the tunnelled connection.
     """
 
     def _connect():
@@ -71,10 +83,30 @@ def fetch_leads(
     selected_only: bool = True,
     lead_type_id: int | None = None,
 ) -> pd.DataFrame:
-    """Open the tunnel, run the ORM query, and return the result as a dataframe.
+    """Open the tunnel, run the ORM query, and return the result as a frame.
 
-    The SSH tunnel and the SQLAlchemy engine are both disposed deterministically
-    even if the query raises. ``lead_type_id`` restricts to one lead type.
+    The SSH tunnel and the SQLAlchemy engine are both disposed
+    deterministically even if the query raises.
+
+    Inputs
+    ------
+    settings : PullSettings
+        SSH + Redshift connection settings.
+    min_created_at : str
+        Inclusive lower bound for ``created_at`` (datetime string).
+    max_created_at : str
+        Exclusive upper bound for ``created_at`` (datetime string).
+    with_expected_revenue : bool
+        Join per-ping expected revenue from the listings when ``True``.
+    selected_only : bool
+        Aggregate expected revenue over selected listings only.
+    lead_type_id : int | None
+        Restrict to one lead type; ``None`` pulls all types.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The fetched leads frame with ORM-coerced dtypes.
     """
     ssh, rs = settings.ssh, settings.redshift
     if with_expected_revenue:
@@ -115,11 +147,29 @@ def run(
     selected_only: bool = True,
     lead_type_id: int | None = None,
 ) -> pd.DataFrame:
-    """End-to-end pull: load config, fetch, persist. Returns the frame.
+    """End-to-end pull: load config, fetch, validate, persist.
 
     Upserts (keyed on ``id``) into whichever backend(s) ``STORAGE_BACKEND``
     enables, so overlapping re-pulled windows update late-resolving outcomes in
     place rather than duplicating them.
+
+    Inputs
+    ------
+    min_created_at : str
+        Inclusive lower bound for ``created_at`` (datetime string).
+    max_created_at : str
+        Exclusive upper bound for ``created_at`` (datetime string).
+    with_expected_revenue : bool
+        Join per-ping expected revenue from the listings when ``True``.
+    selected_only : bool
+        Aggregate expected revenue over selected listings only.
+    lead_type_id : int | None
+        Restrict to one lead type; ``None`` pulls all types.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The fetched (and persisted) leads frame.
     """
     leads_df = fetch_leads(
         PullSettings.from_env(),
@@ -139,6 +189,11 @@ def _validate(leads_df: pd.DataFrame) -> None:
     """Run data validation on the fetched batch (warn + report only).
 
     Detect-only: logs a summary and never drops rows or fails the pull.
+
+    Inputs
+    ------
+    leads_df : pandas.DataFrame
+        The freshly-fetched leads batch.
     """
     try:
         from smarthub.core import task_config
@@ -154,6 +209,18 @@ def _validate(leads_df: pd.DataFrame) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for the data pull.
+
+    Inputs
+    ------
+    argv : list[str] | None
+        Argument vector; defaults to ``sys.argv`` when ``None``.
+
+    Returns
+    -------
+    int
+        Process exit code (0 success, 2 config error, 1 otherwise).
+    """
     args = build_pull_parser().parse_args(argv)
     configure_logging(args.log_level)
     try:
@@ -176,7 +243,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _notify_cli_failure(args, exc: Exception) -> None:
-    """Best-effort Slack alert for a failed manual (CLI) pull."""
+    """Best-effort Slack alert for a failed manual (CLI) pull.
+
+    Inputs
+    ------
+    args : argparse.Namespace
+        Parsed CLI arguments (lead type + window bounds).
+    exc : Exception
+        The exception that caused the failure.
+    """
     notifications.notify_failure(
         "data-pull (manual/CLI)",
         {

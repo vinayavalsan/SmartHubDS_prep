@@ -22,6 +22,8 @@ DEFAULT_HIGH_MISSING_THRESHOLD = 0.5
 
 @dataclass
 class RuleViolation:
+    """One rule failure: column, check, affected row count, and examples."""
+
     column: str
     check: str
     count: int
@@ -30,6 +32,8 @@ class RuleViolation:
 
 @dataclass
 class ValidationReport:
+    """Structured result of validating a leads batch (warn + report only)."""
+
     total_rows: int
     schema_issues: list[str]
     rule_violations: list[RuleViolation]
@@ -59,10 +63,20 @@ class ValidationReport:
 
 
 def _friendly_check(check: str) -> str:
-    """Short, stable label for a pandera check (raw strings are noisy/unstable).
+    """Map a raw pandera check string to a short, stable label.
 
-    ``isin({...})`` dumps the whole domain set (and set ordering is
-    non-deterministic), so collapse the verbose ones to readable text.
+    Raw check strings are noisy and unstable — ``isin({...})`` dumps the whole
+    domain set with non-deterministic ordering — so collapse the verbose ones.
+
+    Inputs
+    ------
+    check : str
+        The pandera check description.
+
+    Returns
+    -------
+    str
+        A readable, stable label.
     """
     if check.startswith("isin("):
         return "not in allowed values"
@@ -78,8 +92,16 @@ def _friendly_check(check: str) -> str:
 def _run_schema_checks(df: pd.DataFrame):
     """Run the pandera schema (lazy) and fold failures into RuleViolations.
 
-    Returns ``(violations, checked)``; ``checked`` is False when pandera isn't
-    installed (warn-only degradation — the pandas checks still run).
+    Inputs
+    ------
+    df : pd.DataFrame
+        Batch to validate.
+
+    Returns
+    -------
+    tuple[list[RuleViolation], bool]
+        The violations found and whether checks ran (False when pandera is
+        not installed — a warn-only degradation; the pandas checks still run).
     """
     try:
         from pandera.errors import SchemaErrors
@@ -117,7 +139,20 @@ def validate_leads(
     df: pd.DataFrame,
     high_missing_threshold: float = DEFAULT_HIGH_MISSING_THRESHOLD,
 ) -> ValidationReport:
-    """Validate a raw ``lead_pings`` batch. Detect-only; never mutates ``df``."""
+    """Validate a raw ``lead_pings`` batch. Detect-only; never mutates ``df``.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        The raw batch to validate.
+    high_missing_threshold : float
+        Null/blank rate at/above which a column is flagged as high-missing.
+
+    Returns
+    -------
+    ValidationReport
+        Structured findings for artifact / Slack / log rendering.
+    """
     total = len(df)
     schema_issues = rules.schema_drift(df)
     rule_violations, schema_checked = _run_schema_checks(df)

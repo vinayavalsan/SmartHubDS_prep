@@ -18,18 +18,35 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 def project_root() -> Path:
     """Return the repository root.
 
-    Honours the ``SMARTHUB_ROOT`` environment variable when set (useful inside
-    containers where the code may live at a different absolute path).
+    Honours ``SMARTHUB_ROOT`` when set (useful inside containers where the
+    code may live at a different absolute path).
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved project root directory.
     """
     override = os.getenv("SMARTHUB_ROOT")
     return Path(override).resolve() if override else PROJECT_ROOT
 
 
 def data_dir() -> Path:
+    """Return the project ``data/`` directory."""
     return project_root() / "data"
 
 
 def resolve(path: str | os.PathLike[str]) -> Path:
-    """Resolve ``path`` against the project root unless it is already absolute."""
+    """Resolve ``path`` against the project root unless already absolute.
+
+    Inputs
+    ------
+    path : str | os.PathLike[str]
+        Path to resolve; returned unchanged when already absolute.
+
+    Returns
+    -------
+    pathlib.Path
+        The absolute, project-root-relative path.
+    """
     candidate = Path(path)
     return candidate if candidate.is_absolute() else project_root() / candidate

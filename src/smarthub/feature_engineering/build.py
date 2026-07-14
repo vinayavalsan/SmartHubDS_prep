@@ -34,6 +34,11 @@ def _required_raw_columns() -> list[str]:
     Projecting the storage read to just these keeps peak memory down — the wide
     unused columns (naics/sic codes, life_*, health_conditions, …) are dropped
     from the training table anyway, so they never need to enter pandas.
+
+    Returns
+    -------
+    list[str]
+        Ordered, de-duplicated raw column names to read.
     """
     cols = list(fe.PRE_BID_FEATURES) + list(fe.TIME_FEATURES) + [
         "id", "created_at", "pst_date", "pst_hour",
@@ -63,9 +68,24 @@ def _load_raw(window: int | None, log: logging.Logger) -> pd.DataFrame:
     """Load accumulated leads from storage (full table or recent window).
 
     Reads only the columns the training build needs (column projection) to keep
-    peak memory low on the wide ``lead_pings`` table. Raises
-    ``storage.StorageError`` with the standard "run data-pull first" message when
-    there's no data yet (STEP 1 hasn't run).
+    peak memory low on the wide ``lead_pings`` table.
+
+    Inputs
+    ------
+    window : int | None
+        Rolling window in days; a full-table read when falsy or <= 0.
+    log : logging.Logger
+        Logger for the "no data" error message.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The loaded raw leads frame.
+
+    Raises
+    ------
+    storage.StorageError
+        When there is no data yet (STEP 1 has not run).
     """
     settings = StorageSettings.from_env()
     columns = _required_raw_columns()
@@ -81,7 +101,25 @@ def _load_raw(window: int | None, log: logging.Logger) -> pd.DataFrame:
 def build_metadata(
     table: pd.DataFrame, lead_type_id: int, window: int, raw_rows: int | None = None
 ) -> dict:
-    """Lineage manifest + build-quality stats for the training table."""
+    """Lineage manifest + build-quality stats for the training table.
+
+    Inputs
+    ------
+    table : pandas.DataFrame
+        The built training table.
+    lead_type_id : int
+        Lead type id the table was built for.
+    window : int
+        Training window in days recorded in the manifest.
+    raw_rows : int | None
+        Raw row count before filtering, for the dropped-rows stat.
+
+    Returns
+    -------
+    dict
+        Metadata: row counts, win rate, coverage/time-mix stats and the
+        feature column list.
+    """
     created = (
         pd.to_datetime(table["created_at"]) if "created_at" in table.columns
         else pd.Series(dtype="datetime64[ns]")
@@ -138,11 +176,30 @@ def run_build_features(
     window_days: int | None = None,
     log: logging.Logger | None = None,
 ) -> dict:
-    """Build + save the training table for one lead type. Prefect-free.
+    """Build and save the training table for one lead type. Prefect-free.
 
-    Returns a result dict with the built ``table`` + ``metadata`` (so a caller
-    like the Prefect flow can report/notify) plus ``version`` / ``path`` /
-    ``rows`` / ``columns``. Raises ``storage.StorageError`` if STEP 1 hasn't run.
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id to build (6=auto, 1=home).
+    lead_type_name : str | None
+        Override name; derived from the id when ``None``.
+    window_days : int | None
+        Rolling training window in days; config default when ``None``, 0=all.
+    log : logging.Logger | None
+        Logger to use; the module logger when ``None``.
+
+    Returns
+    -------
+    dict
+        Result with the built ``table`` + ``metadata`` (so a caller like the
+        Prefect flow can report/notify) plus ``version`` / ``path`` / ``rows``
+        / ``columns``.
+
+    Raises
+    ------
+    storage.StorageError
+        If STEP 1 (data-pull) has not produced any data.
     """
     log = log or logger
     name = lead_type_name or _lead_type_name(lead_type_id)
@@ -174,9 +231,19 @@ def run_build_features(
 def main(argv=None):
     """Run build-features (STEP 2) directly — Prefect-free.
 
-        python -m smarthub.feature_engineering.build --lead-type-id 6   # auto
-        python -m smarthub.feature_engineering.build --lead-type-id 1   # home
-        python -m smarthub.feature_engineering.build --window-days 0     # all data
+        python -m smarthub.feature_engineering.build --lead-type-id 6  # auto
+        python -m smarthub.feature_engineering.build --lead-type-id 1  # home
+        python -m smarthub.feature_engineering.build --window-days 0   # all
+
+    Inputs
+    ------
+    argv : list[str] | None
+        Argument vector; defaults to ``sys.argv`` when ``None``.
+
+    Returns
+    -------
+    int
+        Process exit code (0 success, 1 on missing data).
     """
     parser = argparse.ArgumentParser(
         description="Build the SmartHub training table (STEP 2). Prefect-free."

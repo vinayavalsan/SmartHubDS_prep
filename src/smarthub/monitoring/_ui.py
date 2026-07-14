@@ -38,7 +38,18 @@ LEGEND_WHITELIST = [
 
 
 def get_plot_metric_options(df: pd.DataFrame) -> list[str]:
-    """Return the metrics that can be computed given the columns present."""
+    """Return the metrics that can be computed given the columns present.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Leads data whose columns constrain the available metrics.
+
+    Returns
+    -------
+    list[str]
+        Metric names supported by the columns in ``df``.
+    """
     return [
         metric
         for metric, cols in _METRIC_REQUIRED_COLS.items()
@@ -47,18 +58,53 @@ def get_plot_metric_options(df: pd.DataFrame) -> list[str]:
 
 
 def get_legend_options(df: pd.DataFrame) -> list[str]:
-    """Return ``["None"]`` plus the whitelisted categorical columns present."""
+    """Return ``["None"]`` plus the whitelisted categorical columns present.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Leads data whose columns are matched against the whitelist.
+
+    Returns
+    -------
+    list[str]
+        ``"None"`` followed by the sorted whitelisted columns present.
+    """
     present = [c for c in LEGEND_WHITELIST if c in df.columns]
     return ["None"] + sorted(present)
 
 
 def get_default_option(options: list, preferred_value) -> int:
-    """Index of ``preferred_value`` in ``options``, or 0 if absent."""
+    """Return the index of ``preferred_value`` in ``options``, or 0 if absent.
+
+    Inputs
+    ------
+    options : list
+        The option list a widget will display.
+    preferred_value : Any
+        The value to select by default.
+
+    Returns
+    -------
+    int
+        Index of ``preferred_value``, or 0 when it is not present.
+    """
     return options.index(preferred_value) if preferred_value in options else 0
 
 
 def style_figure(fig):
-    """Apply consistent gridlines to a Plotly figure."""
+    """Apply consistent gridlines to a Plotly figure.
+
+    Inputs
+    ------
+    fig : plotly.graph_objects.Figure
+        Figure to style in place.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The same figure, with gridlines applied.
+    """
     fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
     return fig

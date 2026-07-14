@@ -1,15 +1,10 @@
 """Task-specific (Tier-2 file) configuration.
 
-Non-secret, non-business *task* knobs live in an ini file with per-stage
-sections — ``[data_pull]``, ``[feature_engineering]``, ``[training]``,
-``[prediction]`` — per the team decision (Kiran/Vinaya): the UI holds business
-settings only, secrets live in ``.env``, and task configs live in an editable
-ini file.
-
-Defaults: every getter takes a ``default``; if the file, section, or key is
-missing (or unparseable), the default is returned — so the ini is optional and
-nothing breaks without it. Path: ``$SMARTHUB_TASK_CONFIG`` or
-``<project_root>/config/smarthub.ini``.
+Non-secret, non-business task knobs live in an ini file with per-stage
+sections (``[data_pull]``, ``[feature_engineering]``, ``[training]``,
+``[prediction]``). Every getter takes a ``default`` returned when the file,
+section or key is missing or unparseable, so the ini is optional. Path:
+``$SMARTHUB_TASK_CONFIG`` or ``<project_root>/config/smarthub.ini``.
 """
 
 from __future__ import annotations
@@ -36,6 +31,7 @@ def config_path() -> str:
 
 @lru_cache(maxsize=1)
 def _parser() -> configparser.ConfigParser:
+    """Return the cached parser, reading the ini file when it exists."""
     cp = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
     path = config_path()
     if os.path.exists(path):
@@ -51,7 +47,22 @@ def reload() -> None:
 
 
 def get(section: str, key: str, default=None):
-    """Raw string value, or ``default`` if missing."""
+    """Return the raw string value for a key, or ``default`` if missing.
+
+    Inputs
+    ------
+    section : str
+        Ini section name.
+    key : str
+        Option name within the section.
+    default : Any
+        Value returned when the section or key is absent.
+
+    Returns
+    -------
+    str | Any
+        The raw string value, or ``default``.
+    """
     cp = _parser()
     if cp.has_option(section, key):
         return cp.get(section, key)
@@ -59,6 +70,22 @@ def get(section: str, key: str, default=None):
 
 
 def get_int(section: str, key: str, default: int) -> int:
+    """Return a key parsed as ``int``, or ``default`` on missing/bad value.
+
+    Inputs
+    ------
+    section : str
+        Ini section name.
+    key : str
+        Option name within the section.
+    default : int
+        Value returned when missing or not an integer.
+
+    Returns
+    -------
+    int
+        The parsed integer, or ``default``.
+    """
     raw = get(section, key)
     try:
         return int(raw) if raw is not None else default
@@ -67,6 +94,22 @@ def get_int(section: str, key: str, default: int) -> int:
 
 
 def get_float(section: str, key: str, default: float) -> float:
+    """Return a key parsed as ``float``, or ``default`` on missing/bad value.
+
+    Inputs
+    ------
+    section : str
+        Ini section name.
+    key : str
+        Option name within the section.
+    default : float
+        Value returned when missing or not a float.
+
+    Returns
+    -------
+    float
+        The parsed float, or ``default``.
+    """
     raw = get(section, key)
     try:
         return float(raw) if raw is not None else default
@@ -75,6 +118,24 @@ def get_float(section: str, key: str, default: float) -> float:
 
 
 def get_bool(section: str, key: str, default: bool) -> bool:
+    """Return a key parsed as ``bool``, or ``default`` on unknown value.
+
+    Recognises true/false-ish tokens (e.g. 1/0, yes/no, on/off).
+
+    Inputs
+    ------
+    section : str
+        Ini section name.
+    key : str
+        Option name within the section.
+    default : bool
+        Value returned when missing or unrecognised.
+
+    Returns
+    -------
+    bool
+        The parsed boolean, or ``default``.
+    """
     raw = get(section, key)
     if raw is None:
         return default

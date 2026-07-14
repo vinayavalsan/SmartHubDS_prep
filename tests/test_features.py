@@ -10,8 +10,7 @@ from smarthub.feature_engineering.features import (
 
 
 def _raw():
-    # The warehouse encodes wins as 'true' and losses as NULL/blank (never
-    # 'false'); a bid is "placed" when bid > 0. Row 3 has no bid -> excluded.
+    """Raw lead frame: wins='true', losses blank, bid>0 means a bid placed."""
     return pd.DataFrame(
         {
             "id": [1, 2, 3, 4, 5],
@@ -42,6 +41,7 @@ def _raw():
 
 
 def test_labels_wins_and_placed_bid_losses():
+    """Wins map to 1 and placed-bid non-wins map to 0."""
     table = build_training_table(_raw())  # no lead-type filter
     # id 3 has no bid -> excluded; 1,2,4,5 kept
     assert set(table["id"]) == {1, 2, 4, 5}
@@ -51,11 +51,13 @@ def test_labels_wins_and_placed_bid_losses():
 
 
 def test_excludes_no_bid_rows():
+    """Rows with bid == 0 are excluded (not a bidding decision)."""
     table = build_training_table(_raw())
     assert 3 not in set(table["id"])  # bid == 0, not a bidding decision
 
 
 def test_lead_type_filter():
+    """lead_type_id filters rows to a single lead type."""
     table = build_training_table(_raw(), lead_type_id=6)
     # auto rows with a placed bid: 1 (win), 2 (loss), 5 (loss); 3 no bid, 4 home
     assert set(table["id"]) == {1, 2, 5}
@@ -64,6 +66,7 @@ def test_lead_type_filter():
 
 
 def test_excludes_leakage_columns():
+    """Leakage columns are dropped; bid/expected_revenue/target kept."""
     table = build_training_table(_raw())
     for col in LEAKAGE_COLUMNS:
         assert col not in table.columns
@@ -71,18 +74,20 @@ def test_excludes_leakage_columns():
 
 
 def test_keeps_zero_variance_by_default():
-    # "do not drop anything": constant 'insured' is retained by default.
+    """Constant columns are retained by default."""
     table = build_training_table(_raw(), lead_type_id=6)
     assert "insured" in table.columns
 
 
 def test_drops_zero_variance_when_requested():
+    """drop_zero_variance=True removes constant columns, keeps varying ones."""
     table = build_training_table(_raw(), lead_type_id=6, drop_zero_variance=True)
     assert "insured" not in table.columns   # constant -> dropped
     assert "state" in table.columns         # varies -> kept
 
 
 def test_derived_features():
+    """is_married and multi_vehicle are derived from raw columns."""
     table = build_training_table(_raw()).set_index("id")  # ids 1,2,4,5
     assert {"is_married", "multi_vehicle"}.issubset(table.columns)
     # marital_status: Married/MARRIED -> 1; single/'' -> 0
@@ -97,6 +102,7 @@ def test_derived_features():
 
 
 def test_age_cohort_one_hot():
+    """Age is one-hot encoded into exactly one cohort band per row."""
     from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
 
     table = build_training_table(_raw()).set_index("id")  # ages 40,55,60,28
@@ -110,6 +116,7 @@ def test_age_cohort_one_hot():
 
 
 def test_age_cohort_missing_all_zero():
+    """Missing age yields all-zero age-cohort columns."""
     from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
 
     raw = _raw()
@@ -119,6 +126,7 @@ def test_age_cohort_missing_all_zero():
 
 
 def test_age_missing_sentinel_and_flag():
+    """Implausible ages become the -1 sentinel with age_missing flag set."""
     from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
 
     raw = _raw()
@@ -137,6 +145,7 @@ def test_age_missing_sentinel_and_flag():
 
 
 def test_is_workday_from_pst_date(monkeypatch, tmp_path):
+    """is_workday is derived from the Pacific date (weekday vs weekend)."""
     from smarthub.core import holidays
     from smarthub.feature_engineering.features import build_training_table
 
@@ -164,6 +173,7 @@ def test_is_workday_from_pst_date(monkeypatch, tmp_path):
 
 
 def test_excludes_errored_rows():
+    """Errored pings are dropped from the training table."""
     raw = _raw()
     raw["erred"] = ["true", "", "", "false", "1"]  # ids 1 and 5 errored
     table = build_training_table(raw)
@@ -172,6 +182,7 @@ def test_excludes_errored_rows():
 
 
 def test_expected_revenue_prefers_exp_rev():
+    """expected_revenue prefers backend exp_rev, falling back to listings."""
     raw = _raw()
     # exp_rev populated for id 1, zero for id 2 (falls back to listings sum).
     raw["exp_rev"] = [99.0, 0.0, 0.0, 0.0, 0.0]
@@ -181,6 +192,7 @@ def test_expected_revenue_prefers_exp_rev():
 
 
 def test_time_features_prefer_pacific():
+    """Time features use Pacific pst_hour/pst_date over UTC created_at."""
     raw = _raw()
     # UTC created_at on id 1 is 01:00 Sat; give Pacific pst_hour/pst_date instead.
     raw["pst_hour"] = [17, 9, 9, 2, 14]
@@ -193,6 +205,7 @@ def test_time_features_prefer_pacific():
 
 
 def test_training_table_is_lead_type_clean():
+    """Lead-type filtering drops the other type's exclusive feature columns."""
     raw = pd.DataFrame(
         {
             "id": [1, 2],
@@ -218,6 +231,7 @@ def test_training_table_is_lead_type_clean():
 
 
 def test_has_time_features():
+    """The training table includes created_hour and created_dayofweek."""
     table = build_training_table(_raw())
     assert {"created_hour", "created_dayofweek"}.issubset(table.columns)
 
@@ -228,6 +242,7 @@ from smarthub.feature_engineering import features as fe  # noqa: E402
 
 
 def test_sr22_is_auto_only_model_feature():
+    """sr22_required is an auto-only model feature."""
     _, cat_auto = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
     _, cat_home = fe.model_feature_columns(fe.LEAD_TYPE_HOME)
     assert "sr22_required" in cat_auto      # SR-22 is an auto matching criterion
@@ -235,7 +250,7 @@ def test_sr22_is_auto_only_model_feature():
 
 
 def test_mandatory_features_kept_when_no_optional():
-    # optional_enabled empty -> only the auto mandatory core survives.
+    """With no optional features, only the auto mandatory core survives."""
     numeric, categorical = fe.model_feature_columns(
         fe.LEAD_TYPE_AUTO, optional_enabled=set()
     )
@@ -254,6 +269,7 @@ def test_mandatory_features_kept_when_no_optional():
 
 
 def test_optional_subset_is_added_to_mandatory():
+    """Requested optional features are added on top of the mandatory core."""
     numeric, categorical = fe.model_feature_columns(
         fe.LEAD_TYPE_AUTO, optional_enabled={"state", "traffic_tier"}
     )
@@ -264,7 +280,7 @@ def test_optional_subset_is_added_to_mandatory():
 
 
 def test_optional_cannot_drop_mandatory():
-    # even if an optional list omits everything, mandatory survives.
+    """Mandatory features survive even when the optional list omits them."""
     numeric, categorical = fe.model_feature_columns(
         fe.LEAD_TYPE_AUTO, optional_enabled={"state"}
     )
@@ -273,6 +289,7 @@ def test_optional_cannot_drop_mandatory():
 
 
 def test_config_none_selects_mandatory_only(monkeypatch):
+    """Config value 'none' selects the mandatory features only."""
     from smarthub.core import task_config
 
     monkeypatch.setattr(task_config, "get", lambda *a, **k: "none")
@@ -281,6 +298,7 @@ def test_config_none_selects_mandatory_only(monkeypatch):
 
 
 def test_config_comma_list_ignores_unknown(monkeypatch):
+    """A comma-list config adds known optionals and ignores unknown names."""
     from smarthub.core import task_config
 
     monkeypatch.setattr(task_config, "get", lambda *a, **k: "state, not_a_feature")
@@ -292,7 +310,7 @@ def test_config_comma_list_ignores_unknown(monkeypatch):
 
 
 def test_optional_and_mandatory_partition_the_feature_set():
-    # mandatory and optional are disjoint and together cover the full auto set.
+    """Mandatory and optional sets are disjoint and cover the full auto set."""
     num, cat = fe.model_feature_columns(fe.LEAD_TYPE_AUTO, optional_enabled=None)
     mand = fe.mandatory_features(fe.LEAD_TYPE_AUTO)
     opt = fe.optional_features(fe.LEAD_TYPE_AUTO)
@@ -303,6 +321,7 @@ def test_optional_and_mandatory_partition_the_feature_set():
 
 
 def test_config_all_keeps_every_feature(monkeypatch):
+    """Config value 'all' keeps every optional and mandatory feature."""
     from smarthub.core import task_config
 
     monkeypatch.setattr(task_config, "get", lambda *a, **k: "all")

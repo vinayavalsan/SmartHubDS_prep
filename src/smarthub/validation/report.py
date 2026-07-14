@@ -46,7 +46,18 @@ def _violations_summary(report: ValidationReport) -> str:
 
 
 def slack_group(report: ValidationReport) -> tuple[str, dict]:
-    """A single (title, fields) group to append to the data-pull notification."""
+    """Build one (title, fields) group for the data-pull notification.
+
+    Inputs
+    ------
+    report : ValidationReport
+        The completed validation report to summarize.
+
+    Returns
+    -------
+    tuple[str, dict]
+        The section title and its Slack field mapping.
+    """
     m = report.metrics
     fields = {
         "Status": _status_line(report),
@@ -69,7 +80,20 @@ def slack_group(report: ValidationReport) -> tuple[str, dict]:
 
 
 def to_markdown(report: ValidationReport, lead_type_name: str) -> str:
-    """Full detail for a Prefect markdown artifact."""
+    """Render the full report as a Prefect markdown artifact.
+
+    Inputs
+    ------
+    report : ValidationReport
+        The completed validation report.
+    lead_type_name : str
+        Human-readable lead type used in the heading.
+
+    Returns
+    -------
+    str
+        The markdown document.
+    """
     m = report.metrics
     lines = [
         f"# Data quality — {lead_type_name}",
@@ -132,7 +156,15 @@ def to_markdown(report: ValidationReport, lead_type_name: str) -> str:
 
 
 def log_summary(report: ValidationReport, log: logging.Logger) -> None:
-    """Log a one-glance summary (used by the Prefect-free CLI)."""
+    """Log a one-glance summary (used by the Prefect-free CLI).
+
+    Inputs
+    ------
+    report : ValidationReport
+        The completed validation report.
+    log : logging.Logger
+        Logger to emit the summary to.
+    """
     log.info(
         "data-quality: rows=%s, status=%s, rule_violation_rows=%s, "
         "cross_field=%s, high_missing=%s",

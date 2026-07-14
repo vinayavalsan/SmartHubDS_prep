@@ -15,10 +15,12 @@ DT_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def parse_dt(value: str) -> datetime:
+    """Parse a warehouse datetime string into a ``datetime``."""
     return datetime.strptime(value, DT_FORMAT)
 
 
 def format_dt(value: datetime) -> str:
+    """Format a ``datetime`` as a warehouse datetime string."""
     return value.strftime(DT_FORMAT)
 
 
@@ -28,11 +30,27 @@ def compute_pull_window(
     overlap_hours: float,
     default_lookback_hours: float,
 ) -> tuple[datetime, datetime]:
-    """Return the (min, max) datetimes for the next pull.
+    """Return the ``(min, max)`` datetimes for the next pull.
 
-    - No watermark yet → ``[now - default_lookback_hours, now]`` (backfill).
-    - Have a watermark → ``[last_ts - overlap_hours, now]`` (overlapping window).
-    The lower bound is clamped so it never exceeds ``now``.
+    No watermark yet gives ``[now - default_lookback_hours, now]`` (backfill);
+    an existing watermark gives ``[last_ts - overlap_hours, now]`` (overlapping
+    window). The lower bound is clamped so it never exceeds ``now``.
+
+    Inputs
+    ------
+    now : datetime
+        Current time (naive UTC), used as the window's upper bound.
+    last_ts : datetime | None
+        Saved watermark; ``None`` triggers the backfill lookback.
+    overlap_hours : float
+        Hours to re-pull before the watermark.
+    default_lookback_hours : float
+        Backfill lookback used when there is no watermark.
+
+    Returns
+    -------
+    tuple[datetime, datetime]
+        The ``(min_dt, max_dt)`` window bounds.
     """
     max_dt = now
     if last_ts is None:

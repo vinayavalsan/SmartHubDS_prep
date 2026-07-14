@@ -19,11 +19,29 @@ from smarthub.core.config_store import ConfigError, ConfigStore, ENVIRONMENTS
 
 @st.cache_resource
 def get_store() -> ConfigStore:
+    """Return a cached ``ConfigStore`` bound to the shared Postgres.
+
+    Returns
+    -------
+    ConfigStore
+        The shared config store instance.
+    """
     return ConfigStore()
 
 
 def _allowed_values(item: dict) -> str:
-    """Human-readable description of what values a param accepts."""
+    """Describe, in human-readable form, what values a param accepts.
+
+    Inputs
+    ------
+    item : dict
+        A resolved config param (type, choices, bounds).
+
+    Returns
+    -------
+    str
+        A short description of the accepted values.
+    """
     if item["choices"]:
         return "one of: " + ", ".join(str(c) for c in item["choices"])
     if item["type"] == "bool":
@@ -41,7 +59,18 @@ def _allowed_values(item: dict) -> str:
 
 
 def _input_for(item: dict):
-    """Render the right widget for a param (label hidden) and return the value."""
+    """Render the widget matching a param's type and return its value.
+
+    Inputs
+    ------
+    item : dict
+        A resolved config param driving the widget choice.
+
+    Returns
+    -------
+    Any
+        The value entered in the rendered widget.
+    """
     key = item["key"]
     if item["choices"]:
         options = list(item["choices"])
@@ -67,6 +96,7 @@ def _input_for(item: dict):
 
 
 def main():
+    """Render the config form and persist any edited values on submit."""
     st.title("Anton Config")
     st.caption(
         "Runtime tuning knobs (stored in Postgres, versioned). "

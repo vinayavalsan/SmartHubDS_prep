@@ -23,6 +23,7 @@ class DataNotFoundError(FileNotFoundError):
 
 
 def _check_exists(path: Path, hint: str) -> None:
+    """Raise :class:`DataNotFoundError` with ``hint`` if ``path`` is missing."""
     if not path.exists():
         raise DataNotFoundError(f"Expected data file not found: {path}\n{hint}")
 
@@ -30,9 +31,24 @@ def _check_exists(path: Path, hint: str) -> None:
 def load_leads(path: str | os.PathLike[str] | None = None) -> pd.DataFrame:
     """Load the cleaned, enriched leads frame.
 
-    With no ``path``, reads from the configured storage backend(s) — see
-    ``STORAGE_BACKEND`` in the environment. Pass an explicit ``path`` to
-    force-load a specific Parquet file instead.
+    With no ``path``, reads from the configured storage backend(s) (see
+    ``STORAGE_BACKEND``). Pass an explicit ``path`` to force-load a specific
+    Parquet file instead.
+
+    Inputs
+    ------
+    path : str | os.PathLike[str] | None
+        Optional Parquet file to load instead of the storage backend.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The prepared leads frame.
+
+    Raises
+    ------
+    DataNotFoundError
+        If the given path or the storage backend has no data.
     """
     if path is not None:
         resolved = paths.resolve(path)
@@ -50,9 +66,25 @@ def load_leads(path: str | os.PathLike[str] | None = None) -> pd.DataFrame:
 
 
 def load_leads_window(days: int) -> pd.DataFrame:
-    """Load only the most recent ``days`` of data, cleaned/enriched.
+    """Load only the most recent ``days`` of data, cleaned and enriched.
 
-    Use this for rolling-recency training reads (CONTEXT §7)."""
+    Use for rolling-recency training reads (CONTEXT §7).
+
+    Inputs
+    ------
+    days : int
+        Size of the trailing window to load.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The prepared leads frame for the window.
+
+    Raises
+    ------
+    DataNotFoundError
+        If the storage backend has no data.
+    """
     try:
         raw = storage.load_window_raw(StorageSettings.from_env(), days)
     except storage.StorageError as exc:
@@ -61,7 +93,20 @@ def load_leads_window(days: int) -> pd.DataFrame:
 
 
 def save_leads(df: pd.DataFrame, path: str | os.PathLike[str] | None = None) -> Path:
-    """Write the leads frame to parquet, creating parent dirs as needed."""
+    """Write the leads frame to Parquet, creating parent dirs as needed.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        The leads frame to write.
+    path : str | os.PathLike[str] | None
+        Destination path; defaults to ``DEFAULT_LEADS_PATH`` when omitted.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved path the frame was written to.
+    """
     resolved = paths.resolve(path) if path is not None else DEFAULT_LEADS_PATH
     resolved.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(resolved, index=False)
@@ -69,7 +114,18 @@ def save_leads(df: pd.DataFrame, path: str | os.PathLike[str] | None = None) -> 
 
 
 def training_dir(lead_type_name: str) -> Path:
-    """Per-lead-type training folder: data/training/<name>/."""
+    """Return the per-lead-type training folder ``data/training/<name>/``.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type name; lower-cased and stripped for the folder name.
+
+    Returns
+    -------
+    pathlib.Path
+        The training folder path for the lead type.
+    """
     return TRAINING_DIR / lead_type_name.strip().lower()
 
 
@@ -84,12 +140,28 @@ def save_training_table(
     version: str | None = None,
     metadata: dict | None = None,
 ) -> Path:
-    """Write a **versioned** training table: data/training/<name>/<version>.parquet.
+    """Write a versioned training table for a lead type.
 
-    Each build is kept (not overwritten) so a model can be traced to its exact
-    training snapshot. ``version`` defaults to a UTC timestamp. When ``metadata``
-    is given, a ``<version>.json`` manifest is written beside the parquet
-    describing what data went in (lead type, window, date range, row count, …).
+    Writes ``data/training/<name>/<version>.parquet``. Each build is kept
+    (never overwritten) so a model can be traced to its exact training
+    snapshot. When ``metadata`` is given, a ``<version>.json`` manifest is
+    written beside the Parquet describing what data went in.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        The training table to write.
+    lead_type_name : str
+        Lead type the table belongs to.
+    version : str | None
+        Version id; defaults to a UTC timestamp when omitted.
+    metadata : dict | None
+        Extra manifest fields; when given, a JSON manifest is written too.
+
+    Returns
+    -------
+    pathlib.Path
+        The path the Parquet table was written to.
     """
     folder = training_dir(lead_type_name)
     folder.mkdir(parents=True, exist_ok=True)
@@ -114,7 +186,25 @@ def save_training_table(
 def load_training_metadata(
     lead_type_name: str, version: str | None = None
 ) -> dict:
-    """Load the manifest for a training version (defaults to the latest)."""
+    """Load the manifest for a training version (defaults to the latest).
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type whose manifest to load.
+    version : str | None
+        Version id; defaults to the latest saved version.
+
+    Returns
+    -------
+    dict
+        The parsed manifest contents.
+
+    Raises
+    ------
+    DataNotFoundError
+        If no training tables or manifest exist for the version.
+    """
     folder = training_dir(lead_type_name)
     if version is None:
         versions = training_versions(lead_type_name)
@@ -127,14 +217,43 @@ def load_training_metadata(
 
 
 def training_versions(lead_type_name: str) -> list[str]:
-    """All saved version ids for a lead type, oldest first."""
+    """List all saved version ids for a lead type, oldest first.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type to list versions for.
+
+    Returns
+    -------
+    list[str]
+        Sorted version ids (oldest first); empty when none exist.
+    """
     return sorted(p.stem for p in training_dir(lead_type_name).glob("*.parquet"))
 
 
 def load_training_table(
     lead_type_name: str, version: str | None = None
 ) -> pd.DataFrame:
-    """Load a training table; defaults to the latest version."""
+    """Load a training table, defaulting to the latest version.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Lead type whose table to load.
+    version : str | None
+        Version id; defaults to the latest saved version.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The loaded training table.
+
+    Raises
+    ------
+    DataNotFoundError
+        If no matching training table exists.
+    """
     folder = training_dir(lead_type_name)
     if version is not None:
         target = folder / f"{version}.parquet"

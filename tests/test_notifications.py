@@ -30,6 +30,7 @@ def capture_slack(monkeypatch):
 
 
 def test_disabled_without_webhook(monkeypatch):
+    """Slack is disabled and notify_success is a no-op without a webhook URL."""
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     assert n.slack_enabled() is False
     # No webhook -> no-op, returns False, does not raise.
@@ -37,11 +38,13 @@ def test_disabled_without_webhook(monkeypatch):
 
 
 def test_enabled_with_webhook(monkeypatch):
+    """slack_enabled is True when SLACK_WEBHOOK_URL is set."""
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.test/x")
     assert n.slack_enabled() is True
 
 
 def test_success_payload(capture_slack):
+    """Success payload has header, field section, context, and fallback text."""
     ok = n.notify_success("data-pull", {"Lead type": "auto (6)", "Rows fetched": 42})
     assert ok is True
     payload = capture_slack["payload"]
@@ -55,6 +58,7 @@ def test_success_payload(capture_slack):
 
 
 def test_failure_payload_includes_error_and_mention(monkeypatch, capture_slack):
+    """Failure payload includes the error text and configured mention."""
     monkeypatch.setenv("SLACK_MENTION_ON_FAILURE", "<@U123>")
     ok = n.notify_failure("build-features", {"Lead type": "home (1)"}, error="boom")
     assert ok is True
@@ -67,6 +71,7 @@ def test_failure_payload_includes_error_and_mention(monkeypatch, capture_slack):
 
 
 def test_empty_fields_are_skipped(capture_slack):
+    """Empty or blank field values are omitted from the payload."""
     n.notify_success("data-pull", {"Present": "x", "Empty": None, "Blank": ""})
     payload = capture_slack["payload"]
     assert "Present" in payload["text"]
@@ -75,6 +80,7 @@ def test_empty_fields_are_skipped(capture_slack):
 
 
 def test_never_raises_on_network_error(monkeypatch):
+    """Network errors are swallowed; notify returns False without raising."""
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.test/x")
 
     def boom(*a, **k):
@@ -86,6 +92,7 @@ def test_never_raises_on_network_error(monkeypatch):
 
 
 def test_flow_failure_hook_builds_fields(capture_slack):
+    """flow_failure_hook builds a failure payload from Prefect flow objects."""
     class FakeFlow:
         name = "smarthub-data-pull"
 
@@ -107,12 +114,14 @@ def test_flow_failure_hook_builds_fields(capture_slack):
 
 
 def test_flow_failure_hook_swallows_bad_input(monkeypatch):
+    """flow_failure_hook swallows bad input without raising."""
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.test/x")
     # Passing junk should not raise (hook must never mask the real error).
     n.flow_failure_hook(None, None, None)
 
 
 def test_grouped_payload_structure(capture_slack):
+    """Grouped payload renders header, one divider per non-empty group, context."""
     ok = n.notify_success_grouped(
         "train-model",
         subject="auto (6)",
@@ -143,6 +152,7 @@ def test_grouped_payload_structure(capture_slack):
 
 
 def test_grouped_payload_skips_empty_group(capture_slack):
+    """A group with no non-empty values is dropped entirely."""
     n.notify_success_grouped(
         "train-model",
         groups=[

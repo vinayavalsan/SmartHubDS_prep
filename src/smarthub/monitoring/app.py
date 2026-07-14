@@ -24,6 +24,7 @@ def config_page():
 
 
 def main():
+    """Register the pages and run the Streamlit multipage navigation."""
     pages = [
         st.Page(leads_app.main, title="Leads", url_path="leads", default=True),
         st.Page(monitoring_app.main, title="Monitoring", url_path="monitoring"),

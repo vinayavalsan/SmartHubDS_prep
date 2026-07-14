@@ -27,7 +27,18 @@ from smarthub.feature_engineering import features  # noqa: E402
 
 
 def missing_mask(series: pd.Series) -> pd.Series:
-    """True where the value is NULL or (for text) blank/whitespace."""
+    """Return a mask: True where NULL or (for text) blank/whitespace.
+
+    Inputs
+    ------
+    series : pd.Series
+        Series to inspect.
+
+    Returns
+    -------
+    pd.Series
+        Boolean mask of missing values.
+    """
     mask = series.isna()
     if series.dtype == object or str(series.dtype).startswith("string"):
         mask = mask | series.astype("string").str.strip().eq("")
@@ -35,6 +46,17 @@ def missing_mask(series: pd.Series) -> pd.Series:
 
 
 def report(df: pd.DataFrame, cols: list[str], title: str) -> None:
+    """Print the missing-value rate for the given columns.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Data to profile.
+    cols : list[str]
+        Columns to report on (skipped if absent from ``df``).
+    title : str
+        Section heading for the output.
+    """
     n = len(df)
     print(f"\n=== {title} — {n} rows ===")
     stats = []
@@ -47,6 +69,18 @@ def report(df: pd.DataFrame, cols: list[str], title: str) -> None:
 
 
 def main(argv=None) -> int:
+    """Profile null/blank rates for raw columns and training features.
+
+    Inputs
+    ------
+    argv : list[str], optional
+        Command-line arguments; defaults to ``sys.argv``.
+
+    Returns
+    -------
+    int
+        Process exit code (0 on success, 1 if no files found).
+    """
     parser = argparse.ArgumentParser(description="Null/blank profiler.")
     parser.add_argument("--parquet-dir", default="data/leads")
     parser.add_argument("--lead-type-id", type=int, default=6)

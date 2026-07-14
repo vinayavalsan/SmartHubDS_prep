@@ -45,7 +45,18 @@ def load_data():
 
 
 def y_label_for(metric: str) -> str:
-    """Axis label appropriate to a metric group."""
+    """Return the y-axis label appropriate to a metric group.
+
+    Inputs
+    ------
+    metric : str
+        The selected metric-group name.
+
+    Returns
+    -------
+    str
+        The matching axis label.
+    """
     if metric in ("Win Rate", "CM"):
         return "Rate"
     if metric in ("Revenue + Payout breakdown", "Profit"):
@@ -56,6 +67,19 @@ def y_label_for(metric: str) -> str:
 
 
 def plot_metric_block(df_plot, columns, title, y_label=None):
+    """Plot one metric group as an overlaid time-series line chart.
+
+    Inputs
+    ------
+    df_plot : pd.DataFrame
+        Aggregated data with a ``datetime_min`` column.
+    columns : list[str]
+        Metric columns to overlay.
+    title : str
+        Chart title.
+    y_label : str, optional
+        Y-axis label; defaults to ``"value"``.
+    """
     plot_df = df_plot[["datetime_min"] + columns].melt(
         id_vars="datetime_min", var_name="metric", value_name="value"
     )
@@ -80,7 +104,22 @@ def plot_metric_block(df_plot, columns, title, y_label=None):
 
 
 def _resolve_group_col(selected_campaign, selected_state, selected_metric):
-    """Decide which dimension to split by, given the active filters."""
+    """Decide which dimension to split by, given the active filters.
+
+    Inputs
+    ------
+    selected_campaign : str
+        Selected campaign filter, or ``"All"``.
+    selected_state : str
+        Selected state filter, or ``"All"``.
+    selected_metric : str
+        Selected metric-group name.
+
+    Returns
+    -------
+    str or None
+        The column to group by, or None for no split.
+    """
     if selected_metric == "All":
         return None
     if selected_campaign == "All" and selected_state == "All":
@@ -91,6 +130,19 @@ def _resolve_group_col(selected_campaign, selected_state, selected_metric):
 
 
 def _render_controls(df):
+    """Render the top control row and return the selected settings.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Monitoring base used to populate filter options.
+
+    Returns
+    -------
+    tuple
+        ``(bin_size, selected_state, selected_campaign, selected_metric,
+        show_table)``.
+    """
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         bin_size = st.selectbox("Bin size", options=list(_BIN_MAP.keys()), index=3)
@@ -115,6 +167,7 @@ def _render_controls(df):
 
 
 def main():
+    """Run the Monitoring dashboard page (load, filter, aggregate, plot)."""
     st.title("SmartHub Monitoring")
 
     try:

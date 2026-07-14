@@ -1,14 +1,11 @@
 """Persistence for accumulated pulls — DuckDB and/or partitioned Parquet.
 
-Both backends upsert/dedupe on ``id`` because pulls run on *overlapping*
-windows so that late-resolving outcomes (``won``, ``rev``, ``accepted_listings``,
-listing payouts) get updated in place (CONTEXT.md §4, §7).
-
-- **DuckDB**: a single file, native upsert, SQL window reads.
-- **Partitioned Parquet**: one file per calendar day, laid out as
-  ``<root>/YYYY/MM/DD-MM-YYYY.parquet``; same-day pulls are merged and deduped.
-
-Which backend(s) are used is controlled by ``StorageSettings`` (env-driven).
+Both backends upsert/dedupe on ``id`` because pulls run on overlapping
+windows, so late-resolving outcomes get updated in place (CONTEXT.md §4, §7).
+DuckDB is a single file with native upsert and SQL window reads; the Parquet
+backend writes one file per calendar day
+(``<root>/YYYY/MM/DD-MM-YYYY.parquet``), merging and deduping same-day pulls.
+The enabled backend(s) come from ``StorageSettings`` (env-driven).
 """
 
 from __future__ import annotations
@@ -51,9 +48,23 @@ NO_DATA_MESSAGE = (
 
 
 def _dedupe(df: pd.DataFrame, key: str = KEY) -> pd.DataFrame:
-    """Keep one row per key. Prefer the most recently updated row when an
-    ``updated_at`` column is present; otherwise keep the last occurrence
-    (callers concat existing-then-incoming so 'last' favours the new pull)."""
+    """Keep one row per key, preferring the most recent update.
+
+    Uses ``updated_at`` when present; otherwise keeps the last occurrence
+    (callers concat existing-then-incoming, so 'last' favours the new pull).
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Rows to deduplicate; returned unchanged if ``key`` is absent.
+    key : str
+        Column identifying a unique row.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The deduplicated frame.
+    """
     if key not in df.columns:
         return df
     if UPDATED_AT in df.columns:
@@ -67,18 +78,32 @@ def _dedupe(df: pd.DataFrame, key: str = KEY) -> pd.DataFrame:
 
 
 def duckdb_path(path: str | os.PathLike[str] | None = None) -> Path:
+    """Resolve the DuckDB file path (defaults to ``data/smarthub.duckdb``).
+
+    Inputs
+    ------
+    path : str | os.PathLike[str] | None
+        Explicit path; the default location is used when omitted.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved DuckDB file path.
+    """
     if path is not None:
         return paths.resolve(path)
     return paths.data_dir() / "smarthub.duckdb"
 
 
 def _connect(path: str | os.PathLike[str] | None = None) -> duckdb.DuckDBPyConnection:
+    """Open a DuckDB connection, creating parent dirs as needed."""
     resolved = duckdb_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     return duckdb.connect(str(resolved))
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, table: str) -> bool:
+    """Return True when ``table`` exists in the database."""
     row = con.execute(
         "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
         [table],
@@ -87,6 +112,7 @@ def _table_exists(con: duckdb.DuckDBPyConnection, table: str) -> bool:
 
 
 def _table_columns(con: duckdb.DuckDBPyConnection, table: str) -> list[str]:
+    """Return the column names of ``table``."""
     return [r[1] for r in con.execute(f'PRAGMA table_info("{table}")').fetchall()]
 
 
@@ -117,9 +143,22 @@ def _align_datetime_precision(
 ) -> pd.DataFrame:
     """Cast incoming datetime columns to the existing table's precision.
 
-    Prevents DuckDB "Unimplemented type for cast (TIMESTAMP_NS -> TIMESTAMP_S)"
-    on INSERT when a column was first created at a coarser precision than the
-    nanosecond datetimes pandas produces.
+    Prevents a DuckDB "Unimplemented type for cast (TIMESTAMP_NS ->
+    TIMESTAMP_S)" error on INSERT when a column was first created at a
+    coarser precision than the nanosecond datetimes pandas produces.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Incoming frame to align.
+    table_types : dict[str, str]
+        Column name to DuckDB type string for the existing table.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The frame with datetime columns cast to the table's precision (a
+        copy only when a change was needed).
     """
     out = df
     copied = False
@@ -142,7 +181,33 @@ def append_duckdb(
     key: str = KEY,
     path: str | os.PathLike[str] | None = None,
 ) -> int:
-    """Upsert ``df`` into the DuckDB ``table`` keyed on ``key``; return row count."""
+    """Upsert ``df`` into a DuckDB table, evolving the schema as needed.
+
+    Creates the table on first write; on later writes aligns datetime
+    precision, adds any new columns, then deletes-and-reinserts matching
+    keys.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Rows to upsert; an empty frame is a no-op.
+    table : str
+        Target table name.
+    key : str
+        Key column used to dedupe/upsert.
+    path : str | os.PathLike[str] | None
+        DuckDB file path; the default location is used when omitted.
+
+    Returns
+    -------
+    int
+        Total row count in the table after the upsert.
+
+    Raises
+    ------
+    StorageError
+        If ``key`` is not present in ``df``.
+    """
     if df.empty:
         logger.info("append_duckdb: empty frame, nothing to write")
         return 0
@@ -191,10 +256,24 @@ def append_duckdb(
 
 
 def _projection(con, table: str, columns) -> str:
-    """SQL column list for a projected read; ``*`` when no (valid) columns given.
+    """Build the SQL column list for a projected read.
 
-    Only columns that actually exist in the table are selected, so a caller can
-    pass a superset without erroring on columns that were never pulled.
+    Only columns that exist in the table are selected, so a caller can pass a
+    superset without erroring on columns that were never pulled.
+
+    Inputs
+    ------
+    con : duckdb.DuckDBPyConnection
+        Open connection used to inspect the table.
+    table : str
+        Table whose columns constrain the projection.
+    columns : list[str] | None
+        Requested columns; ``*`` is returned when none are valid.
+
+    Returns
+    -------
+    str
+        A SQL column list, or ``*``.
     """
     if not columns:
         return "*"
@@ -210,6 +289,27 @@ def read_duckdb_table(
     path: str | os.PathLike[str] | None = None,
     columns: list[str] | None = None,
 ) -> pd.DataFrame:
+    """Read a DuckDB table into a DataFrame, optionally projecting columns.
+
+    Inputs
+    ------
+    table : str
+        Table to read.
+    path : str | os.PathLike[str] | None
+        DuckDB file path; the default location is used when omitted.
+    columns : list[str] | None
+        Columns to project; only those present are selected.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The table contents.
+
+    Raises
+    ------
+    StorageError
+        If the table does not exist.
+    """
     con = _connect(path)
     try:
         if not _table_exists(con, table):
@@ -227,10 +327,31 @@ def read_duckdb_window(
     path: str | os.PathLike[str] | None = None,
     columns: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Rows within the most recent ``days``, anchored on ``max(time_col)``.
+    """Read rows within the most recent ``days``, anchored on max(time_col).
 
-    ``columns`` projects the SELECT (filtering still uses ``time_col`` even if
-    it isn't selected) — this keeps peak memory down on wide tables.
+    Inputs
+    ------
+    days : int
+        Size of the trailing window in days.
+    table : str
+        Table to read.
+    time_col : str
+        Timestamp column used to anchor and filter the window.
+    path : str | os.PathLike[str] | None
+        DuckDB file path; the default location is used when omitted.
+    columns : list[str] | None
+        Columns to project; filtering still uses ``time_col`` even when it
+        is not selected, keeping peak memory low on wide tables.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Rows within the window (empty when the table has no timestamps).
+
+    Raises
+    ------
+    StorageError
+        If the table does not exist.
     """
     con = _connect(path)
     try:
@@ -252,6 +373,20 @@ def read_duckdb_window(
 def duckdb_exists(
     table: str = LEADS_TABLE, path: str | os.PathLike[str] | None = None
 ) -> bool:
+    """Return True when the DuckDB file and ``table`` both exist.
+
+    Inputs
+    ------
+    table : str
+        Table to check for.
+    path : str | os.PathLike[str] | None
+        DuckDB file path; the default location is used when omitted.
+
+    Returns
+    -------
+    bool
+        True when the file exists and contains the table.
+    """
     if not duckdb_path(path).exists():
         return False
     con = _connect(path)
@@ -267,6 +402,7 @@ def duckdb_exists(
 
 
 def _partition_path(root: Path, day: date) -> Path:
+    """Return the Parquet partition path for ``day`` under ``root``."""
     return root / f"{day.year:04d}" / f"{day.month:02d}" / f"{day:%d-%m-%Y}.parquet"
 
 
@@ -287,9 +423,26 @@ def append_parquet(
     date_col: str = "created_at",
     key: str = KEY,
 ) -> int:
-    """Write ``df`` into per-day Parquet files, merging+deduping same-day data.
+    """Write ``df`` into per-day Parquet files, merging same-day data.
 
-    Returns the number of incoming rows written.
+    Same-day partitions are read back, concatenated, deduped on ``key`` and
+    rewritten. Rows with no resolvable date are dropped.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Rows to write; an empty frame is a no-op.
+    root : str | os.PathLike[str]
+        Root directory of the partitioned dataset.
+    date_col : str
+        Column used to choose each row's partition day.
+    key : str
+        Key column used to dedupe within a partition.
+
+    Returns
+    -------
+    int
+        The number of incoming rows written.
     """
     if df.empty:
         logger.info("append_parquet: empty frame, nothing to write")
@@ -323,8 +476,23 @@ def read_parquet_dataset(
 ) -> pd.DataFrame:
     """Read and concatenate every per-day Parquet file under ``root``.
 
-    ``columns`` projects the read (only those present are loaded), lowering
-    peak memory on wide datasets.
+    Inputs
+    ------
+    root : str | os.PathLike[str]
+        Root directory of the partitioned dataset.
+    columns : list[str] | None
+        Columns to project; only those present in a file are loaded,
+        lowering peak memory on wide datasets.
+
+    Returns
+    -------
+    pandas.DataFrame
+        All partitions concatenated into one frame.
+
+    Raises
+    ------
+    StorageError
+        If no Parquet files are found under ``root``.
     """
     root_path = paths.resolve(root)
     files = sorted(root_path.glob("*/*/*.parquet"))
@@ -342,6 +510,7 @@ def read_parquet_dataset(
 
 
 def parquet_exists(root: str | os.PathLike[str]) -> bool:
+    """Return True when any Parquet partition exists under ``root``."""
     return any(paths.resolve(root).glob("*/*/*.parquet"))
 
 
@@ -355,11 +524,25 @@ def parquet_partition_paths(
     root: str | os.PathLike[str],
     date_col: str = "created_at",
 ) -> list[str]:
-    """The per-day Parquet file paths a pull of ``df`` writes into.
+    """Return the per-day Parquet file paths a pull of ``df`` writes into.
 
-    Mirrors ``append_parquet``'s partitioning so callers (e.g. notifications)
-    can report exactly which files were touched. Rows with no resolvable date
-    are ignored, matching the writer.
+    Mirrors ``append_parquet``'s partitioning so callers (e.g.
+    notifications) can report which files were touched. Rows with no
+    resolvable date are ignored, matching the writer.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        The frame that would be written; empty yields an empty list.
+    root : str | os.PathLike[str]
+        Root directory of the partitioned dataset.
+    date_col : str
+        Column used to choose each row's partition day.
+
+    Returns
+    -------
+    list[str]
+        The distinct partition file paths, sorted by day.
     """
     if df.empty:
         return []
@@ -372,8 +555,18 @@ def parquet_partition_paths(
 def save_pull(df: pd.DataFrame, settings: StorageSettings) -> dict[str, object]:
     """Persist a pull to whichever backend(s) the settings enable.
 
-    Returns row counts plus the concrete storage locations written:
-    ``duckdb_path`` and ``parquet_paths`` (the per-day partition files).
+    Inputs
+    ------
+    df : pandas.DataFrame
+        The pulled rows to persist.
+    settings : StorageSettings
+        Selects the enabled backend(s) and their locations.
+
+    Returns
+    -------
+    dict[str, object]
+        Row counts and the storage locations written: ``duckdb_rows`` /
+        ``duckdb_path`` and/or ``parquet_rows`` / ``parquet_paths``.
     """
     results: dict[str, object] = {}
     if settings.use_duckdb:
@@ -394,7 +587,24 @@ def load_leads_raw(
 ) -> pd.DataFrame:
     """Load the full accumulated leads frame from the preferred backend.
 
-    ``columns`` projects the read (only needed columns) to keep peak memory low.
+    Prefers DuckDB, then Parquet.
+
+    Inputs
+    ------
+    settings : StorageSettings
+        Selects the enabled backend(s) and their locations.
+    columns : list[str] | None
+        Columns to project, to keep peak memory low.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The accumulated leads frame.
+
+    Raises
+    ------
+    StorageError
+        If no data exists in any enabled backend.
     """
     if settings.use_duckdb and duckdb_exists(path=settings.duckdb_path):
         return read_duckdb_table(path=settings.duckdb_path, columns=columns)
@@ -406,7 +616,29 @@ def load_leads_raw(
 def load_window_raw(
     settings: StorageSettings, days: int, columns: list[str] | None = None
 ) -> pd.DataFrame:
-    """Load the most recent ``days`` of leads from the preferred backend."""
+    """Load the most recent ``days`` of leads from the preferred backend.
+
+    Prefers DuckDB, then Parquet.
+
+    Inputs
+    ------
+    settings : StorageSettings
+        Selects the enabled backend(s) and their locations.
+    days : int
+        Size of the trailing window in days.
+    columns : list[str] | None
+        Columns to project, to keep peak memory low.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The leads within the window.
+
+    Raises
+    ------
+    StorageError
+        If no data exists in any enabled backend.
+    """
     if settings.use_duckdb and duckdb_exists(path=settings.duckdb_path):
         return read_duckdb_window(days, path=settings.duckdb_path, columns=columns)
     if settings.use_parquet and parquet_exists(settings.parquet_dir):

@@ -8,6 +8,7 @@ from smarthub.core.config import StorageSettings
 
 
 def _frame(ids, won, updated):
+    """Return a small lead frame with the given ids, won flags, and times."""
     n = len(ids)
     return pd.DataFrame(
         {
@@ -24,6 +25,7 @@ def _frame(ids, won, updated):
 
 
 def test_duckdb_upsert_updates_in_place(tmp_path):
+    """DuckDB upsert updates existing rows in place instead of duplicating."""
     db = tmp_path / "s.duckdb"
     first = _frame([1, 2], ["false", "false"], ["2026-06-20 02:00", "2026-06-20 02:00"])
     assert storage.append_duckdb(first, path=db) == 2
@@ -38,6 +40,7 @@ def test_duckdb_upsert_updates_in_place(tmp_path):
 
 
 def test_duckdb_read_projects_columns(tmp_path):
+    """read_duckdb_table projects requested columns, ignoring missing ones."""
     db = tmp_path / "s.duckdb"
     storage.append_duckdb(
         _frame([1, 2], ["true", "false"], ["2026-06-20 02:00"] * 2), path=db
@@ -49,6 +52,7 @@ def test_duckdb_read_projects_columns(tmp_path):
 
 
 def test_duckdb_read_columns_none_returns_all(tmp_path):
+    """columns=None returns every column."""
     db = tmp_path / "s.duckdb"
     storage.append_duckdb(_frame([1], ["true"], ["2026-06-20 02:00"]), path=db)
     out = storage.read_duckdb_table(path=db, columns=None)
@@ -56,6 +60,7 @@ def test_duckdb_read_columns_none_returns_all(tmp_path):
 
 
 def test_duckdb_window_projects_columns(tmp_path):
+    """read_duckdb_window projects columns while still filtering created_at."""
     db = tmp_path / "s.duckdb"
     df = pd.DataFrame(
         {
@@ -72,6 +77,7 @@ def test_duckdb_window_projects_columns(tmp_path):
 
 
 def test_duckdb_window(tmp_path):
+    """read_duckdb_window returns rows within N days of the latest created_at."""
     db = tmp_path / "s.duckdb"
     df = pd.DataFrame(
         {
@@ -87,9 +93,7 @@ def test_duckdb_window(tmp_path):
 
 
 def test_duckdb_handles_timestamp_precision_mismatch(tmp_path):
-    # A table created at second precision must still accept a later pull whose
-    # datetimes are nanosecond precision (DuckDB can't downcast ns->s on INSERT;
-    # append_duckdb aligns precision in pandas first).
+    """append_duckdb aligns timestamp precision so ns pulls append cleanly."""
     db = tmp_path / "s.duckdb"
     first = pd.DataFrame(
         {
@@ -114,8 +118,7 @@ def test_duckdb_handles_timestamp_precision_mismatch(tmp_path):
 
 
 def test_duckdb_adds_new_columns(tmp_path):
-    # Schema evolution: a later pull with extra columns should ALTER the table,
-    # not error. Existing rows get NULL for the new column.
+    """A later pull with extra columns alters the table and backfills NULL."""
     db = tmp_path / "s.duckdb"
     storage.append_duckdb(_frame([1], ["false"], ["2026-06-20 02:00"]), path=db)
     extra = _frame([2], ["false"], ["2026-06-20 02:00"]).assign(expected_revenue=9.5)
@@ -131,6 +134,7 @@ def test_duckdb_adds_new_columns(tmp_path):
 
 
 def test_parquet_partition_layout_and_dedupe(tmp_path):
+    """Parquet writes to a year/month/day path and dedupes on re-pull."""
     root = tmp_path / "leads"
     first = _frame([1, 2], ["false", "false"], ["2026-06-20 02:00", "2026-06-20 02:00"])
     storage.append_parquet(first, root)
@@ -148,6 +152,7 @@ def test_parquet_partition_layout_and_dedupe(tmp_path):
 
 
 def test_parquet_splits_by_day(tmp_path):
+    """Rows spanning two days are written to separate day files."""
     root = tmp_path / "leads"
     df = pd.DataFrame(
         {
@@ -165,6 +170,7 @@ def test_parquet_splits_by_day(tmp_path):
 
 
 def test_parquet_falls_back_to_created_at_when_date_col_missing(tmp_path):
+    """Partitioning falls back to created_at when the date column is missing."""
     root = tmp_path / "leads"
     df = pd.DataFrame(
         {"id": [1], "created_at": pd.to_datetime(["2026-06-20 02:00"])}
@@ -177,6 +183,7 @@ def test_parquet_falls_back_to_created_at_when_date_col_missing(tmp_path):
 
 
 def test_save_pull_both_backends(tmp_path, monkeypatch):
+    """save_pull writes both backends and reports row counts and paths."""
     monkeypatch.setenv("STORAGE_BACKEND", "both")
     monkeypatch.setenv("DUCKDB_PATH", str(tmp_path / "s.duckdb"))
     monkeypatch.setenv("PARQUET_DIR", str(tmp_path / "leads"))
@@ -197,6 +204,7 @@ def test_save_pull_both_backends(tmp_path, monkeypatch):
 
 
 def test_storage_settings_invalid_backend(monkeypatch):
+    """StorageSettings.from_env rejects an unknown backend."""
     monkeypatch.setenv("STORAGE_BACKEND", "mongodb")
     from smarthub.core.config import ConfigError
 

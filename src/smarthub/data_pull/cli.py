@@ -9,7 +9,23 @@ _DT_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def _valid_datetime(value: str) -> str:
-    """Validate that a CLI date string matches the expected format."""
+    """Validate that a CLI date string matches the expected datetime format.
+
+    Inputs
+    ------
+    value : str
+        Date string expected in ``YYYY-MM-DD HH:MM:SS`` format.
+
+    Returns
+    -------
+    str
+        The original string, unchanged, when it parses.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If ``value`` does not match the expected format.
+    """
     try:
         datetime.strptime(value, _DT_FORMAT)
     except ValueError as exc:
@@ -20,6 +36,13 @@ def _valid_datetime(value: str) -> str:
 
 
 def build_pull_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the ``smarthub-pull`` command.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Parser configured with the data-pull CLI options.
+    """
     parser = argparse.ArgumentParser(
         prog="smarthub.data_pull",
         description="Pull lead_pings from Redshift through an SSH tunnel.",
