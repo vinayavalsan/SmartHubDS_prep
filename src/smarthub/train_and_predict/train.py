@@ -324,21 +324,28 @@ def _evaluate_currently_serving_model(
     """Score the model currently serving traffic on this run's held-out test set.
 
     Returns ``(metrics, optimizer_summary)``, or ``(None, None)`` if nothing
-    is serving yet, or if it can't be scored on the current data (e.g. its
-    feature schema has since changed) — in which case ``decide_promotion``
-    treats this as the bootstrap case and promotes the challenger.
+    is serving yet, or if it can't be loaded/scored (e.g. its feature schema
+    has since changed, or its registry pointer is corrupt) — in which case
+    ``decide_promotion`` treats this as the bootstrap case and promotes the
+    challenger. The ``registry.load_currently_serving_model`` call is
+    deliberately INSIDE the try/except below (not before it): a corrupt
+    ``current.json`` (e.g. left truncated by a process killed mid-write) once
+    raised a raw ``JSONDecodeError`` from there that was outside the
+    try/except, crashing the entire training run instead of just skipping
+    this comparison — this is a "nice to have" re-score, not something that
+    should ever be able to block training a new model.
     """
-    serving_model, serving_manifest = registry.load_currently_serving_model(
-        lead_type_name
-    )
-    if serving_model is None:
-        log.info(
-            "Nothing currently serving for '%s' (first model).", lead_type_name
-        )
-        return None, None
-
-    serving_feature_cols = serving_manifest.get("feature_cols") or []
     try:
+        serving_model, serving_manifest = registry.load_currently_serving_model(
+            lead_type_name
+        )
+        if serving_model is None:
+            log.info(
+                "Nothing currently serving for '%s' (first model).", lead_type_name
+            )
+            return None, None
+
+        serving_feature_cols = serving_manifest.get("feature_cols") or []
         X_serving = test_df[serving_feature_cols]
         _, _, serving_metrics = metrics.evaluate_model(
             serving_model, X_serving, y_test
@@ -359,11 +366,12 @@ def _evaluate_currently_serving_model(
             serving_manifest.get("version"), serving_metrics["roc_auc"],
         )
         return serving_metrics, serving_optimizer_summary
-    except Exception as exc:  # noqa: BLE001 - incompatible schema, etc.
+    except Exception as exc:  # noqa: BLE001 - corrupt pointer, bad schema, etc.
         log.warning(
-            "Could not score currently-serving model %s on the current test "
-            "set (%s); treating as nothing comparable currently serving.",
-            serving_manifest.get("version"), exc,
+            "Could not load/score the currently-serving model for '%s' on "
+            "the current test set (%s); treating as nothing comparable "
+            "currently serving.",
+            lead_type_name, exc,
         )
         return None, None
 

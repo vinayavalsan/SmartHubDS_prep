@@ -1,6 +1,196 @@
 # Changelog
 
 
+## 2026-07-15
+
+### Restructured the data/ folder
+- Raw datasets grouped under **`data/raw_datasets/`** and training tables under
+  **`data/training_datasets/<auto|home>/`**:
+  - `data/smarthub.duckdb` → `data/raw_datasets/leads.duckdb` (moved + renamed)
+  - `data/leads/` (parquet partitions) → `data/raw_datasets/leads/`
+  - `data/training/<type>/` → `data/training_datasets/<type>/`
+  - `data/models/` and `data/model_evaluation/` unchanged (artifacts, not
+    datasets).
+- Code defaults updated: `config.StorageSettings` (`DUCKDB_PATH` /
+  `PARQUET_DIR`), `storage.duckdb_path()`, `io.TRAINING_DIR`. Existing on-disk
+  data was physically moved, so serving + dashboards keep working. `.env` /
+  `.env.example` defaults and the README storage/layout docs updated. All
+  paths still overridable via `DUCKDB_PATH` / `PARQUET_DIR`.
+
+### Task config moved from INI to YAML
+- `config/smarthub.ini` → **`config/smarthub.yaml`** (per-stage mappings:
+  `data_pull` / `validation` / `feature_engineering` / `features` / `training` /
+  `prediction` / `explain`). `core/task_config.py` now loads YAML
+  (`yaml.safe_load`) instead of `configparser`, **keeping the exact same public
+  API** (`get` / `get_int` / `get_float` / `get_bool` / `reload` /
+  `config_path`), so no call site changed — only the backend + the file. Native
+  YAML booleans are honored by `get_bool`; `SMARTHUB_TASK_CONFIG` still
+  overrides the path.
+- Added `PyYAML>=6.0` to base deps (pyproject + requirements). Updated
+  `test_task_config.py` / `test_config.py` to write YAML; refreshed the config
+  examples/paths in README + docs/MANUAL + docs/validation_rules. Full suite
+  green (186 passed / 6 skipped on the base env).
+
+### Fix: corrupt `current.json` crashed an entire training run
+- A scheduled `train-model` Prefect run failed with a raw
+  `json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)`
+  from `registry.currently_serving_version`, propagating uncaught through
+  `train._evaluate_currently_serving_model` and taking down the whole flow —
+  not just skipping the (optional) promotion-gate comparison it was supposed
+  to guard. Root cause: `current.json` existed but was empty/truncated, most
+  likely from a process being interrupted mid-`write_text()` (plain
+  `Path.write_text()` isn't atomic — a kill/crash between opening and
+  finishing the write can leave a 0-byte or partial file).
+- **Fix 1 — atomic writes.** New `registry._atomic_write_text()` (write to a
+  `.tmp` file, then `os.replace`) used for every manifest/pointer write
+  (`save_version`, `promote`'s manifest + `current.json` writes), so a
+  killed process can no longer corrupt these files at all.
+- **Fix 2 — tolerate a corrupt pointer if one already exists.**
+  `currently_serving_version()` now catches `JSONDecodeError`/`OSError`,
+  logs a warning, and returns `None` (same as "nothing promoted yet")
+  instead of raising — defense in depth for pointer files that predate this
+  fix, or corruption from any other cause.
+- **Fix 3 — the real bug: the registry call was outside the try/except.**
+  `train._evaluate_currently_serving_model`'s docstring already promised
+  "any failure here... is treated as nothing comparable currently serving",
+  but the `registry.load_currently_serving_model(...)` call sat *before*
+  the `try:` block, so it alone couldn't honor that promise. Moved inside —
+  now truly no failure mode in this optional comparison can crash training.
+- **Tests:** `tests/test_registry.py` — corrupt pointer -> `None` (with the
+  warning logged) at both `currently_serving_version` and
+  `load_currently_serving_model`, and a no-`.tmp`-file-left-behind check on
+  `promote()`. New `tests/test_train.py` (sklearn-gated, since `train.py`
+  imports it at module level via `metrics.py`) — the registry-load-raises
+  case (the exact bug) and a schema-mismatch case both degrade to
+  `(None, None)` instead of propagating. 191 passed with `ml`+`explain`
+  extras installed (previously 185).
+
+## 2026-07-14
+
+### `/explain_bid`: bid curve + fixed a real LLM reasoning mistake
+- Live-tested `/explain_bid` on a real lead and found the LLM's prose
+  reasoned backwards about the `bid` factor's SHAP sign — implying a *lower*
+  bid would have won more often, which the model's monotonic bid constraint
+  rules out. It wasn't inventing a number, just garbling the qualitative
+  direction because it had no real numbers to reason from besides the one
+  chosen bid.
+- **Fix: give the LLM real numbers instead of letting it guess.** New
+  `predict.bid_curve_around(row, model, expected_revenue, min_bid, max_bid,
+  bid_step, center_bid, n_points=3)` computes predicted win rate + expected
+  profit at a few bid points bracketing the chosen bid (one vectorized
+  `predict_proba` call, same pattern as `optimize_bid_for_row`) — "the shape
+  of the market" around the bid (Kiran, docs/CONTEXT.md §7), not just the
+  single winning number. `explain.explain_bid` now computes this (skipped
+  for `cold_start_fallback`, which has no model) and both returns it as
+  `bid_curve` and feeds it into the LLM prompt as a fact ("Nearby bids
+  explored: $X -> Y%, ...").
+- **Also added an explicit guardrail line to the prompt**: "predicted win
+  rate never decreases as the bid rises... never claim a lower bid would win
+  more often than a higher one" — belt-and-suspenders alongside the real
+  numbers now available.
+- **Tests:** `bid_curve_around` (symmetric spanning, edge-clipping without
+  duplicate bids, empty on no-viable-bid/NaN center) in
+  `test_train_and_predict.py`; prompt-guardrail and bid-curve-rendering
+  tests, plus updated `explain_bid` mocks, in `test_explain.py`. 185 passed
+  with `ml`+`explain` extras installed.
+
+### Fix: /explain_bid 500'd on numpy scalars (FastAPI couldn't JSON-encode them)
+- Live-tested `/explain_bid` and hit `TypeError: 'numpy.int64' object is not
+  iterable` from FastAPI's `jsonable_encoder`. Cause: `explain_row`'s
+  `top_factors[].value` came straight from `frame.iloc[0][name]`, which is a
+  numpy scalar (`int64`/`float64`) for numeric feature columns — this
+  particular FastAPI/pydantic version combination can't encode those.
+- Added `explain._to_native()` (`np.generic` -> `.item()`) and applied it to
+  every `top_factors[].value`. New regression tests:
+  `test_to_native_converts_numpy_scalars` (pure) and an assertion in
+  `test_explain_row_returns_top_factors_ranked_by_shap` that no `value` is a
+  `np.generic`, so this can't silently reappear.
+
+### Cold-start + exploration bidding policy (`predict.decide_bid`)
+- **The real gap Kiran flagged (docs/CONTEXT.md §3):** "'Recent' must be
+  explicitly defined as a configurable window... when there is no recent
+  data, the bidding pattern must be explicitly articulated... e.g. a defined
+  exploration schedule or fallback bid" — not emergent/random behavior.
+  `exploration_variance_pct` existed in the ini since the config-tiering pass
+  but was never read anywhere in code; there was no cold-start detection at
+  all (a lead type with no promoted model just 500'd).
+- **New `predict.decide_bid`** — the one bidding decision, always returning
+  an explicit `decision_path` (`"cold_start_fallback" | "exploration" |
+  "model"`) + plain-English `decision_reason`:
+  - `cold_start_fallback` — no model ever promoted for this lead type yet;
+    bids a fixed, configurable fraction of the way from the floor to the
+    CM-respecting ceiling (new `cold_start_fallback_bid_pct` ini key, default
+    50%) instead of erroring. Self-terminating once a first model promotes.
+  - `exploration` — a **deterministic, reproducible** explore/exploit
+    schedule instead of a per-request coin flip: leads are bucketed by
+    hour-of-week (0-167), and 1-in-`N` buckets (`N = round(1 /
+    exploration_variance_pct)`) are scheduled probe slots, perturbing the
+    optimum bid by `exploration_variance_pct` and alternating direction each
+    time a bucket triggers — the same lead always gets the same
+    explore/exploit answer, so it's auditable after the fact.
+  - `model` — the normal profit-maximizing bid; flags `model_data_age_days`
+    and a "due for retraining" note if the currently-serving model's
+    training data is older than the new `recency_window_days` ini key
+    (default 30) — the explicit, named "recent" window Kiran asked for.
+    Informational only; doesn't change the bid itself.
+- **New `predict.load_model_and_manifest`** — same resolution order as
+  `resolve_model_uri` but returns `(None, None)` instead of raising when
+  nothing's ever been promoted, so `decide_bid` can detect true cold start.
+- **Wired into both `/recommend_bid` and `/explain_bid`** (previously
+  `/recommend_bid` called the raw optimizer directly). `/explain_bid` now
+  runs the identical policy, so its `decision_path`/bid always matches what
+  live serving would do; a `cold_start_fallback` bid skips SHAP/the LLM
+  entirely (no model to explain), and an `exploration` bid's LLM prompt gets
+  a factual note about the probe so the prose reflects it.
+- **New ini keys** (`config/smarthub.yaml [prediction]`):
+  `recency_window_days` (30), `cold_start_fallback_bid_pct` (0.50).
+  `exploration_variance_pct` (0.10, pre-existing) is now actually read.
+- **Fix: SHAP base value was in log-odds space, not a probability.**
+  `shap.TreeExplainer` on `LGBMClassifier` works in margin/log-odds space —
+  `explain.py`'s `base_win_rate` was passing that straight through
+  (observed in the wild as e.g. `-2.05`, not a valid 0-1 rate). Now converted
+  through a sigmoid so it's a genuine probability comparable to
+  `predicted_win_rate`; per-feature `shap` contributions are left in
+  log-odds units (direction/ranking are unaffected by that monotonic
+  transform) and documented as such.
+- **Tests.** `tests/test_train_and_predict.py`: `cold_start_fallback_bid`,
+  `exploration_slot` (determinism + alternating direction + disabled at
+  `variance_pct=0`), `model_recency` (stale/not-stale/missing-lineage),
+  `decide_bid` (all three paths + the stale-model note),
+  `load_model_and_manifest` (cold start + currently-serving). Verified
+  against the base test env and a full `ml`+`explain`-extras env
+  (178 passed, 2 skipped).
+
+### Bid explanations: `/explain_bid` (SHAP + local LLM via Ollama)
+- **New `train_and_predict/explain.py`.** Offline/on-demand "why did Anton bid
+  $X for this lead" explanations. Explains the model's prediction *at the
+  chosen bid* with `shap.TreeExplainer` factor attributions
+  (`model_type=lightgbm` only for now; handles both a plain Pipeline and a
+  `CalibratedClassifierCV`, averaging SHAP values across its 3 CV folds).
+  A small local LLM, called over Ollama's HTTP API (`POST /api/generate`),
+  turns the ranked factors into 2-3 plain-English sentences from a tightly
+  templated, "use only these facts, do not invent numbers" prompt — a
+  formatting task, not a reasoning task, to keep a small model from
+  hallucinating numbers. Ollama being unreachable degrades to a clear
+  fallback message rather than an error; the numeric factors are unaffected.
+- **New `predict.py` endpoint**, `POST /explain_bid` — same request shape as
+  `/recommend_bid`; 503 if the `explain` extra isn't installed, 400 on a bad
+  lead_type/model mismatch (e.g. a non-LightGBM model).
+- **New `pyproject.toml` extra**, `explain = ["shap>=0.44"]` (also needs `ml`
+  to explain a trained model, plus a running local Ollama server — not a
+  Python dependency).
+- **New `config/smarthub.yaml [explain]` section** — `llm_model`
+  (`qwen2.5:1.5b-instruct` default), `ollama_host`, `top_n_factors`,
+  `timeout_seconds`.
+- **Tests (`tests/test_explain.py`).** Prompt formatting, Ollama success +
+  graceful-fallback-on-unreachable (mocked `requests.post`), and the
+  no-viable-bid short-circuit all run in the base env; SHAP/LightGBM-gated
+  tests (`pytest.importorskip`) fit a real tiny LightGBM pipeline (plain and
+  calibrated) and verify SHAP ranking, fold-averaging, and the
+  non-LightGBM-model rejection. Verified against both the base test env and
+  a full `ml`+`explain`-extras env (163 passed).
+
+
 ## 2026-07-09 (later)
 
 ### Local build vs server pull (SMARTHUB_ENV)
@@ -69,7 +259,7 @@
 - Wired into the data-pull flow (per-lead-type `data-quality-<type>` Prefect
   artifact + a "Data quality" group in the Slack notification) and the
   `smarthub-pull` CLI (log summary). Threshold in
-  `config/smarthub.ini [validation] high_missing_threshold`. New `validation`
+  `config/smarthub.yaml [validation] high_missing_threshold`. New `validation`
   extra (pandera); worker image installs it; degrades gracefully if absent.
 
 ### CI/CD + quality gates
@@ -132,7 +322,7 @@
 
 ### Mandatory / optional feature selection (auto)
 - **Feature selection is now configurable per training run.** `[features]`
-  section in `config/smarthub.ini` (`auto_optional` / `home_optional`):
+  section in `config/smarthub.yaml` (`auto_optional` / `home_optional`):
   `all` (default) = every optional feature; `none` = mandatory core only;
   a comma list = exactly those optional features (unknown names ignored +
   warned).
@@ -169,13 +359,13 @@
   `registry.decide_promotion(...)` promotes the new ("challenger") model only
   if its ROC AUC doesn't regress beyond `promotion_min_roc_auc_regression` and
   its offline expected profit on that test set is >= `promotion_min_profit_ratio`
-  of the currently-serving model's (new `config/smarthub.ini [training]`
+  of the currently-serving model's (new `config/smarthub.yaml [training]`
   knobs, default 0.01 / 0.98). First model for a lead type is always promoted
   (bootstrap case). A held (non-promoted) run is still saved as a version and
   logged — visible in the Prefect artifact + Slack notification — not
   silently dropped.
 - **`predict.load_model` / the FastAPI service** now resolve the model per
-  `lead_type_id`: `MODEL_URI` env (explicit override) > `smarthub.ini
+  `lead_type_id`: `MODEL_URI` env (explicit override) > `smarthub.yaml
   [prediction] active_model_version` (pin a specific version) > the model
   currently serving that lead type (default). Previously `MODEL_URI` defaulted
   to a single hardcoded `auto` path regardless of the requested lead type.
@@ -256,7 +446,7 @@
 - Per Kiran/Vinaya ("business settings in the UI and nothing else; secrets in
   env"), reorganized config into: **secrets → `.env`**, **business → Postgres
   config store/UI** (trimmed to `target_cm`, `bid_floor`, `bid_max_cap`,
-  `min_source_quality`), **task configs → `config/smarthub.ini`** with
+  `min_source_quality`), **task configs → `config/smarthub.yaml`** with
   `[data_pull]`/`[feature_engineering]`/`[training]`/`[prediction]` sections.
 - Added `core/task_config.py` (ini loader with typed getters + defaults).
 - Moved `model_type`, `calibrate`, `drop_zero_variance`, `test_size`,

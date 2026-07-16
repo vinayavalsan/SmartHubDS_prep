@@ -1,0 +1,103 @@
+# SmartHub task configuration (Tier-2 file config).
+#
+# Non-secret, non-business *task* knobs, split by pipeline stage. This is the
+# file to edit for pipeline behaviour.
+#
+# Config tiers (see docs/CONTEXT.md / README):
+#   - Secrets & DB connection   -> .env                (never here)
+#   - Business settings (UI)     -> Postgres config store, edited in the
+#                                   Streamlit Config page: target_cm,
+#                                   bid_floor, bid_max_cap, min_source_quality
+#   - Task configs (this file)   -> per-stage sections below
+#
+# Missing keys/sections fall back to code defaults, so this file is optional.
+# Read in code via smarthub.core.task_config (get / get_int / get_float /
+# get_bool). Override the path with $SMARTHUB_TASK_CONFIG.
+
+data_pull:
+  overlap_hours: 1
+  default_lookback_hours: 168
+  with_expected_revenue: true
+  selected_only: true
+
+validation:
+  # Data validation runs on each pull (warn + report only — never drops/fixes
+  # rows or blocks the pull). A column whose null/blank rate is at or above this
+  # threshold is called out as "high-missing" in the report/notification.
+  high_missing_threshold: 0.5
+
+feature_engineering:
+  # Rolling training window (days) the feature build reads; 0 = all data.
+  training_window_days: 21
+  # Observed holidays for is_workday live in config/holidays.json (weekends are
+  # handled in code). Override the file path with SMARTHUB_HOLIDAYS.
+
+features:
+  # Which model features to train on, per lead type. Toggling here changes only
+  # what the MODEL consumes; every feature is still built into the training
+  # table, so no re-pull/re-build is needed — just retrain.
+  #
+  # MANDATORY (auto) — ALWAYS trained on, cannot be removed (locked in code,
+  # features.py:_MANDATORY_AUTO): bid, age, age_missing, age_cohort_<band>,
+  # num_vehicles, multi_vehicle, num_auto_accidents, home_owner, insured, dui,
+  # sr22_required.
+  #
+  # OPTIONAL (auto) — the model trains on exactly the names listed in
+  # `auto_optional`. Remove a name to drop that feature; add it to include it.
+  # Shortcuts: `all` = every optional feature, `none` = mandatory core only.
+  # Unknown names are ignored (with a warning).
+  auto_optional: >-
+    state, gender, marital_status, military_affiliation, campaign_id,
+    traffic_tier, num_drivers, num_auto_violations, continuous_coverage_months,
+    is_married, created_hour, created_dayofweek, is_workday
+  # Home selection is not enabled yet (mandatory core TBD with Kiran) — `all`
+  # keeps every home feature.
+  home_optional: all
+
+training:
+  model_type: lightgbm          # logistic_regression | lightgbm
+  calibrate: true               # isotonic probability calibration
+  drop_zero_variance: true
+  test_size: 0.20
+  random_seed: 42
+  # Promotion gate (see train_and_predict/registry.py). A newly trained model
+  # only replaces the one currently serving traffic if it clears both checks
+  # below, evaluated on the SAME held-out test set as the currently-serving one.
+  promotion_min_roc_auc_regression: 0.01   # max allowed ROC AUC drop
+  promotion_min_profit_ratio: 0.98         # challenger profit >= 98% of serving
+
+prediction:
+  bid_step: 0.25
+  # Cold-start / exploration bidding policy (train_and_predict/predict.py:
+  # decide_bid). Kiran's ask: "recent" must be an explicit config value, and
+  # cold-start/exploration behaviour must be a defined, auditable rule, not
+  # emergent or random (docs/CONTEXT.md §3).
+  #
+  # Fraction of a bid's optimum to probe above/below on a scheduled explore
+  # slot (hour-of-week bucketed — see exploration_slot()). Also sets schedule
+  # density: N = round(1/this), so 0.10 = 1-in-10 hour-of-week buckets explore.
+  exploration_variance_pct: 0.10
+  # How many days old a currently-serving model's training data can be before
+  # it's flagged as stale in /recommend_bid and /explain_bid responses
+  # (decision_reason, model_data_age_days). Informational only — the explicit
+  # "recent" definition Kiran asked for, surfaced for retraining-cadence calls.
+  recency_window_days: 30
+  # Bid for a lead type with NO model ever trained/promoted yet (true cold
+  # start). Fraction of the way from min_bid to the CM-respecting ceiling,
+  # snapped to bid_step. Bootstraps itself out of existence: the first real
+  # model promotes unconditionally (registry.decide_promotion).
+  cold_start_fallback_bid_pct: 0.50
+  # Pin serving to one specific local model version (e.g. v3_2026-07-09T...)
+  # instead of whatever is currently serving. "none" (default) = serve that.
+  active_model_version: "none"
+
+explain:
+  # Offline/on-demand "why did Anton bid $X" explanations (SHAP factor
+  # breakdown + a local LLM via Ollama — see train_and_predict/explain.py).
+  # Only used by POST /explain_bid; never on the live /recommend_bid path.
+  # Requires: pip install '.[explain,ml]' and a running local Ollama server
+  # (https://ollama.com) with this model pulled.
+  llm_model: qwen2.5:1.5b-instruct
+  ollama_host: http://localhost:11434
+  top_n_factors: 5
+  timeout_seconds: 30

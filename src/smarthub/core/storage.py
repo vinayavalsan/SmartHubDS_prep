@@ -78,7 +78,7 @@ def _dedupe(df: pd.DataFrame, key: str = KEY) -> pd.DataFrame:
 
 
 def duckdb_path(path: str | os.PathLike[str] | None = None) -> Path:
-    """Resolve the DuckDB file path (defaults to ``data/smarthub.duckdb``).
+    """Resolve the DuckDB file path (defaults to ``data/raw_datasets/leads.duckdb``).
 
     Inputs
     ------
@@ -92,7 +92,7 @@ def duckdb_path(path: str | os.PathLike[str] | None = None) -> Path:
     """
     if path is not None:
         return paths.resolve(path)
-    return paths.data_dir() / "smarthub.duckdb"
+    return paths.data_dir() / "raw_datasets" / "leads.duckdb"
 
 
 def _connect(path: str | os.PathLike[str] | None = None) -> duckdb.DuckDBPyConnection:

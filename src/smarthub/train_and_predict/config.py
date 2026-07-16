@@ -5,7 +5,7 @@ Config tiers (team decision — Kiran/Vinaya):
 - **Business settings** -> Postgres config store, edited in the Streamlit Config
   page (``target_cm``, ``bid_floor``, …). Read here via ``target_cm_value()`` /
   ``min_bid_value()``.
-- **Task configs** -> ``config/smarthub.ini`` (``smarthub.core.task_config``),
+- **Task configs** -> ``config/smarthub.yaml`` (``smarthub.core.task_config``),
   ``[training]`` / ``[prediction]`` sections. Read here for model_type, bid_step,
   calibration, etc. Code constants below are the fallback defaults.
 
@@ -36,7 +36,7 @@ def feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
 
 
 # =============================================================================
-# TASK configs — from config/smarthub.ini ([training] / [prediction]).
+# TASK configs — from config/smarthub.yaml ([training] / [prediction]).
 # The constants are the fallback defaults if the ini/key is absent.
 # =============================================================================
 MODEL_TYPE = "lightgbm"                 # fallback; ini [training] model_type wins
@@ -45,6 +45,18 @@ DROP_ZERO_VARIANCE = task_config.get_bool("training", "drop_zero_variance", True
 CALIBRATE = task_config.get_bool("training", "calibrate", True)
 TEST_SIZE = task_config.get_float("training", "test_size", 0.20)
 BID_STEP = task_config.get_float("prediction", "bid_step", 0.25)
+
+# Cold-start / exploration bidding policy (see `predict.decide_bid`). Kiran's
+# ask (docs/CONTEXT.md §3): "recent" must be an explicit, named config value,
+# and the cold-start/exploration behaviour must be a defined, auditable rule
+# rather than emergent/random.
+EXPLORATION_VARIANCE_PCT = task_config.get_float(
+    "prediction", "exploration_variance_pct", 0.10
+)
+RECENCY_WINDOW_DAYS = task_config.get_int("prediction", "recency_window_days", 30)
+COLD_START_FALLBACK_BID_PCT = task_config.get_float(
+    "prediction", "cold_start_fallback_bid_pct", 0.50
+)
 
 # Promotion gate (see `registry.decide_promotion`). A newly trained model
 # ("challenger") only replaces the model currently serving traffic if it
@@ -130,12 +142,12 @@ def min_bid_value() -> float:
 
 
 # --- Output locations (under data/, beside pulls + training tables) ----------
-REPORT_ROOT = "data/training_report"
+REPORT_ROOT = "data/model_evaluation"
 MODEL_ROOT = "data/models"
 
 
 def report_dir(lead_type_name: str) -> str:
-    """Absolute per-lead-type training-report directory."""
+    """Absolute per-lead-type model-evaluation directory."""
     return str(paths.resolve(f"{REPORT_ROOT}/{lead_type_name}"))
 
 

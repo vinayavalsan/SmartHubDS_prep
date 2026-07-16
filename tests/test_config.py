@@ -41,25 +41,25 @@ def test_ssh_settings_missing_key_file_raises(monkeypatch, tmp_path):
         SSHSettings.from_env()
 
 
-def test_training_window_days_from_ini_and_default(monkeypatch, tmp_path):
-    """training_window_days comes from the ini; defaults to 21 when absent."""
+def test_training_window_days_from_config_and_default(monkeypatch, tmp_path):
+    """training_window_days comes from the YAML; defaults to 21 when absent."""
     from smarthub.core import task_config
     from smarthub.core.config import training_window_days
 
-    monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(tmp_path / "absent.ini"))
+    monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(tmp_path / "absent.yaml"))
     task_config.reload()
     assert training_window_days() == 21               # default
 
-    ini = tmp_path / "t.ini"
-    ini.write_text("[feature_engineering]\ntraining_window_days = 45\n")
-    monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(ini))
+    cfg = tmp_path / "t.yaml"
+    cfg.write_text("feature_engineering:\n  training_window_days: 45\n")
+    monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(cfg))
     task_config.reload()
     assert training_window_days() == 45
 
-    ini.write_text("[feature_engineering]\ntraining_window_days = 0\n")  # all data
+    cfg.write_text("feature_engineering:\n  training_window_days: 0\n")  # all data
     task_config.reload()
     assert training_window_days() == 0
-    task_config.reload()  # restore real ini for other tests
+    task_config.reload()  # restore real config for other tests
 
 
 def test_ssh_settings_ok(monkeypatch, tmp_path):

@@ -104,7 +104,7 @@ class ConfigParam:
 
 # Tier-2 BUSINESS settings — the ONLY things the UI exposes (team decision:
 # "business settings in the UI and nothing else; secrets in env"). Task configs
-# (model_type, training window, bid_step, …) live in config/smarthub.ini via
+# (model_type, training window, bid_step, …) live in config/smarthub.yaml via
 # smarthub.core.task_config; secrets live in .env.
 REGISTRY: list[ConfigParam] = [
     ConfigParam("target_cm", "float", 0.25,

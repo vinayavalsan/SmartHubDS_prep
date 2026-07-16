@@ -67,7 +67,7 @@ def build_features_flow(
         Human name for the lead type.
     window_days : int | None
         Overrides the rolling training window; falls back to
-        ``training_window_days`` in config/smarthub.ini (default 21).
+        ``training_window_days`` in config/smarthub.yaml (default 21).
         ``0`` = all data.
 
     Returns

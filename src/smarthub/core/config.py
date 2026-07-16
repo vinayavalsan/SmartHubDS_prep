@@ -169,8 +169,10 @@ class StorageSettings:
             )
         return cls(
             backend=backend,
-            duckdb_path=Path(os.getenv("DUCKDB_PATH", "data/smarthub.duckdb")),
-            parquet_dir=Path(os.getenv("PARQUET_DIR", "data/leads")),
+            duckdb_path=Path(
+                os.getenv("DUCKDB_PATH", "data/raw_datasets/leads.duckdb")
+            ),
+            parquet_dir=Path(os.getenv("PARQUET_DIR", "data/raw_datasets/leads")),
             partition_date_col=os.getenv("PARTITION_DATE_COL", "created_at"),
         )
 
@@ -192,7 +194,7 @@ def training_window_days() -> int:
     """Rolling training window in days for the feature build (0 = all data).
 
     Reads ``[feature_engineering] training_window_days`` from
-    ``config/smarthub.ini`` (via ``task_config``); falls back to the default
+    ``config/smarthub.yaml`` (via ``task_config``); falls back to the default
     of 21 when unset. The market is non-stationary (CONTEXT.md §7).
 
     Returns

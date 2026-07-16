@@ -22,12 +22,16 @@ retraining needed.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from smarthub.core import paths
+
+logger = logging.getLogger("smarthub.train_and_predict.registry")
 
 # Redirectable in tests the same way smarthub.core.io.TRAINING_DIR is.
 MODEL_DIR_ROOT = paths.data_dir() / "models"
@@ -38,6 +42,22 @@ _VERSION_RE = re.compile(r"^v(\d+)_")
 def model_dir(lead_type_name: str) -> Path:
     """Per-lead-type model folder: data/models/<name>/."""
     return MODEL_DIR_ROOT / lead_type_name.strip().lower()
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically.
+
+    Writes to a temp file in the same directory, then ``os.replace`` — so a
+    process killed or crashing mid-write can never leave a truncated/empty
+    file behind. A plain ``.write_text()`` on ``current.json`` once did
+    exactly that, and the resulting empty file crashed every subsequent
+    ``currently_serving_version()`` call (and, transitively, an entire
+    training run) with a raw ``JSONDecodeError`` instead of degrading
+    gracefully.
+    """
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(text)
+    os.replace(tmp_path, path)
 
 
 def _timestamp() -> str:
@@ -126,8 +146,9 @@ def save_version(
         "promoted": False,
         "promoted_at": None,
     }
-    manifest_path(lead_type_name, version).write_text(
-        json.dumps(manifest, indent=2, default=str)
+    _atomic_write_text(
+        manifest_path(lead_type_name, version),
+        json.dumps(manifest, indent=2, default=str),
     )
     return manifest
 
@@ -137,11 +158,28 @@ def _serving_pointer_path(lead_type_name: str) -> Path:
 
 
 def currently_serving_version(lead_type_name: str) -> str | None:
-    """The version id currently promoted to serve traffic, or ``None``."""
+    """The version id currently promoted to serve traffic, or ``None``.
+
+    Also ``None`` (with a logged warning, not a raise) if the pointer file
+    exists but can't be parsed — e.g. left empty/truncated by a process
+    killed mid-write (see ``_atomic_write_text``, added after exactly this
+    took down an entire training run: a raw ``JSONDecodeError`` propagating
+    out of here, through ``load_currently_serving_model``, uncaught). A
+    corrupt pointer is treated the same as "nothing promoted yet" rather
+    than crashing every caller.
+    """
     pointer = _serving_pointer_path(lead_type_name)
     if not pointer.exists():
         return None
-    return json.loads(pointer.read_text()).get("version")
+    try:
+        return json.loads(pointer.read_text()).get("version")
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning(
+            "Corrupt/unreadable serving pointer for '%s' (%s): %s — "
+            "treating as nothing currently serving.",
+            lead_type_name, pointer, exc,
+        )
+        return None
 
 
 def currently_serving_manifest(lead_type_name: str) -> dict | None:
@@ -202,8 +240,9 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
     manifest["promoted"] = True
     manifest["promoted_at"] = promoted_at
     manifest["promotion_reason"] = reason
-    manifest_path(lead_type_name, version).write_text(
-        json.dumps(manifest, indent=2, default=str)
+    _atomic_write_text(
+        manifest_path(lead_type_name, version),
+        json.dumps(manifest, indent=2, default=str),
     )
 
     pointer = {
@@ -212,7 +251,8 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
         "previous_version": previous,
         "reason": reason,
     }
-    _serving_pointer_path(lead_type_name).write_text(
+    _atomic_write_text(
+        _serving_pointer_path(lead_type_name),
         json.dumps(pointer, indent=2, default=str)
     )
     return pointer

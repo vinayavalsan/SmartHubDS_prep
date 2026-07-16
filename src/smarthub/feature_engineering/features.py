@@ -193,7 +193,7 @@ HOME_ONLY_FEATURES = {
 # (the product tiers: home owner, multiple vehicles, currently insured,
 # accidents, DUI, SR-22, age) plus ``bid`` — the optimizer's decision variable,
 # which the model must always see. Every other model feature for that lead type
-# is OPTIONAL and toggled per training run via ``config/smarthub.ini``
+# is OPTIONAL and toggled per training run via ``config/smarthub.yaml``
 # ``[features] <lead_type>_optional`` (see ``_configured_optional``).
 #
 # Home's mandatory core is not settled yet, so home keeps every feature (only
@@ -264,7 +264,7 @@ def optional_features(lead_type_id: int) -> set[str]:
 def _configured_optional(lead_type_id: int, optional_universe: set[str]) -> set[str]:
     """Which OPTIONAL features are enabled for this lead type, from config.
 
-    Reads ``config/smarthub.ini`` ``[features] <lead_type>_optional``:
+    Reads ``config/smarthub.yaml`` ``[features] <lead_type>_optional``:
     absent / ``"all"`` -> every optional feature (backwards-compatible
     default); ``"none"`` / empty -> no optional features (mandatory core
     only); comma list -> exactly those (unknown names are ignored + warned).

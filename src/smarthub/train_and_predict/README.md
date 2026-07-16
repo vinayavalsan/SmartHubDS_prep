@@ -27,7 +27,7 @@ ml_training_prediction/
 ├── models/
 │   └── anton_model.pkl
 
-├── training_report/
+├── model_evaluation/
 
 ├── mlruns/
 
@@ -264,7 +264,7 @@ Bid optimization evaluation:
 Output files include:
 
 ```text
-training_report/
+model_evaluation/
 
 feature_summary.csv
 feature_value_counts.csv
@@ -282,7 +282,7 @@ bid_optimizer_test_rows.csv
 model_evaluation_summary.json
 ```
 
-The `training_report/` directory stores three types of outputs:
+The `model_evaluation/` directory stores three types of outputs:
 
 - **Dataset summaries**: `feature_summary.csv` and `feature_value_counts.csv` describe the raw data before cleaning.
 - **Model evaluation artifacts**: ROC, precision-recall, calibration, probability, and confusion-matrix outputs describe classifier quality.

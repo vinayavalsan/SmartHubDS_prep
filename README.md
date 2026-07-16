@@ -14,11 +14,13 @@ means and what Anton is solving), see [CONTEXT.md](./docs/CONTEXT.md).
 │   ├── data_pull/                # STEP 1: pull, models, cli, windowing, flow (Prefect)
 │   ├── feature_engineering/      # STEP 2: features + flow (Prefect)
 │   └── monitoring/               # Streamlit multipage app (leads, monitoring, config)
-├── config/                       # smarthub.ini (task configs) + holidays.json (is_workday calendar)
+├── config/                       # smarthub.yaml (task configs) + holidays.json (is_workday calendar)
 ├── docker/                       # Dockerfile.app, Dockerfile.worker, worker-entrypoint.sh
 ├── docs/                         # CONTEXT, MODELING, PLAN_July2026, CHANGELOG
 ├── tests/                        # pytest unit tests
-├── data/                         # accumulated data (gitignored): leads/, training/, duckdb
+├── data/                         # accumulated data (gitignored):
+│                                 #   raw_datasets/ (leads.duckdb + leads/ parquet),
+│                                 #   training_datasets/<auto|home>/, models/, model_evaluation/
 ├── prefect.yaml                  # Prefect deployments (data-pull, build-features)
 ├── docker-compose.prefect.yml    # Postgres + Prefect server + worker
 ├── install.sh                    # validate prerequisites/.env, then start the stack
@@ -68,15 +70,34 @@ expected revenue over all listings.
 
 `STORAGE_BACKEND` selects where pulls are persisted:
 
-- `duckdb` — single file at `DUCKDB_PATH` (default `data/smarthub.duckdb`); native
-  upsert + SQL window reads.
+- `duckdb` — single file at `DUCKDB_PATH` (default
+  `data/raw_datasets/leads.duckdb`); native upsert + SQL window reads.
 - `parquet` — per-day files under `PARQUET_DIR` laid out as
-  `data/leads/YYYY/MM/DD-MM-YYYY.parquet`; same-day pulls merge + dedupe.
+  `data/raw_datasets/leads/YYYY/MM/DD-MM-YYYY.parquet`; same-day pulls merge +
+  dedupe.
 - `both` (default) — write to both.
 
 `PARTITION_DATE_COL` (default `created_at`) buckets rows into the per-day Parquet
 files. For training, `io.load_leads_window(days=N)` reads just the most recent
 `N` days (the rolling recency window from CONTEXT §7).
+
+The `data/` folder (gitignored) is laid out by role:
+
+```text
+data/
+├── raw_datasets/                 # pulled leads (STEP 1 output)
+│   ├── leads.duckdb              #   DUCKDB_PATH
+│   └── leads/YYYY/MM/DD-MM-YYYY.parquet   # PARQUET_DIR partitions
+├── training_datasets/            # versioned training tables (STEP 2 output)
+│   ├── auto/<version>.parquet (+ .json lineage)
+│   └── home/<version>.parquet
+├── models/                       # versioned model registry (STEP 3)
+│   ├── auto/  (vN_*.pkl, vN_*.json, current.json)
+│   └── home/
+└── model_evaluation/             # per-run eval reports (plots, metrics, csvs)
+    ├── auto/
+    └── home/
+```
 
 ### 2. Dashboard
 
@@ -112,7 +133,7 @@ settings in the UI and nothing else; secrets in env"):
 | --- | --- | --- | --- |
 | **Secrets / connection** | SSH + Redshift creds, storage paths, passwords, DB URLs | **`.env`** | ops |
 | **Business settings** | `target_cm`, `bid_floor`, `bid_max_cap`, `min_source_quality` | **Postgres config store**, via the **Streamlit Config page** | business (Kiran) |
-| **Task configs** | model_type, training window, calibration, bid_step, feature selection, data-pull knobs… | **`config/smarthub.ini`** (`[data_pull]`/`[feature_engineering]`/`[features]`/`[training]`/`[prediction]`) | devs (git) |
+| **Task configs** | model_type, training window, calibration, bid_step, feature selection, data-pull knobs… | **`config/smarthub.yaml`** (sections: `data_pull` / `feature_engineering` / `features` / `training` / `prediction` / `explain`) | devs (git) |
 
 ### Business settings (UI)
 Only business knobs live in the typed registry (`core/config_store.py`) and are
@@ -124,34 +145,35 @@ from smarthub.core.config_store import ConfigStore
 ConfigStore().get("target_cm", env="prod")     # typed, validated, with fallback
 ```
 
-### Task configs (ini file)
-Edit `config/smarthub.ini` — sections per pipeline stage. Missing keys fall back
-to code defaults, so the file is optional. Example — switch the model to LR:
+### Task configs (YAML file)
+Edit `config/smarthub.yaml` — one mapping per pipeline stage. Missing keys fall
+back to code defaults, so the file is optional. Example — switch the model to LR:
 
-```ini
-[training]
-model_type = logistic_regression   ; or lightgbm
-calibrate  = true
+```yaml
+training:
+  model_type: logistic_regression   # or lightgbm
+  calibrate: true
 ```
 
 Read in code via `smarthub.core.task_config` (e.g. `config.model_type()`,
 `config.BID_STEP`, `training_window_days()`). Override the file path with
-`SMARTHUB_TASK_CONFIG`. The ini ships in the Docker images (`COPY config`), so a
+`SMARTHUB_TASK_CONFIG`. The YAML ships in the Docker images (`COPY config`), so a
 worker rebuild picks up edits.
 
 ### Feature selection (mandatory vs optional)
 Which features the **model** trains on is configurable per run via the
-`[features]` section of `config/smarthub.ini`, without touching code. Each lead
+`features` section of `config/smarthub.yaml`, without touching code. Each lead
 type has a **mandatory core** (locked in `features.py`, always trained on, never
-toggleable) and an **optional set** listed in the ini:
+toggleable) and an **optional set** listed in the YAML:
 
-```ini
-[features]
-# auto mandatory core (locked, cannot be removed): home_owner, multi_vehicle,
-# num_vehicles, insured, num_auto_accidents, dui, sr22_required, age (+ bands), bid
-auto_optional = state, gender, marital_status, campaign_id, traffic_tier,
-    num_drivers, num_auto_violations, continuous_coverage_months, is_married,
-    created_hour, created_dayofweek, is_workday
+```yaml
+features:
+  # auto mandatory core (locked, cannot be removed): home_owner, multi_vehicle,
+  # num_vehicles, insured, num_auto_accidents, dui, sr22_required, age (+ bands), bid
+  auto_optional: >-
+    state, gender, marital_status, campaign_id, traffic_tier, num_drivers,
+    num_auto_violations, continuous_coverage_months, is_married, created_hour,
+    created_dayofweek, is_workday
 ```
 
 The auto mandatory core is SmartFinancial's lead-matching criteria (home owner,
@@ -188,7 +210,7 @@ bid; lead-type completeness); and per-column null/blank rates (surfaces things
 like `pst_hour` being empty). Output: a per-lead-type `data-quality-<type>`
 Prefect artifact, a "Data quality" section in the data-pull Slack notification,
 and a log summary on the CLI. Tune the high-missing call-out in
-`config/smarthub.ini [validation] high_missing_threshold`. Needs the `validation`
+`config/smarthub.yaml validation.high_missing_threshold`. Needs the `validation`
 extra (`pip install -e ".[validation]"`); if pandera is absent, the schema checks
 degrade to a warning and the pandas checks still run.
 
@@ -325,16 +347,16 @@ are wired the moment the stack is up.
 **Feature extraction** runs as a second deployment, `build-features`, on the
 **same work pool but a separate queue** (`features`). It reads the accumulated
 data and writes a **versioned** leakage-safe training table to
-`data/training/<type>/<timestamp>.parquet` (per lead type, two schedules) — each
+`data/training_datasets/<type>/<timestamp>.parquet` (per lead type, two schedules) — each
 build is kept so a model traces to its exact snapshot; loaders default to the
 latest. Trains on a rolling window set by `training_window_days` in
-`config/smarthub.ini` (`[feature_engineering]`; default **21**; `0` = all data) —
+`config/smarthub.yaml` (`[feature_engineering]`; default **21**; `0` = all data) —
 raw data is always retained, only the window read is limited.
 
 **Model training** runs as a third deployment, `train-model`, on the `training`
 queue. It reads the latest training table, trains `P(won | bid, features)`,
 evaluates it, runs the offline bid-optimizer evaluation, saves the model as a
-new **version**, writes a report under `data/training_report/<type>/`, and
+new **version**, writes a report under `data/model_evaluation/<type>/`, and
 logs to MLflow. It runs with `log_prints=True`, so the full training +
 optimizer output shows in the Prefect run logs, and it posts a summary
 artifact + Slack notification (including the promotion decision below). Needs
@@ -352,7 +374,7 @@ only promoted (repointing `data/models/<type>/current.json`, which is what
 serving reads) if its ROC AUC doesn't regress beyond
 `promotion_min_roc_auc_regression` *and* its offline expected profit on that
 test set is at least `promotion_min_profit_ratio` of the currently-serving
-model's (`config/smarthub.ini [training]`, defaults 0.01 / 0.98). If it fails
+model's (`config/smarthub.yaml (training section)`, defaults 0.01 / 0.98). If it fails
 either check, the currently-serving model is left untouched and the run is
 logged as **held**, not silently discarded — the model + its metrics are
 still saved as a version for inspection. The first model trained for a lead
@@ -410,13 +432,86 @@ end-to-end, run the three in order for the lead type you want.
 The bid-recommendation API (FastAPI) serves the trained model. With no
 `MODEL_URI` set it serves whichever version is currently promoted for the
 request's `lead_type_id`; set `MODEL_URI` to pin a specific `.pkl`/MLflow URI
-regardless of the registry (or pin per lead type via `config/smarthub.ini
+regardless of the registry (or pin per lead type via `config/smarthub.yaml
 [prediction] active_model_version`):
 
 ```bash
 uvicorn smarthub.train_and_predict.predict:app --port 8000
 # POST /recommend_bid  ·  GET /health?lead_type_id=6
 ```
+
+### Cold-start + exploration bidding policy
+
+`/recommend_bid` doesn't just return the raw profit-maximizing optimizer bid —
+it runs every lead through `predict.decide_bid`, which picks one of three
+explicit, auditable paths (never emergent/random behavior — see
+docs/CONTEXT.md §3):
+
+- **`model`** — the normal case: the profit-maximizing bid from the
+  currently-serving model. If that model's training data is older than
+  `[prediction] recency_window_days` (default 30), the response flags it as
+  stale (`model_data_age_days`) as a retraining-cadence signal — it still
+  bids normally.
+- **`cold_start_fallback`** — a brand-new lead type/partner with **no model
+  ever trained/promoted yet**. Bids a fixed, configurable fraction of the way
+  from the floor to the CM-respecting ceiling
+  (`[prediction] cold_start_fallback_bid_pct`, default 50%) instead of
+  guessing or erroring. Self-terminating: the first real model promotes
+  unconditionally, so this path stops firing once training has run once.
+- **`exploration`** — a deliberate probe around the optimum to keep learning
+  the market's shape, per a **defined, reproducible schedule**: every lead is
+  bucketed by hour-of-week (0-167 from `created_dayofweek`/`created_hour`),
+  and 1-in-`N` buckets (`N = round(1 / exploration_variance_pct)`, default
+  10 → ~10% of hours) are scheduled explore slots, perturbing the bid
+  ±`exploration_variance_pct` and alternating direction each time a bucket
+  triggers. Reproducible by design — the same lead always gets the same
+  explore/exploit decision, so it can be recomputed and audited later
+  instead of relying on a per-request coin flip.
+
+Every response carries `decision_path` and a plain-English `decision_reason`
+saying which path applied and why — the same fields `/explain_bid` (below)
+surfaces to a human.
+
+### Bid explanations (`/explain_bid`)
+
+`POST /explain_bid` answers "why did Anton bid $X for this lead?" in plain
+English — offline/on-demand only (a separate, slower endpoint;
+`/recommend_bid` doesn't call it), but it runs the **same** `decide_bid`
+policy above, so the bid and `decision_path` always match what live serving
+would return for the same inputs. For a normal (`model`) or `exploration`
+bid, it explains the model's prediction at that bid with SHAP feature
+attributions and asks a small local LLM (via [Ollama](https://ollama.com)) to
+turn those factors — plus a note when the bid was a scheduled exploration
+probe — into 2-3 plain-English sentences. For a `cold_start_fallback` bid
+there's no model to run SHAP against, so it skips straight to the policy's
+own (fully deterministic) explanation. Same request body as `/recommend_bid`
+(`lead_type_id` + lead attributes + `expected_revenue`).
+
+Requires the `explain` extra (SHAP; only supports `model_type=lightgbm`) plus
+`ml`, and a running local Ollama server with the configured model pulled:
+
+```bash
+pip install -e ".[explain,ml]"
+ollama pull qwen2.5:1.5b-instruct   # or whatever [explain] llm_model is set to
+ollama serve                        # if not already running
+
+curl -X POST localhost:8000/explain_bid -H 'content-type: application/json' \
+  -d '{"lead_type_id": 6, "bid": 0.25, "expected_revenue": 20, ...}'
+```
+
+Response: everything from `decide_bid` (`recommended_bid`, `decision_path`,
+`decision_reason`, `model_data_age_days`, …) plus `predicted_win_rate`,
+`base_win_rate` (the model's average win rate), `expected_profit`,
+`top_factors` (ranked `{feature, value, shap, direction}`), `bid_curve`
+(predicted win rate/profit at a few nearby bids — "the shape of the market"
+around the chosen bid, not just the one number; empty for `cold_start_fallback`
+since there's no model to score other bids with), and `explanation` (the
+LLM's prose, the cold-start policy text, or a clear fallback message — never
+a hard error — if Ollama isn't reachable). The prompt feeds `bid_curve` to the
+LLM as real numbers and states the model's monotonic bid constraint
+explicitly, so it can't reason backwards about whether a different bid would
+have won more or less often. Configurable in `config/smarthub.yaml (explain section)`:
+`llm_model`, `ollama_host`, `top_n_factors`, `timeout_seconds`.
 
 ## Slack notifications
 

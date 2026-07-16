@@ -89,7 +89,7 @@ True-ish tokens: `true`, `t`, `1`, `yes`, `y`. False-ish: `false`, `f`, `0`,
 | `high_missing` list | columns whose missing rate ≥ `high_missing_threshold` |
 
 `high_missing_threshold` default `0.5`, set in
-`config/smarthub.ini [validation]`.
+`config/smarthub.yaml (validation section)`.
 
 ## 7. Batch quality metrics (pandas)
 
@@ -115,7 +115,7 @@ Reported every run (headline health, not pass/fail).
 | Outputs | `data-quality-<lead_type>` Prefect artifact · "Data quality" Slack group · CLI log summary |
 | Tooling | pandera (schema/range/domain) + pandas (cross-field, missing, metrics) |
 | Degrades | if pandera absent: schema/range/domain skipped (warning), pandas checks still run |
-| Config | `config/smarthub.ini [validation] high_missing_threshold` |
+| Config | `config/smarthub.yaml validation.high_missing_threshold` |
 
 ## 9. Known limitations / to revisit
 

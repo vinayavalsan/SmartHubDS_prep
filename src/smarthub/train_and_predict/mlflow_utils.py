@@ -36,7 +36,7 @@ def log_training_run(
             if isinstance(metric_value, (int, float)):
                 mlflow.log_metric(metric_name, metric_value)
 
-        mlflow.log_artifacts(report_dir, artifact_path="training_report")
+        mlflow.log_artifacts(report_dir, artifact_path="model_evaluation")
         mlflow.log_params(
             {
                 param_name: param_value

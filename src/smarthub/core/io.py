@@ -15,7 +15,7 @@ from smarthub.core import storage, transforms
 
 # Default on-disk locations, resolved relative to the project root.
 DEFAULT_LEADS_PATH = paths.project_root() / "data" / "leads.parquet"
-TRAINING_DIR = paths.data_dir() / "training"
+TRAINING_DIR = paths.data_dir() / "training_datasets"
 
 
 class DataNotFoundError(FileNotFoundError):
@@ -114,7 +114,7 @@ def save_leads(df: pd.DataFrame, path: str | os.PathLike[str] | None = None) -> 
 
 
 def training_dir(lead_type_name: str) -> Path:
-    """Return the per-lead-type training folder ``data/training/<name>/``.
+    """Return the per-lead-type training folder ``data/training_datasets/<name>/``.
 
     Inputs
     ------
@@ -142,7 +142,7 @@ def save_training_table(
 ) -> Path:
     """Write a versioned training table for a lead type.
 
-    Writes ``data/training/<name>/<version>.parquet``. Each build is kept
+    Writes ``data/training_datasets/<name>/<version>.parquet``. Each build is kept
     (never overwritten) so a model can be traced to its exact training
     snapshot. When ``metadata`` is given, a ``<version>.json`` manifest is
     written beside the Parquet describing what data went in.

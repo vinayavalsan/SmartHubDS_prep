@@ -21,6 +21,7 @@ dependencies = [
     "sqlalchemy-redshift>=0.8.14",
     "duckdb>=0.10",
     "psycopg2-binary>=2.9",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +41,11 @@ ml = [
     "pydantic>=2.0",
     "requests>=2.31",
 ]
+# Offline "why did Anton bid $X" explanations (SHAP + a local LLM via Ollama —
+# see train_and_predict/explain.py). Also requires the `ml` extra (lightgbm,
+# scikit-learn) to explain a trained model, plus a running local Ollama server
+# (not a Python dependency: https://ollama.com).
+explain = ["shap>=0.44"]
 
 [project.scripts]
 smarthub-pull = "smarthub.data_pull.pull:main"
