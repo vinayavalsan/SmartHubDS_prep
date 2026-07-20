@@ -102,18 +102,11 @@
 #          cache-from: type=gha,scope=dashboard
 #          cache-to: type=gha,mode=max,scope=dashboard
 
-
 name: CI/CD
-
-# One pipeline:
-#   1. Run linting and tests on all supported Python versions.
-#   2. If everything passes and this is a push to the deployment branch,
-#      build and push the Docker images.
 
 on:
   push:
-    branches:
-      - "**"
+    branches: ["**"]
   pull_request:
 
 concurrency:
@@ -121,23 +114,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  lint-test:
-    name: lint + test (py${{ matrix.python-version }})
+  isort:
+    name: isort (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - "3.11"
-          - "3.12"
+        python-version: ["3.11", "3.12"]
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -147,25 +136,92 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,validation]" joblib
 
-      - name: Lint (isort)
-        run: |
-          isort --check-only --diff src/smarthub tests
+      - name: Run isort
+        run: isort --check-only --diff src/smarthub tests
 
-      - name: Lint (black)
-        run: |
-          black --check --diff src/smarthub tests
+  black:
+    name: black (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
 
-      - name: Lint (flake8)
-        run: |
-          flake8 src/smarthub tests
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
 
-      - name: Run tests
-        run: |
-          pytest -q
+    steps:
+      - uses: actions/checkout@v4
 
-  build-push:
-    name: build + push images
-    needs: lint-test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,validation]" joblib
+
+      - name: Run black
+        run: black --check --diff src/smarthub tests
+
+  flake8:
+    name: flake8 (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,validation]" joblib
+
+      - name: Run flake8
+        run: flake8 src/smarthub tests
+
+  pytest:
+    name: pytest (py${{ matrix.python-version }})
+    needs:
+      - isort
+      - black
+      - flake8
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,validation]" joblib
+
+      - name: Run pytest
+        run: pytest -q
+
+  build-worker:
+    name: build worker image
+    needs: pytest
 
     if: >
       github.event_name == 'push' &&
@@ -177,14 +233,11 @@ jobs:
       REPO: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -200,6 +253,29 @@ jobs:
             ${{ env.REPO }}:worker-${{ github.sha }}
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
+
+  build-dashboard:
+    name: build dashboard image
+    needs: pytest
+
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/smarthub.etl.pipeline'
+
+    runs-on: ubuntu-latest
+
+    env:
+      REPO: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push dashboard image
         uses: docker/build-push-action@v6
