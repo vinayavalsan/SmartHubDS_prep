@@ -102,6 +102,10 @@
 #          cache-from: type=gha,scope=dashboard
 #          cache-to: type=gha,mode=max,scope=dashboard
 
+
+
+
+
 name: CI/CD
 
 on:
@@ -219,13 +223,22 @@ jobs:
       - name: Run pytest
         run: pytest -q
 
-  build-worker:
-    name: build worker image
+  build-ready:
+    name: Build Ready
     needs: pytest
 
     if: >
       github.event_name == 'push' &&
       github.ref == 'refs/heads/smarthub.etl.pipeline'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - run: echo "Tests passed. Starting Docker builds."
+
+  build-worker:
+    name: build worker image
+    needs: build-ready
 
     runs-on: ubuntu-latest
 
@@ -256,11 +269,7 @@ jobs:
 
   build-dashboard:
     name: build dashboard image
-    needs: pytest
-
-    if: >
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/smarthub.etl.pipeline'
+    needs: build-ready
 
     runs-on: ubuntu-latest
 
