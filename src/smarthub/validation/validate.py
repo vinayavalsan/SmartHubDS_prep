@@ -55,11 +55,7 @@ class ValidationReport:
     @property
     def passed(self) -> bool:
         """Convenience flag (informational — validation is warn-only)."""
-        return not (
-            self.schema_issues
-            or self.rule_violations
-            or self.cross_field_hits
-        )
+        return not (self.schema_issues or self.rule_violations or self.cross_field_hits)
 
 
 def _friendly_check(check: str) -> str:
@@ -83,7 +79,7 @@ def _friendly_check(check: str) -> str:
     if "field_uniqueness" in check or check == "unique":
         return "duplicate values"
     if check.startswith("in_range("):
-        return "out of range " + check[len("in_range"):]
+        return "out of range " + check[len("in_range") :]
     if check.startswith("greater_than_or_equal_to("):
         return "negative value"
     return check
@@ -121,9 +117,7 @@ def _run_schema_checks(df: pd.DataFrame):
         violations = []
         grouped = fc.groupby(["column", "check"], dropna=False)
         for (column, check), grp in grouped:
-            examples = (
-                grp["failure_case"].dropna().unique().tolist()[:5]
-            )
+            examples = grp["failure_case"].dropna().unique().tolist()[:5]
             violations.append(
                 RuleViolation(
                     column=str(column),
@@ -158,9 +152,7 @@ def validate_leads(
     rule_violations, schema_checked = _run_schema_checks(df)
     cross = rules.cross_field_checks(df)
     missing = rules.missing_rates(df)
-    high_missing = sorted(
-        c for c, r in missing.items() if r >= high_missing_threshold
-    )
+    high_missing = sorted(c for c, r in missing.items() if r >= high_missing_threshold)
     metrics = rules.batch_metrics(df)
 
     return ValidationReport(

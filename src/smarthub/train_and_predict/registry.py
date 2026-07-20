@@ -75,11 +75,7 @@ def list_versions(lead_type_name: str) -> list[str]:
     folder = model_dir(lead_type_name)
     if not folder.exists():
         return []
-    versions = [
-        p.stem
-        for p in folder.glob("v*.json")
-        if _VERSION_RE.match(p.stem)
-    ]
+    versions = [p.stem for p in folder.glob("v*.json") if _VERSION_RE.match(p.stem)]
     return sorted(versions, key=_version_number)
 
 
@@ -177,7 +173,9 @@ def currently_serving_version(lead_type_name: str) -> str | None:
         logger.warning(
             "Corrupt/unreadable serving pointer for '%s' (%s): %s — "
             "treating as nothing currently serving.",
-            lead_type_name, pointer, exc,
+            lead_type_name,
+            pointer,
+            exc,
         )
         return None
 
@@ -253,7 +251,7 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
     }
     _atomic_write_text(
         _serving_pointer_path(lead_type_name),
-        json.dumps(pointer, indent=2, default=str)
+        json.dumps(pointer, indent=2, default=str),
     )
     return pointer
 

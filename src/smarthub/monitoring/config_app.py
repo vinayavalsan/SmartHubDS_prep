@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from smarthub.core.config_store import ConfigError, ConfigStore, ENVIRONMENTS
+from smarthub.core.config_store import ENVIRONMENTS, ConfigError, ConfigStore
 
 # set_page_config is called by the entry (app.py or the __main__ guard below).
 
@@ -90,9 +90,7 @@ def _input_for(item: dict):
             step=step,
             label_visibility="collapsed",
         )
-    return st.text_input(
-        key, value=str(item["value"]), label_visibility="collapsed"
-    )
+    return st.text_input(key, value=str(item["value"]), label_visibility="collapsed")
 
 
 def main():

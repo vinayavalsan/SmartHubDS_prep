@@ -93,6 +93,7 @@ def test_never_raises_on_network_error(monkeypatch):
 
 def test_flow_failure_hook_builds_fields(capture_slack):
     """flow_failure_hook builds a failure payload from Prefect flow objects."""
+
     class FakeFlow:
         name = "smarthub-data-pull"
 

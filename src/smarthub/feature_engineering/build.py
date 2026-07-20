@@ -40,10 +40,21 @@ def _required_raw_columns() -> list[str]:
     list[str]
         Ordered, de-duplicated raw column names to read.
     """
-    cols = list(fe.PRE_BID_FEATURES) + list(fe.TIME_FEATURES) + [
-        "id", "created_at", "pst_date", "pst_hour",
-        "won", fe.DECISION_COLUMN, "erred", "exp_rev", fe.REVENUE_COLUMN,
-    ]
+    cols = (
+        list(fe.PRE_BID_FEATURES)
+        + list(fe.TIME_FEATURES)
+        + [
+            "id",
+            "created_at",
+            "pst_date",
+            "pst_hour",
+            "won",
+            fe.DECISION_COLUMN,
+            "erred",
+            "exp_rev",
+            fe.REVENUE_COLUMN,
+        ]
+    )
     seen: set[str] = set()
     ordered = []
     for c in cols:
@@ -121,7 +132,8 @@ def build_metadata(
         feature column list.
     """
     created = (
-        pd.to_datetime(table["created_at"]) if "created_at" in table.columns
+        pd.to_datetime(table["created_at"])
+        if "created_at" in table.columns
         else pd.Series(dtype="datetime64[ns]")
     )
     n = len(table)
@@ -154,18 +166,18 @@ def build_metadata(
         "won_rate": (wins / n if n else None),
         "data_min_created_at": created.min() if len(created) else None,
         "data_max_created_at": created.max() if len(created) else None,
-        "expected_revenue_coverage": er_coverage,   # share with R > 0
+        "expected_revenue_coverage": er_coverage,  # share with R > 0
         "age_missing_rate": _rate("age_missing"),
         "weekday_share": weekday_share,
         "weekend_share": weekend_share,
-        "workday_rate": _rate("is_workday"),         # is_workday feature share
+        "workday_rate": _rate("is_workday"),  # is_workday feature share
         "traffic_tier_distinct": (
-            int(table["traffic_tier"].nunique()) if "traffic_tier" in table.columns
+            int(table["traffic_tier"].nunique())
+            if "traffic_tier" in table.columns
             else None
         ),
         "feature_columns": [
-            c for c in table.columns
-            if c not in ("id", "created_at", "won_flag")
+            c for c in table.columns if c not in ("id", "created_at", "won_flag")
         ],
     }
 
@@ -213,7 +225,11 @@ def run_build_features(
     version = path.rsplit("/", 1)[-1].removesuffix(".parquet")
     log.info(
         "[%s] training table %s: %s rows, %s cols -> %s",
-        name, version, len(table), table.shape[1], path,
+        name,
+        version,
+        len(table),
+        table.shape[1],
+        path,
     )
     return {
         "lead_type_name": name,
@@ -255,7 +271,9 @@ def main(argv=None):
         "--lead-type-name", default=None, help="override name (default: from id)"
     )
     parser.add_argument(
-        "--window-days", type=int, default=None,
+        "--window-days",
+        type=int,
+        default=None,
         help="rolling training window in days; 0=all data; default from ini",
     )
     args = parser.parse_args(argv)

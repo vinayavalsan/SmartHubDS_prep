@@ -1,6 +1,7 @@
 """Tests for the leakage-safe training-table extraction."""
 
 import pandas as pd
+import pytest
 
 from smarthub.feature_engineering.features import (
     LEAKAGE_COLUMNS,
@@ -24,8 +25,8 @@ def _raw():
                 ]
             ),
             "lead_type_id": [6, 6, 6, 1, 6],
-            "won": ["true", "", "", "true", ""],   # true=win, blank=loss/no-bid
-            "bid": [12.0, 8.0, 0.0, 20.0, 5.0],     # id 3 has no bid placed
+            "won": ["true", "", "", "true", ""],  # true=win, blank=loss/no-bid
+            "bid": [12.0, 8.0, 0.0, 20.0, 5.0],  # id 3 has no bid placed
             "expected_revenue": [15.0, 9.0, 6.0, 25.0, 7.0],
             "state": ["CA", "NY", "TX", "FL", "WA"],
             "age": [40, 55, 33, 60, 28],
@@ -46,8 +47,8 @@ def test_labels_wins_and_placed_bid_losses():
     # id 3 has no bid -> excluded; 1,2,4,5 kept
     assert set(table["id"]) == {1, 2, 4, 5}
     flags = table.set_index("id")[TARGET_COLUMN]
-    assert flags[1] == 1 and flags[4] == 1   # won == 'true'
-    assert flags[2] == 0 and flags[5] == 0   # placed bid, not won -> loss
+    assert flags[1] == 1 and flags[4] == 1  # won == 'true'
+    assert flags[2] == 0 and flags[5] == 0  # placed bid, not won -> loss
 
 
 def test_excludes_no_bid_rows():
@@ -82,8 +83,8 @@ def test_keeps_zero_variance_by_default():
 def test_drops_zero_variance_when_requested():
     """drop_zero_variance=True removes constant columns, keeps varying ones."""
     table = build_training_table(_raw(), lead_type_id=6, drop_zero_variance=True)
-    assert "insured" not in table.columns   # constant -> dropped
-    assert "state" in table.columns         # varies -> kept
+    assert "insured" not in table.columns  # constant -> dropped
+    assert "state" in table.columns  # varies -> kept
 
 
 def test_derived_features():
@@ -130,8 +131,8 @@ def test_age_missing_sentinel_and_flag():
     from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
 
     raw = _raw()
-    raw.loc[raw["id"] == 1, "age"] = -7648   # garbage / implausible
-    raw.loc[raw["id"] == 2, "age"] = 1828    # garbage / implausible
+    raw.loc[raw["id"] == 1, "age"] = -7648  # garbage / implausible
+    raw.loc[raw["id"] == 2, "age"] = 1828  # garbage / implausible
     table = build_training_table(raw).set_index("id")
     # implausible age -> -1 sentinel (not NaN), age_missing flag set, no cohort
     assert table.loc[1, "age"] == -1
@@ -165,9 +166,9 @@ def test_is_workday_from_pst_date(monkeypatch, tmp_path):
         )
         table = build_training_table(raw).set_index("id")
         assert "is_workday" in table.columns
-        assert table.loc[1, "is_workday"] == 1   # Monday
-        assert table.loc[2, "is_workday"] == 0   # Saturday
-        assert table.loc[3, "is_workday"] == 1   # Monday
+        assert table.loc[1, "is_workday"] == 1  # Monday
+        assert table.loc[2, "is_workday"] == 0  # Saturday
+        assert table.loc[3, "is_workday"] == 1  # Monday
     finally:
         holidays.reload()
 
@@ -177,8 +178,8 @@ def test_excludes_errored_rows():
     raw = _raw()
     raw["erred"] = ["true", "", "", "false", "1"]  # ids 1 and 5 errored
     table = build_training_table(raw)
-    assert set(table["id"]).isdisjoint({1, 5})   # errored pings dropped
-    assert set(table["id"]) == {2, 4}            # 3 no-bid excluded; 2,4 kept
+    assert set(table["id"]).isdisjoint({1, 5})  # errored pings dropped
+    assert set(table["id"]) == {2, 4}  # 3 no-bid excluded; 2,4 kept
 
 
 def test_expected_revenue_prefers_exp_rev():
@@ -187,8 +188,8 @@ def test_expected_revenue_prefers_exp_rev():
     # exp_rev populated for id 1, zero for id 2 (falls back to listings sum).
     raw["exp_rev"] = [99.0, 0.0, 0.0, 0.0, 0.0]
     table = build_training_table(raw).set_index("id")
-    assert table.loc[1, "expected_revenue"] == 99.0        # backend value used
-    assert table.loc[2, "expected_revenue"] == 9.0         # fell back to listings
+    assert table.loc[1, "expected_revenue"] == 99.0  # backend value used
+    assert table.loc[2, "expected_revenue"] == 9.0  # fell back to listings
 
 
 def test_time_features_prefer_pacific():
@@ -200,8 +201,8 @@ def test_time_features_prefer_pacific():
         ["2026-06-22", "2026-06-20", "2026-06-20", "2026-06-21", "2026-06-20"]
     )
     table = build_training_table(raw).set_index("id")
-    assert table.loc[1, "created_hour"] == 17            # from pst_hour, not UTC 1
-    assert table.loc[1, "created_dayofweek"] == 0        # 2026-06-22 = Monday (PT)
+    assert table.loc[1, "created_hour"] == 17  # from pst_hour, not UTC 1
+    assert table.loc[1, "created_dayofweek"] == 0  # 2026-06-22 = Monday (PT)
 
 
 def test_training_table_is_lead_type_clean():
@@ -214,18 +215,16 @@ def test_training_table_is_lead_type_clean():
             "num_vehicles": [2, 1],
             "num_home_claims": [0, 1],
             "home_property_type": ["SFH", "Condo"],
-            "created_at": pd.to_datetime(
-                ["2026-06-22 10:00", "2026-06-22 11:00"]
-            ),
+            "created_at": pd.to_datetime(["2026-06-22 10:00", "2026-06-22 11:00"]),
         }
     )
     auto = build_training_table(raw, lead_type_id=6)
-    assert "num_home_claims" not in auto.columns       # home-only dropped
+    assert "num_home_claims" not in auto.columns  # home-only dropped
     assert "home_property_type" not in auto.columns
-    assert "num_vehicles" in auto.columns              # auto keeps its own
+    assert "num_vehicles" in auto.columns  # auto keeps its own
 
     home = build_training_table(raw, lead_type_id=1)
-    assert "num_vehicles" not in home.columns          # auto-only dropped
+    assert "num_vehicles" not in home.columns  # auto-only dropped
     assert "num_home_claims" in home.columns
     assert "home_property_type" in home.columns
 
@@ -245,7 +244,7 @@ def test_sr22_is_auto_only_model_feature():
     """sr22_required is an auto-only model feature."""
     _, cat_auto = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
     _, cat_home = fe.model_feature_columns(fe.LEAD_TYPE_HOME)
-    assert "sr22_required" in cat_auto      # SR-22 is an auto matching criterion
+    assert "sr22_required" in cat_auto  # SR-22 is an auto matching criterion
     assert "sr22_required" not in cat_home
 
 
@@ -258,13 +257,28 @@ def test_mandatory_features_kept_when_no_optional():
     expected = fe.mandatory_features(fe.LEAD_TYPE_AUTO)
     assert selected == expected
     # image criteria all present
-    for col in ("home_owner", "multi_vehicle", "num_vehicles", "insured",
-                "num_auto_accidents", "dui", "sr22_required", "age"):
+    for col in (
+        "home_owner",
+        "multi_vehicle",
+        "num_vehicles",
+        "insured",
+        "num_auto_accidents",
+        "dui",
+        "sr22_required",
+        "age",
+    ):
         assert col in selected
     assert set(fe.AGE_COHORT_COLUMNS).issubset(selected)
     # optional features are gone
-    for col in ("state", "gender", "traffic_tier", "campaign_id",
-                "created_hour", "is_workday", "num_drivers"):
+    for col in (
+        "state",
+        "gender",
+        "traffic_tier",
+        "campaign_id",
+        "created_hour",
+        "is_workday",
+        "num_drivers",
+    ):
         assert col not in selected
 
 
@@ -274,7 +288,7 @@ def test_optional_subset_is_added_to_mandatory():
         fe.LEAD_TYPE_AUTO, optional_enabled={"state", "traffic_tier"}
     )
     selected = set(numeric) | set(categorical)
-    assert {"state", "traffic_tier"}.issubset(selected)      # requested optional
+    assert {"state", "traffic_tier"}.issubset(selected)  # requested optional
     assert fe.mandatory_features(fe.LEAD_TYPE_AUTO) <= selected  # core still there
     assert "gender" not in selected and "campaign_id" not in selected
 
@@ -309,6 +323,33 @@ def test_config_comma_list_ignores_unknown(monkeypatch):
     assert fe.mandatory_features(fe.LEAD_TYPE_AUTO) <= selected
 
 
+def test_unknown_lead_type_raises():
+    for fn in (fe.model_feature_columns, fe.mandatory_features, fe.optional_features):
+        with pytest.raises(ValueError, match="Unknown lead_type_id"):
+            fn(999)
+
+
+def test_new_lead_type_needs_only_one_registry_entry(monkeypatch):
+    # Registering a synthetic "commercial" type is a single LEAD_TYPES entry —
+    # no other code changes — and it flows through the normal selection path.
+    spec = fe.LeadTypeSpec(
+        name="commercial",
+        numeric=fe._SHARED_NUMERIC | {"num_employees"},
+        categorical=fe._SHARED_CATEGORICAL,
+        mandatory=frozenset({"bid"}),
+    )
+    monkeypatch.setitem(fe.LEAD_TYPES, 9, spec)
+
+    assert fe.lead_type_name(9) == "commercial"
+    numeric, categorical = fe.model_feature_columns(9, optional_enabled=set())
+    assert set(numeric) | set(categorical) == {"bid"}  # mandatory core only
+    numeric, categorical = fe.model_feature_columns(9)  # all optional (default)
+    selected = set(numeric) | set(categorical)
+    assert "num_employees" in selected and "state" in selected
+    # auto-only features never leak into commercial (inclusion, not exclusion)
+    assert "num_vehicles" not in selected and "home_property_type" not in selected
+
+
 def test_optional_and_mandatory_partition_the_feature_set():
     """Mandatory and optional sets are disjoint and cover the full auto set."""
     num, cat = fe.model_feature_columns(fe.LEAD_TYPE_AUTO, optional_enabled=None)
@@ -328,6 +369,14 @@ def test_config_all_keeps_every_feature(monkeypatch):
     numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
     selected = set(numeric) | set(categorical)
     # matches the un-filtered universe for auto (all optional + mandatory)
-    for col in ("state", "gender", "traffic_tier", "campaign_id",
-                "created_hour", "is_workday", "num_drivers", "sr22_required"):
+    for col in (
+        "state",
+        "gender",
+        "traffic_tier",
+        "campaign_id",
+        "created_hour",
+        "is_workday",
+        "num_drivers",
+        "sr22_required",
+    ):
         assert col in selected

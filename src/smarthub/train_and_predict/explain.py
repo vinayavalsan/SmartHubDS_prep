@@ -219,8 +219,7 @@ def format_llm_prompt(facts: dict) -> str:
     lines = [
         "You explain a pricing model's decision in plain English for a "
         "business user.",
-        "Use ONLY the facts below. Do not invent numbers. 2-3 sentences, no "
-        "jargon.",
+        "Use ONLY the facts below. Do not invent numbers. 2-3 sentences, no " "jargon.",
         "Model rule: predicted win rate never decreases as the bid rises "
         "(built into the model by design) -- never claim a lower bid would "
         "win more often than a higher one.",
@@ -235,14 +234,10 @@ def format_llm_prompt(facts: dict) -> str:
     if facts.get("bid_curve"):
         lines += ["", "Nearby bids explored (bid -> predicted win rate):"]
         for point in facts["bid_curve"]:
-            lines.append(
-                f"- ${point['bid']:.2f} -> {point['predicted_win_rate']:.0%}"
-            )
+            lines.append(f"- ${point['bid']:.2f} -> {point['predicted_win_rate']:.0%}")
     lines += ["", "Top factors:"]
     for f in facts["top_factors"]:
-        lines.append(
-            f"- {f['feature']}={f['value']}: {f['direction']} win likelihood"
-        )
+        lines.append(f"- {f['feature']}={f['value']}: {f['direction']} win likelihood")
     lines += ["", "Explanation:"]
     return "\n".join(lines)
 
@@ -319,16 +314,20 @@ def explain_bid(
     row = frame.iloc[0]
 
     decision = predict.decide_bid(
-        row=row, model=model, manifest=manifest,
-        expected_revenue=expected_revenue, target_cm=target_cm,
-        min_bid=min_bid, bid_step=bid_step,
+        row=row,
+        model=model,
+        manifest=manifest,
+        expected_revenue=expected_revenue,
+        target_cm=target_cm,
+        min_bid=min_bid,
+        bid_step=bid_step,
         created_dayofweek=(
-            created_dayofweek if created_dayofweek is not None
+            created_dayofweek
+            if created_dayofweek is not None
             else record.get("created_dayofweek")
         ),
         created_hour=(
-            created_hour if created_hour is not None
-            else record.get("created_hour")
+            created_hour if created_hour is not None else record.get("created_hour")
         ),
     )
 
@@ -366,8 +365,12 @@ def explain_bid(
     # a few nearby win-rate/profit points, not just the one chosen number.
     # Offline/explanatory only; never computed for /recommend_bid.
     bid_curve = predict.bid_curve_around(
-        row=row, model=model, expected_revenue=expected_revenue,
-        min_bid=min_bid, max_bid=decision["max_bid"], bid_step=bid_step,
+        row=row,
+        model=model,
+        expected_revenue=expected_revenue,
+        min_bid=min_bid,
+        max_bid=decision["max_bid"],
+        bid_step=bid_step,
         center_bid=decision["recommended_bid"],
     )
 

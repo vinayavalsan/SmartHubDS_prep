@@ -2,9 +2,8 @@
 
 from datetime import datetime
 
-from sqlalchemy.dialects import postgresql
-
 import pandas as pd
+from sqlalchemy.dialects import postgresql
 
 from smarthub.data_pull.models import (
     LEADS_COLUMNS,
@@ -112,8 +111,8 @@ def test_coerce_leads_dtypes_stable_schema():
     df = pd.DataFrame(
         {
             "id": ["1", "2"],
-            "home_property_type": [None, None],   # all-null string col
-            "bid": ["12.00", "25.00"],            # numeric-as-string
+            "home_property_type": [None, None],  # all-null string col
+            "bid": ["12.00", "25.00"],  # numeric-as-string
             "age": [44, None],
             "created_at": ["2026-06-20 01:00:00", "2026-06-20 02:00:00"],
         }

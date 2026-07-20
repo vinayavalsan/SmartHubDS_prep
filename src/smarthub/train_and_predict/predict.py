@@ -410,7 +410,9 @@ def decide_bid(
     variance_pct = config.EXPLORATION_VARIANCE_PCT
     perturbed_bid = _snap_to_bid_grid(
         optimum_bid * (1 + direction * variance_pct),
-        min_bid, normal["max_bid"], bid_step,
+        min_bid,
+        normal["max_bid"],
+        bid_step,
     )
     candidate_row = pd.DataFrame([row.to_dict()])
     candidate_row["bid"] = perturbed_bid

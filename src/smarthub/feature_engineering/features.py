@@ -11,6 +11,7 @@ Follows MODELING.md: keep only ping-time features, exclude post-bid outcomes
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -76,10 +77,12 @@ AGE_MIN = 1
 AGE_MAX = 200
 
 # Engineered features derived from raw columns (added by build_training_table).
-DERIVED_FEATURES = (
-    ["is_married", "multi_vehicle", "age_missing", "is_workday"]
-    + AGE_COHORT_COLUMNS
-)
+DERIVED_FEATURES = [
+    "is_married",
+    "multi_vehicle",
+    "age_missing",
+    "is_workday",
+] + AGE_COHORT_COLUMNS
 
 # Known at bid time, used in the profit objective (kept alongside features).
 REVENUE_COLUMN = "expected_revenue"
@@ -110,31 +113,23 @@ _FALSE = "false"
 # --- Lead types --------------------------------------------------------------
 LEAD_TYPE_AUTO = 6
 LEAD_TYPE_HOME = 1
-LEAD_TYPE_NAMES = {LEAD_TYPE_AUTO: "auto", LEAD_TYPE_HOME: "home"}
-
-
-def lead_type_name(lead_type_id: int) -> str:
-    """Human name for a lead type id (falls back to ``type_<id>``).
-
-    Inputs
-    ------
-    lead_type_id : int
-        Lead type id (e.g. 6=auto, 1=home).
-
-    Returns
-    -------
-    str
-        The lead type name, or ``type_<id>`` if unknown.
-    """
-    return LEAD_TYPE_NAMES.get(lead_type_id, f"type_{lead_type_id}")
 
 
 # --- Model input schema (SINGLE SOURCE OF TRUTH for train AND serve) ---------
-# Curated subset of the training-table columns actually fed to the model, split
-# by how the sklearn pipeline should treat them. High-cardinality raw columns
-# (zip, city, current_carrier, …) are intentionally excluded here even though
-# build_training_table keeps them in the stored table.
-_MODEL_NUMERIC = [
+# Canonical model-input column ORDER. ``model_feature_columns`` filters this
+# ordered vocabulary by a lead type's declared feature set, so the output order
+# is stable regardless of which lead type is requested. High-cardinality raw
+# columns (zip, city, current_carrier, …) are intentionally excluded here even
+# though build_training_table keeps them in the stored table.
+#
+# `traffic_tier` is included — Kiran: source completeness/quality lives at the
+# partner-subsource (traffic tier) level, so this carries competitor-bidding
+# signal into the model. `source_type_id` is excluded (~9k unique values → sparse
+# one-hot memorisation that inflated AUC without generalising); `account_id` is
+# excluded as a duplicate of `campaign_id` (1:1 in the data). The `insured`/
+# `home_owner`/`dui`/`military_affiliation` columns stay listed but are
+# auto-dropped at train time when constant (preprocessing.drop_zero_variance).
+MODEL_NUMERIC_ORDER = [
     "bid",
     "age",
     "age_missing",
@@ -150,14 +145,7 @@ _MODEL_NUMERIC = [
     "is_married",
     "multi_vehicle",
 ] + AGE_COHORT_COLUMNS
-# `traffic_tier` is included — Kiran: source completeness/quality lives at the
-# partner-subsource (traffic tier) level, so this carries competitor-bidding
-# signal into the model. `source_type_id` is excluded (~9k unique values → sparse
-# one-hot memorisation that inflated AUC without generalising); `account_id` is
-# excluded as a duplicate of `campaign_id` (1:1 in the data). The `insured`/
-# `home_owner`/`dui`/`military_affiliation` columns stay listed but are
-# auto-dropped at train time when constant (preprocessing.drop_zero_variance).
-_MODEL_CATEGORICAL = [
+MODEL_CATEGORICAL_ORDER = [
     "state",
     "gender",
     "marital_status",
@@ -170,56 +158,166 @@ _MODEL_CATEGORICAL = [
     "traffic_tier",
     "home_property_type",
 ]
-# Lead-type-specific features (Kiran: auto vs home have different fields).
-AUTO_ONLY_FEATURES = {
-    "num_vehicles",
-    "num_drivers",
-    "num_auto_violations",
-    "num_auto_accidents",
-    "dui",
-    "sr22_required",
-    "home_owner",
-    "multi_vehicle",
-}
-HOME_ONLY_FEATURES = {
-    "num_home_claims",
-    "home_property_type",
-}
+
+# Features every lead type carries (present across all products).
+_SHARED_NUMERIC = frozenset(
+    {
+        "bid",
+        "age",
+        "age_missing",
+        "continuous_coverage_months",
+        "created_hour",
+        "created_dayofweek",
+        "is_workday",
+        "is_married",
+    }
+    | set(AGE_COHORT_COLUMNS)
+)
+_SHARED_CATEGORICAL = frozenset(
+    {
+        "state",
+        "gender",
+        "marital_status",
+        "military_affiliation",
+        "insured",
+        "campaign_id",
+        "traffic_tier",
+    }
+)
 
 
-# --- Mandatory vs optional model features ------------------------------------
-# MANDATORY features are ALWAYS trained on and cannot be switched off via
-# config. The auto mandatory core is SmartFinancial's lead-matching criteria
-# (the product tiers: home owner, multiple vehicles, currently insured,
-# accidents, DUI, SR-22, age) plus ``bid`` — the optimizer's decision variable,
-# which the model must always see. Every other model feature for that lead type
-# is OPTIONAL and toggled per training run via ``config/smarthub.yaml``
-# ``[features] <lead_type>_optional`` (see ``_configured_optional``).
+@dataclass(frozen=True)
+class LeadTypeSpec:
+    """One lead type's model-feature configuration.
+
+    ``numeric`` / ``categorical`` are the features this type INCLUDES (shared
+    base + its own extras); ``mandatory`` is always trained on; the optional
+    set is derived as ``(numeric | categorical) - mandatory``.
+
+    ``required_raw`` names the RAW input columns a lead of this type must have
+    populated (the type's signature fields). ``smarthub.validation`` reads it
+    for the per-type completeness checks, so a new type's data-quality rule is
+    part of this same one entry — no ``lead_type_id ==`` branches elsewhere.
+    """
+
+    name: str
+    numeric: frozenset[str]
+    categorical: frozenset[str]
+    mandatory: frozenset[str]
+    required_raw: frozenset[str] = frozenset()
+
+
+# --- Lead-type registry (SINGLE lookup keyed by lead_type_id) ----------------
+# Add a new lead type (e.g. commercial) by adding ONE entry here — its name,
+# the numeric/categorical features it uses (shared base | its own extras), and
+# its mandatory core. Everything downstream (feature selection, training,
+# serving) reads this dict; there are no per-type variables or drop-conditions
+# elsewhere.
 #
-# Home's mandatory core is not settled yet, so home keeps every feature (only
-# ``bid`` is pinned) until we agree it with Kiran.
-_MANDATORY_AUTO = {
-    "bid",
-    "age",
-    "age_missing",
-    *AGE_COHORT_COLUMNS,
-    "num_vehicles",
-    "multi_vehicle",
-    "num_auto_accidents",
-    "home_owner",
-    "insured",
-    "dui",
-    "sr22_required",
-}
-_MANDATORY_HOME = {"bid"}
-MANDATORY_FEATURES = {
-    LEAD_TYPE_AUTO: _MANDATORY_AUTO,
-    LEAD_TYPE_HOME: _MANDATORY_HOME,
+# MANDATORY features are always trained on and cannot be switched off via
+# config. The auto mandatory core is SmartFinancial's lead-matching criteria
+# (product tiers: home owner, multiple vehicles, insured, accidents, DUI, SR-22,
+# age) plus ``bid`` — the optimizer's decision variable the model must always
+# see. Home's mandatory core is not settled yet (only ``bid`` is pinned until we
+# agree it with Kiran). Everything else is OPTIONAL and toggled per training run
+# via ``config/smarthub.yaml`` ``features.<lead_type>_optional`` (see
+# ``_configured_optional``).
+LEAD_TYPES: dict[int, LeadTypeSpec] = {
+    LEAD_TYPE_AUTO: LeadTypeSpec(
+        name="auto",
+        numeric=_SHARED_NUMERIC
+        | {
+            "num_vehicles",
+            "num_drivers",
+            "num_auto_violations",
+            "num_auto_accidents",
+            "multi_vehicle",
+        },
+        categorical=_SHARED_CATEGORICAL | {"home_owner", "dui", "sr22_required"},
+        mandatory=frozenset(
+            {
+                "bid",
+                "age",
+                "age_missing",
+                "num_vehicles",
+                "multi_vehicle",
+                "num_auto_accidents",
+                "home_owner",
+                "insured",
+                "dui",
+                "sr22_required",
+            }
+            | set(AGE_COHORT_COLUMNS)
+        ),
+        required_raw=frozenset({"num_vehicles"}),
+    ),
+    LEAD_TYPE_HOME: LeadTypeSpec(
+        name="home",
+        numeric=_SHARED_NUMERIC | {"num_home_claims"},
+        categorical=_SHARED_CATEGORICAL | {"home_property_type"},
+        mandatory=frozenset({"bid"}),
+        required_raw=frozenset({"home_property_type"}),
+    ),
 }
 
-# Sentinels for the ``[features] <lead_type>_optional`` config value.
+# Sentinels for the ``features.<lead_type>_optional`` config value.
 _OPTIONAL_ALL = "all"
 _OPTIONAL_NONE = "none"
+
+
+def _order_features(order: list[str], members: frozenset[str]) -> list[str]:
+    """Order a lead type's feature set by the canonical vocabulary.
+
+    Members present in ``order`` keep that order; any members NOT in ``order``
+    (e.g. a brand-new lead type's own column) are appended sorted, so a new
+    feature declared only in a registry entry is never silently dropped.
+    """
+    known = [c for c in order if c in members]
+    return known + sorted(members - set(order))
+
+
+def _spec(lead_type_id: int) -> LeadTypeSpec:
+    """Return the ``LeadTypeSpec`` for a lead type, or raise for an unknown id.
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id to look up.
+
+    Returns
+    -------
+    LeadTypeSpec
+        The registered spec for the lead type.
+
+    Raises
+    ------
+    ValueError
+        When ``lead_type_id`` isn't registered in ``LEAD_TYPES``.
+    """
+    try:
+        return LEAD_TYPES[lead_type_id]
+    except KeyError:
+        raise ValueError(
+            f"Unknown lead_type_id {lead_type_id!r}; register it in "
+            f"features.LEAD_TYPES. Known ids: {sorted(LEAD_TYPES)}."
+        ) from None
+
+
+def lead_type_name(lead_type_id: int) -> str:
+    """Human name for a lead type id (falls back to ``type_<id>``).
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id (e.g. 6=auto, 1=home).
+
+    Returns
+    -------
+    str
+        The lead type name, or ``type_<id>`` if unknown.
+    """
+    spec = LEAD_TYPES.get(lead_type_id)
+    return spec.name if spec else f"type_{lead_type_id}"
 
 
 def mandatory_features(lead_type_id: int) -> set[str]:
@@ -234,8 +332,13 @@ def mandatory_features(lead_type_id: int) -> set[str]:
     -------
     set[str]
         The mandatory feature names for that lead type.
+
+    Raises
+    ------
+    ValueError
+        When ``lead_type_id`` isn't registered.
     """
-    return set(MANDATORY_FEATURES.get(lead_type_id, {DECISION_COLUMN}))
+    return set(_spec(lead_type_id).mandatory)
 
 
 def optional_features(lead_type_id: int) -> set[str]:
@@ -250,21 +353,20 @@ def optional_features(lead_type_id: int) -> set[str]:
     -------
     set[str]
         Optional feature names eligible for that lead type.
+
+    Raises
+    ------
+    ValueError
+        When ``lead_type_id`` isn't registered.
     """
-    if lead_type_id == LEAD_TYPE_AUTO:
-        drop = HOME_ONLY_FEATURES
-    elif lead_type_id == LEAD_TYPE_HOME:
-        drop = AUTO_ONLY_FEATURES
-    else:
-        drop = set()
-    base = {c for c in _MODEL_NUMERIC + _MODEL_CATEGORICAL if c not in drop}
-    return base - mandatory_features(lead_type_id)
+    spec = _spec(lead_type_id)
+    return (set(spec.numeric) | set(spec.categorical)) - set(spec.mandatory)
 
 
 def _configured_optional(lead_type_id: int, optional_universe: set[str]) -> set[str]:
     """Which OPTIONAL features are enabled for this lead type, from config.
 
-    Reads ``config/smarthub.yaml`` ``[features] <lead_type>_optional``:
+    Reads ``config/smarthub.yaml`` ``features.<lead_type>_optional``:
     absent / ``"all"`` -> every optional feature (backwards-compatible
     default); ``"none"`` / empty -> no optional features (mandatory core
     only); comma list -> exactly those (unknown names are ignored + warned).
@@ -292,12 +394,14 @@ def _configured_optional(lead_type_id: int, optional_universe: set[str]) -> set[
         return set()
 
     requested = {c.strip() for c in raw.split(",") if c.strip()}
-    unknown = requested - optional_universe - set(_MANDATORY_AUTO) - {"bid"}
+    unknown = requested - optional_universe - mandatory_features(lead_type_id)
     if unknown:
         logger.warning(
-            "[features] %s lists unknown/ineligible feature(s) %s; ignoring them. "
+            "features.%s lists unknown/ineligible feature(s) %s; ignoring them. "
             "Valid optional features: %s",
-            key, sorted(unknown), sorted(optional_universe),
+            key,
+            sorted(unknown),
+            sorted(optional_universe),
         )
     return requested & optional_universe
 
@@ -308,12 +412,12 @@ def model_feature_columns(
 ) -> tuple[list[str], list[str]]:
     """Return ``(numeric, categorical)`` model feature names for a lead type.
 
-    Auto-only features (vehicles/drivers/violations…) are dropped for home;
-    home-only features (home_property_type, num_home_claims) are dropped for
-    auto — so one code path trains the right model per lead type. MANDATORY
-    features are always kept; OPTIONAL features are included only when enabled.
-    The mandatory core can never be dropped here, whatever the config says.
-    Training and serving both call this, so they stay identical.
+    Inclusion-based: reads the lead type's declared features from
+    ``LEAD_TYPES`` (no cross-type dropping). MANDATORY features are always
+    kept; OPTIONAL features are included only when enabled — the mandatory core
+    can never be dropped here, whatever the config says. Output order follows
+    the canonical ``MODEL_*_ORDER`` vocabulary. Training and serving both call
+    this, so they stay identical.
 
     Inputs
     ------
@@ -327,17 +431,17 @@ def model_feature_columns(
     -------
     tuple[list[str], list[str]]
         The ``(numeric, categorical)`` model feature name lists.
-    """
-    if lead_type_id == LEAD_TYPE_AUTO:
-        drop = HOME_ONLY_FEATURES
-    elif lead_type_id == LEAD_TYPE_HOME:
-        drop = AUTO_ONLY_FEATURES
-    else:
-        drop = set()
-    base_numeric = [c for c in _MODEL_NUMERIC if c not in drop]
-    base_categorical = [c for c in _MODEL_CATEGORICAL if c not in drop]
 
-    mandatory = mandatory_features(lead_type_id)
+    Raises
+    ------
+    ValueError
+        When ``lead_type_id`` isn't registered.
+    """
+    spec = _spec(lead_type_id)
+    base_numeric = _order_features(MODEL_NUMERIC_ORDER, spec.numeric)
+    base_categorical = _order_features(MODEL_CATEGORICAL_ORDER, spec.categorical)
+
+    mandatory = set(spec.mandatory)
     optional_universe = (set(base_numeric) | set(base_categorical)) - mandatory
     if optional_enabled is None:
         optional_enabled = _configured_optional(lead_type_id, optional_universe)
@@ -346,6 +450,35 @@ def model_feature_columns(
     numeric = [c for c in base_numeric if c in keep]
     categorical = [c for c in base_categorical if c in keep]
     return numeric, categorical
+
+
+def _other_type_exclusive_columns(lead_type_id: int) -> set[str]:
+    """Feature columns exclusive to OTHER registered lead types.
+
+    A column is exclusive to another type if some registered type uses it but
+    this one doesn't. Used by ``build_training_table`` to keep the stored table
+    lead-type-clean via inclusion: columns this type uses, and columns tied to
+    no type (e.g. zip/city kept in the raw table), are never dropped. An
+    unregistered / ``None`` lead type drops nothing.
+
+    Inputs
+    ------
+    lead_type_id : int
+        Lead type id the table is being built for.
+
+    Returns
+    -------
+    set[str]
+        Columns to drop because they belong only to other lead types.
+    """
+    spec = LEAD_TYPES.get(lead_type_id)
+    if spec is None:
+        return set()
+    own = set(spec.numeric) | set(spec.categorical)
+    all_typed: set[str] = set()
+    for other in LEAD_TYPES.values():
+        all_typed |= set(other.numeric) | set(other.categorical)
+    return all_typed - own
 
 
 def add_time_features(out: pd.DataFrame) -> list[str]:
@@ -421,9 +554,7 @@ def add_is_workday(out: pd.DataFrame) -> list[str]:
         if col in out.columns:
             days = pd.to_datetime(out[col], errors="coerce")
             out["is_workday"] = days.map(
-                lambda ts: int(holidays.is_workday(ts.date()))
-                if pd.notna(ts)
-                else 0
+                lambda ts: int(holidays.is_workday(ts.date())) if pd.notna(ts) else 0
             ).astype("int64")
             return ["is_workday"]
     return []
@@ -485,7 +616,7 @@ def _derive_features(out: pd.DataFrame) -> list[str]:
         plausible = age.between(AGE_MIN, AGE_MAX)  # False for NaN / out-of-range
         out["age_missing"] = (~plausible).astype("int64")
         added.append("age_missing")
-        age_clean = age.where(plausible)           # NaN where implausible
+        age_clean = age.where(plausible)  # NaN where implausible
         out["age"] = age_clean.fillna(-1)
         cohort = pd.cut(
             age_clean,
@@ -579,14 +710,10 @@ def build_training_table(
     feature_cols += [c for c in TIME_FEATURES if c in out.columns]
     feature_cols += workday + derived
 
-    # Keep the table lead-type-clean: drop the *other* type's exclusive columns
-    # so the auto table has no home-only columns and vice-versa.
-    if lead_type_id == LEAD_TYPE_AUTO:
-        cross_type = HOME_ONLY_FEATURES
-    elif lead_type_id == LEAD_TYPE_HOME:
-        cross_type = AUTO_ONLY_FEATURES
-    else:
-        cross_type = set()
+    # Keep the table lead-type-clean: drop columns exclusive to OTHER lead
+    # types (from the LEAD_TYPES registry), so the auto table has no home-only
+    # columns and vice-versa. Columns tied to no type are kept.
+    cross_type = _other_type_exclusive_columns(lead_type_id)
     feature_cols = [c for c in feature_cols if c not in cross_type]
 
     keep = (
@@ -598,9 +725,7 @@ def build_training_table(
     table = out[keep].copy()
 
     if drop_zero_variance:
-        constant = [
-            c for c in feature_cols if table[c].nunique(dropna=True) <= 1
-        ]
+        constant = [c for c in feature_cols if table[c].nunique(dropna=True) <= 1]
         table = table.drop(columns=constant)
 
     return table.reset_index(drop=True)

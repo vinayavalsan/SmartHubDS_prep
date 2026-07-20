@@ -25,7 +25,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "flake8>=7.0"]
+# Code quality: black + isort (formatting/import order, enforced by
+# pre-commit and CI — see .pre-commit-config.yaml and [tool.black]/
+# [tool.isort] below) and pre-commit itself (`pre-commit install`).
+dev = ["pytest>=8.0", "flake8>=7.0", "black>=24.0", "isort>=5.13", "pre-commit>=3.6"]
 orchestration = ["prefect>=3.0"]
 # Data validation (D1) — pandera schema/range/domain checks on the pull.
 validation = ["pandera>=0.20"]
@@ -57,3 +60,15 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+# "black" profile sorts/groups imports the way Black expects (trailing comma,
+# one import per line when wrapped, matching line length) so the two never
+# fight over the same lines. See .pre-commit-config.yaml: isort always runs
+# BEFORE black, so black gets the final say on formatting.
+profile = "black"
+line_length = 88

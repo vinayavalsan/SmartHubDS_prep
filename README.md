@@ -160,11 +160,25 @@ Read in code via `smarthub.core.task_config` (e.g. `config.model_type()`,
 `SMARTHUB_TASK_CONFIG`. The YAML ships in the Docker images (`COPY config`), so a
 worker rebuild picks up edits.
 
+### Lead-type registry
+All per-lead-type configuration lives in one lookup dictionary,
+`features.LEAD_TYPES`, keyed by `lead_type_id`. Each entry is a frozen
+`LeadTypeSpec` declaring that type's `name`, its `numeric` and `categorical`
+features (a shared base plus the type's own extras), its `mandatory` core, and
+`required_raw` (the raw signature columns validation requires for that type).
+Feature selection is **inclusion-based**: everything downstream — model feature
+columns, mandatory/optional resolution, and the validation completeness checks —
+reads this dict for the requested type. There are no per-type variables or
+`if auto / if home` branches, and an unregistered `lead_type_id` fails fast with
+a clear error. **Adding a new lead type (e.g. commercial) is a single entry
+here**; nothing else needs to change.
+
 ### Feature selection (mandatory vs optional)
 Which features the **model** trains on is configurable per run via the
 `features` section of `config/smarthub.yaml`, without touching code. Each lead
-type has a **mandatory core** (locked in `features.py`, always trained on, never
-toggleable) and an **optional set** listed in the YAML:
+type has a **mandatory core** (locked in the registry —
+`features.LEAD_TYPES[<id>].mandatory` — always trained on, never toggleable) and
+an **optional set** listed in the YAML:
 
 ```yaml
 features:
@@ -218,29 +232,51 @@ degrade to a warning and the pandas checks still run.
 
 ```bash
 pip install -e ".[dev]" joblib   # test deps (joblib: model-registry tests)
-pytest          # unit tests (metrics, features, storage, registry, notifications…)
+isort --check-only --diff src/smarthub tests   # import order (profile = black)
+black --check --diff src/smarthub tests        # formatting (line length 88)
 flake8          # style (.flake8: max line length 88)
+pytest          # unit tests (metrics, features, storage, registry, notifications…)
+```
+
+Drop `--check-only`/`--check --diff` to have isort/black fix things in place
+instead of just reporting them:
+
+```bash
+isort src/smarthub tests
+black src/smarthub tests
 ```
 
 The suite runs on the **base env** — the heavier `ml`/`orchestration` extras
 (sklearn, lightgbm, mlflow, prefect) aren't needed because those imports are
 lazy/guarded; only `joblib` is required (the model registry).
 
-**CI** (`.github/workflows/ci.yml`) runs flake8 + pytest on every push/PR across
-Python 3.11 and 3.12. **pre-commit** (`.pre-commit-config.yaml`) runs flake8 +
-hygiene hooks locally — enable it once with:
+**isort + black.** Import sorting (`isort`, `profile = "black"`) always runs
+*before* formatting (`black`, line length 88) — isort's black profile already
+matches black's style, so the two never fight over the same line. Config
+lives in `pyproject.toml` (`[tool.isort]` / `[tool.black]`); `.flake8`'s
+`E203`/`W503` ignores exist so flake8 doesn't flag black's own style choices.
+
+**CI** (`.github/workflows/ci_cd.yml`) runs isort, black, flake8, then pytest
+on every push/PR across Python 3.11 and 3.12 — a PR fails if any of the four
+fail. **pre-commit** (`.pre-commit-config.yaml`) runs the same isort + black +
+flake8 (plus basic hygiene hooks) on every commit, and the full `pytest` suite
+on every push (kept out of the commit hook since it's slower). Enable both
+once with:
 
 ```bash
-pip install pre-commit && pre-commit install
-pre-commit run --all-files   # optional: check everything now
+pip install -e ".[dev]"
+pre-commit install --hook-type pre-commit --hook-type pre-push
+pre-commit run --all-files                        # optional: check everything now
+pre-commit run --all-files --hook-stage pre-push   # optional: run pytest now
 ```
 
 ## CI/CD
 
-**One pipeline** (`.github/workflows/ci.yml`), two stages:
+**One pipeline** (`.github/workflows/ci_cd.yml`), two stages:
 
-- **`lint-test`** — flake8 + pytest across Python 3.11 and 3.12, on every
-  push/PR.
+- **`lint-test`** — isort, black, flake8, then pytest across Python 3.11 and
+  3.12, on every push/PR. Any one of the four failing fails the whole job (and
+  blocks `build-push` below, which needs it).
 - **`build-push`** — `needs: lint-test`, so it only starts **after the whole
   test matrix passes** (never in parallel, never on a red build), and only on a
   push to the deploy branch. Builds the `worker` + `dashboard` images and pushes

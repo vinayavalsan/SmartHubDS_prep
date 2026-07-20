@@ -9,6 +9,6 @@ Public API:
     from smarthub.validation import validate_leads, ValidationReport
 """
 
-from .validate import ValidationReport, RuleViolation, validate_leads
+from .validate import RuleViolation, ValidationReport, validate_leads
 
 __all__ = ["validate_leads", "ValidationReport", "RuleViolation"]

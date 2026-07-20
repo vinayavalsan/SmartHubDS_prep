@@ -30,8 +30,16 @@ def test_win_rate_zero_count_is_zero():
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("true", 1), ("True", 1), ("  TRUE ", 1), ("t", 1), ("1", 1), ("yes", 1),
-        ("false", 0), ("False", 0), ("", 0), ("nonsense", 0),
+        ("true", 1),
+        ("True", 1),
+        ("  TRUE ", 1),
+        ("t", 1),
+        ("1", 1),
+        ("yes", 1),
+        ("false", 0),
+        ("False", 0),
+        ("", 0),
+        ("nonsense", 0),
     ],
 )
 def test_normalize_won_variants(raw, expected):
@@ -153,7 +161,7 @@ def test_leads_to_monitoring_base():
             "won": pd.array([1, 0, 1], dtype="Int64"),
             "rev": [10.0, 0.0, 20.0],
             "expected_revenue": [12.0, 8.0, 25.0],
-            "payout": [5.0, 0.0, 9.0],   # won * bid
+            "payout": [5.0, 0.0, 9.0],  # won * bid
         }
     )
     base = t.leads_to_monitoring_base(leads)

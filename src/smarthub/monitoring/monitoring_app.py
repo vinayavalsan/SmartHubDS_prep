@@ -193,15 +193,19 @@ def main():
 
     if sel_metric == "All":
         plot_metric_block(
-            agg, METRIC_GROUPS["Revenue + Payout breakdown"],
-            "Revenue + Payout breakdown", "Amount ($)",
+            agg,
+            METRIC_GROUPS["Revenue + Payout breakdown"],
+            "Revenue + Payout breakdown",
+            "Amount ($)",
         )
         plot_metric_block(agg, ["profit"], "Profit", "Amount ($)")
         plot_metric_block(agg, ["winrate"], "Win Rate", "Rate")
         plot_metric_block(agg, ["cm_measured", "cm_expected"], "CM", "Margin")
         plot_metric_block(
-            agg, ["num_opportunities", "num_won"],
-            "Number of opportunities and won", "Count",
+            agg,
+            ["num_opportunities", "num_won"],
+            "Number of opportunities and won",
+            "Count",
         )
     else:
         cols = METRIC_GROUPS[sel_metric]

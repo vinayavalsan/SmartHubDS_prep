@@ -261,15 +261,31 @@ def data_pull_flow(
         watermark,
     )
     _notify_success(
-        lead_type_name, lead_type_id, min_s, max_s, df, result,
-        previous_watermark, watermark, started_at, quality,
+        lead_type_name,
+        lead_type_id,
+        min_s,
+        max_s,
+        df,
+        result,
+        previous_watermark,
+        watermark,
+        started_at,
+        quality,
     )
     return {"lead_type": lead_type_name, "rows": int(len(df)), "watermark": watermark}
 
 
 def _notify_success(
-    lead_type_name, lead_type_id, min_s, max_s, df, result,
-    prev_wm, new_wm, started_at, quality=None,
+    lead_type_name,
+    lead_type_id,
+    min_s,
+    max_s,
+    df,
+    result,
+    prev_wm,
+    new_wm,
+    started_at,
+    quality=None,
 ) -> None:
     """Send the Slack 'data pull completed' notification, grouped for reading.
 
@@ -301,26 +317,33 @@ def _notify_success(
     """
     rows = int(len(df))
     parquet_paths = result.get("parquet_paths") or []
-    parquet_txt = (
-        ", ".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
-    )
+    parquet_txt = ", ".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
     duck = f"`{result['duckdb_path']}`" if result.get("duckdb_path") else "—"
 
     headline = f":inbox_tray: *{rows:,} rows pulled* · `{min_s}` → `{max_s}`"
     groups = [
-        ("Volume", {
-            "Rows fetched": f"{rows:,}",
-            "DuckDB rows (total)": result.get("duckdb_rows", "—"),
-            "Parquet rows (written)": result.get("parquet_rows", "—"),
-        }),
-        ("Watermark", {
-            "Before": f"`{prev_wm}`",
-            "After": f"`{new_wm}`",
-        }),
-        ("Run (UTC)", {
-            "Started": started_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "Finished": _utc_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
-        }),
+        (
+            "Volume",
+            {
+                "Rows fetched": f"{rows:,}",
+                "DuckDB rows (total)": result.get("duckdb_rows", "—"),
+                "Parquet rows (written)": result.get("parquet_rows", "—"),
+            },
+        ),
+        (
+            "Watermark",
+            {
+                "Before": f"`{prev_wm}`",
+                "After": f"`{new_wm}`",
+            },
+        ),
+        (
+            "Run (UTC)",
+            {
+                "Started": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "Finished": _utc_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        ),
     ]
     if quality is not None:
         groups.append(vreport.slack_group(quality))

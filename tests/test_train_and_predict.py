@@ -12,7 +12,6 @@ import pytest
 from smarthub.feature_engineering import features as fe
 from smarthub.train_and_predict import config, predict, preprocessing, registry
 
-
 # --- Feature schema (single source of truth) --------------------------------
 
 
@@ -40,8 +39,15 @@ def test_model_feature_columns_auto_vs_home():
 
 def test_derive_serving_features_parity():
     raw = pd.DataFrame(
-        [{"marital_status": "Married", "num_vehicles": 2, "age": 40,
-          "created_hour": 9, "created_dayofweek": 2}]
+        [
+            {
+                "marital_status": "Married",
+                "num_vehicles": 2,
+                "age": 40,
+                "created_hour": 9,
+                "created_dayofweek": 2,
+            }
+        ]
     )
     out = fe.derive_serving_features(raw)
     assert out.loc[0, "is_married"] == 1
@@ -56,14 +62,25 @@ def test_derive_serving_features_parity():
 
 def test_serving_frame_selects_and_normalizes():
     record = {
-        "campaign_id": 123, "account_id": 7, "source_type_id": 2,
-        "state": "TX", "gender": "Female", "marital_status": "",
-        "insured": "true", "home_owner": "false", "dui": "false",
+        "campaign_id": 123,
+        "account_id": 7,
+        "source_type_id": 2,
+        "state": "TX",
+        "gender": "Female",
+        "marital_status": "",
+        "insured": "true",
+        "home_owner": "false",
+        "dui": "false",
         "military_affiliation": "false",
-        "num_vehicles": 2, "num_drivers": 1,
-        "num_auto_violations": 0, "num_auto_accidents": 0,
-        "continuous_coverage_months": 24, "age": 34,
-        "created_hour": 14, "created_dayofweek": 2, "bid": 0.25,
+        "num_vehicles": 2,
+        "num_drivers": 1,
+        "num_auto_violations": 0,
+        "num_auto_accidents": 0,
+        "continuous_coverage_months": 24,
+        "age": 34,
+        "created_hour": 14,
+        "created_dayofweek": 2,
+        "bid": 0.25,
     }
     frame = preprocessing.serving_frame([record], fe.LEAD_TYPE_AUTO)
     numeric, categorical = config.feature_columns(fe.LEAD_TYPE_AUTO)
@@ -83,10 +100,12 @@ def test_serving_frame_selects_and_normalizes():
 def _fake_training_table():
     numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
     n = 6
-    data = {"id": range(n),
-            "created_at": pd.to_datetime([f"2026-06-2{i} 01:00" for i in range(n)]),
-            "won_flag": [1, 0, 1, 0, 1, 0],
-            "expected_revenue": [20.0, 18.0, 25.0, 22.0, 30.0, 15.0]}
+    data = {
+        "id": range(n),
+        "created_at": pd.to_datetime([f"2026-06-2{i} 01:00" for i in range(n)]),
+        "won_flag": [1, 0, 1, 0, 1, 0],
+        "expected_revenue": [20.0, 18.0, 25.0, 22.0, 30.0, 15.0],
+    }
     for c in numeric:
         data[c] = np.arange(n, dtype=float) + 1
     for c in categorical:
@@ -195,8 +214,12 @@ def test_optimize_bid_picks_max_profit():
     # Constant win rate -> profit = p*(rev - bid) is maximised at the lowest bid.
     row = pd.Series({"bid": 5.0, "state": "TX"})
     result = predict.optimize_bid_for_row(
-        row=row, model=_StubModel(0.5), expected_revenue=25.0,
-        target_cm=0.25, min_bid=0.25, bid_step=0.25,
+        row=row,
+        model=_StubModel(0.5),
+        expected_revenue=25.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert result["max_bid"] == pytest.approx(25.0 * 0.75)  # 18.75
     assert result["recommended_bid"] == pytest.approx(0.25)  # lowest bid wins
@@ -208,8 +231,12 @@ def test_optimize_bid_skips_when_no_room():
     row = pd.Series({"bid": 1.0})
     # expected_revenue tiny -> max_bid below min_bid -> no candidates
     result = predict.optimize_bid_for_row(
-        row=row, model=_StubModel(), expected_revenue=0.1,
-        target_cm=0.25, min_bid=0.25, bid_step=0.25,
+        row=row,
+        model=_StubModel(),
+        expected_revenue=0.1,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert np.isnan(result["recommended_bid"])
     assert result["n_candidate_bids"] == 0
@@ -222,8 +249,14 @@ def test_bid_curve_around_spans_center_bid_symmetrically():
     """Points bracket center_bid on the bid_step grid, sorted, deduplicated."""
     row = pd.Series({"bid": 5.0, "state": "TX"})
     curve = predict.bid_curve_around(
-        row=row, model=_StubModel(0.5), expected_revenue=20.0,
-        min_bid=0.25, max_bid=15.0, bid_step=0.25, center_bid=5.0, n_points=2,
+        row=row,
+        model=_StubModel(0.5),
+        expected_revenue=20.0,
+        min_bid=0.25,
+        max_bid=15.0,
+        bid_step=0.25,
+        center_bid=5.0,
+        n_points=2,
     )
     bids = [pt["bid"] for pt in curve]
     assert bids == sorted(bids)
@@ -237,8 +270,14 @@ def test_bid_curve_around_clips_to_bounds_without_duplicates():
     """Near an edge, out-of-range offsets clip to the bound, not duplicate it."""
     row = pd.Series({"bid": 0.25, "state": "TX"})
     curve = predict.bid_curve_around(
-        row=row, model=_StubModel(0.5), expected_revenue=20.0,
-        min_bid=0.25, max_bid=15.0, bid_step=0.25, center_bid=0.25, n_points=2,
+        row=row,
+        model=_StubModel(0.5),
+        expected_revenue=20.0,
+        min_bid=0.25,
+        max_bid=15.0,
+        bid_step=0.25,
+        center_bid=0.25,
+        n_points=2,
     )
     bids = [pt["bid"] for pt in curve]
     assert min(bids) == pytest.approx(0.25)
@@ -248,14 +287,30 @@ def test_bid_curve_around_clips_to_bounds_without_duplicates():
 def test_bid_curve_around_empty_when_no_viable_bid():
     """No room between min_bid and max_bid, or a NaN center -> empty, not a crash."""
     row = pd.Series({"bid": 1.0})
-    assert predict.bid_curve_around(
-        row=row, model=_StubModel(), expected_revenue=0.1,
-        min_bid=0.25, max_bid=0.1, bid_step=0.25, center_bid=0.25,
-    ) == []
-    assert predict.bid_curve_around(
-        row=row, model=_StubModel(), expected_revenue=20.0,
-        min_bid=0.25, max_bid=15.0, bid_step=0.25, center_bid=float("nan"),
-    ) == []
+    assert (
+        predict.bid_curve_around(
+            row=row,
+            model=_StubModel(),
+            expected_revenue=0.1,
+            min_bid=0.25,
+            max_bid=0.1,
+            bid_step=0.25,
+            center_bid=0.25,
+        )
+        == []
+    )
+    assert (
+        predict.bid_curve_around(
+            row=row,
+            model=_StubModel(),
+            expected_revenue=20.0,
+            min_bid=0.25,
+            max_bid=15.0,
+            bid_step=0.25,
+            center_bid=float("nan"),
+        )
+        == []
+    )
 
 
 # --- Model resolution (MODEL_URI env > pinned version > currently serving) --
@@ -274,8 +329,13 @@ def test_resolve_model_uri_uses_pinned_ini_version_over_currently_serving(
     monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
     monkeypatch.delenv("MODEL_URI", raising=False)
     manifest = registry.save_version(
-        {"m": 1}, "auto", feature_cols=["bid"], metrics={"roc_auc": 0.7},
-        optimizer_summary={}, lineage={}, model_params={},
+        {"m": 1},
+        "auto",
+        feature_cols=["bid"],
+        metrics={"roc_auc": 0.7},
+        optimizer_summary={},
+        lineage={},
+        model_params={},
     )
     registry.promote("auto", manifest["version"])
     monkeypatch.setattr(config, "active_model_version", lambda: manifest["version"])
@@ -289,8 +349,13 @@ def test_resolve_model_uri_falls_back_to_currently_serving(tmp_path, monkeypatch
     monkeypatch.delenv("MODEL_URI", raising=False)
     monkeypatch.setattr(config, "active_model_version", lambda: None)
     manifest = registry.save_version(
-        {"m": 1}, "auto", feature_cols=["bid"], metrics={"roc_auc": 0.7},
-        optimizer_summary={}, lineage={}, model_params={},
+        {"m": 1},
+        "auto",
+        feature_cols=["bid"],
+        metrics={"roc_auc": 0.7},
+        optimizer_summary={},
+        lineage={},
+        model_params={},
     )
     registry.promote("auto", manifest["version"])
 
@@ -317,7 +382,9 @@ def test_run_bid_optimizer_evaluation_summary():
     df[config.REVENUE_COL] = [20.0, 22.0, 25.0, 30.0]
 
     out = predict.run_bid_optimizer_evaluation(
-        test_eval_df=df, model=_StubModel(0.5), feature_cols=feature_cols,
+        test_eval_df=df,
+        model=_StubModel(0.5),
+        feature_cols=feature_cols,
     )
     assert out is not None
     eval_df, summary = out
@@ -334,7 +401,10 @@ def test_run_bid_optimizer_evaluation_summary():
 def test_cold_start_fallback_bid_snaps_to_grid_within_bounds():
     """The fallback bid is a fixed % of [min_bid, ceiling], on the bid grid."""
     result = predict.cold_start_fallback_bid(
-        expected_revenue=20.0, target_cm=0.25, min_bid=0.25, bid_step=0.25,
+        expected_revenue=20.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
         fallback_pct=0.5,
     )
     max_bid = 20.0 * 0.75
@@ -349,7 +419,10 @@ def test_cold_start_fallback_bid_snaps_to_grid_within_bounds():
 def test_cold_start_fallback_bid_empty_when_revenue_too_low():
     """No room between min_bid and the ceiling -> empty result, like the optimizer."""
     result = predict.cold_start_fallback_bid(
-        expected_revenue=0.1, target_cm=0.25, min_bid=0.25, bid_step=0.25,
+        expected_revenue=0.1,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert np.isnan(result["recommended_bid"])
 
@@ -402,8 +475,13 @@ def test_decide_bid_cold_start_when_no_model():
     """model=None -> the defined cold-start fallback, flagged explicitly."""
     row = pd.Series({"bid": 5.0, "state": "TX"})
     result = predict.decide_bid(
-        row=row, model=None, manifest=None, expected_revenue=20.0,
-        target_cm=0.25, min_bid=0.25, bid_step=0.25,
+        row=row,
+        model=None,
+        manifest=None,
+        expected_revenue=20.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert result["decision_path"] == "cold_start_fallback"
     assert "cold start" in result["decision_reason"]
@@ -414,9 +492,15 @@ def test_decide_bid_normal_path_when_not_an_explore_slot():
     """A non-explore hour -> the plain optimizer bid, decision_path='model'."""
     row = pd.Series({"bid": 5.0, "state": "TX"})
     result = predict.decide_bid(
-        row=row, model=_StubModel(0.5), manifest=None, expected_revenue=20.0,
-        target_cm=0.25, min_bid=0.25, bid_step=0.25,
-        created_dayofweek=0, created_hour=5,  # bucket 5 -> not an explore slot
+        row=row,
+        model=_StubModel(0.5),
+        manifest=None,
+        expected_revenue=20.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
+        created_dayofweek=0,
+        created_hour=5,  # bucket 5 -> not an explore slot
     )
     assert result["decision_path"] == "model"
     assert result["recommended_bid"] == pytest.approx(0.25)
@@ -440,9 +524,15 @@ def test_decide_bid_exploration_path_perturbs_optimum_bid():
     """A scheduled explore hour perturbs the bid and says so, explicitly."""
     row = pd.Series({"bid": 5.0, "state": "TX"})
     result = predict.decide_bid(
-        row=row, model=_RisingWinRateModel(), manifest=None, expected_revenue=20.0,
-        target_cm=0.25, min_bid=0.25, bid_step=0.25,
-        created_dayofweek=0, created_hour=0,  # bucket 0 -> explore, direction +1
+        row=row,
+        model=_RisingWinRateModel(),
+        manifest=None,
+        expected_revenue=20.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
+        created_dayofweek=0,
+        created_hour=0,  # bucket 0 -> explore, direction +1
     )
     assert result["decision_path"] == "exploration"
     assert result["pre_exploration_optimum_bid"] == pytest.approx(10.0, abs=0.25)
@@ -455,9 +545,15 @@ def test_decide_bid_flags_stale_model_in_reason():
     row = pd.Series({"bid": 5.0, "state": "TX"})
     manifest = {"lineage": {"data_max_created_at": "2020-01-01T00:00:00"}}
     result = predict.decide_bid(
-        row=row, model=_StubModel(0.5), manifest=manifest, expected_revenue=20.0,
-        target_cm=0.25, min_bid=0.25, bid_step=0.25,
-        created_dayofweek=0, created_hour=5,  # not an explore slot
+        row=row,
+        model=_StubModel(0.5),
+        manifest=manifest,
+        expected_revenue=20.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
+        created_dayofweek=0,
+        created_hour=5,  # not an explore slot
     )
     assert result["decision_path"] == "model"
     assert "due for retraining" in result["decision_reason"]
@@ -485,8 +581,12 @@ def test_load_model_and_manifest_loads_currently_serving(tmp_path, monkeypatch):
     monkeypatch.delenv("MODEL_URI", raising=False)
     monkeypatch.setattr(config, "active_model_version", lambda: None)
     saved = registry.save_version(
-        {"m": 1}, "auto", feature_cols=["bid"], metrics={"roc_auc": 0.7},
-        optimizer_summary={}, lineage={"data_max_created_at": "2026-07-01"},
+        {"m": 1},
+        "auto",
+        feature_cols=["bid"],
+        metrics={"roc_auc": 0.7},
+        optimizer_summary={},
+        lineage={"data_max_created_at": "2026-07-01"},
         model_params={},
     )
     registry.promote("auto", saved["version"])

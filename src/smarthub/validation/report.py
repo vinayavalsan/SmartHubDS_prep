@@ -35,10 +35,7 @@ def _cross_field_summary(report: ValidationReport) -> str:
 def _violations_summary(report: ValidationReport) -> str:
     if not report.rule_violations:
         return "none"
-    parts = [
-        f"{v.column} {v.check} ({v.count:,})"
-        for v in report.rule_violations[:6]
-    ]
+    parts = [f"{v.column} {v.check} ({v.count:,})" for v in report.rule_violations[:6]]
     extra = len(report.rule_violations) - 6
     if extra > 0:
         parts.append(f"+{extra} more")
@@ -63,7 +60,8 @@ def slack_group(report: ValidationReport) -> tuple[str, dict]:
         "Status": _status_line(report),
         "Rule violations": (
             f"{report.total_violation_rows:,} rows — {_violations_summary(report)}"
-            if report.rule_violations else "none"
+            if report.rule_violations
+            else "none"
         ),
         "Cross-field flags": _cross_field_summary(report),
         "High-missing cols": (
@@ -98,8 +96,7 @@ def to_markdown(report: ValidationReport, lead_type_name: str) -> str:
     lines = [
         f"# Data quality — {lead_type_name}",
         "",
-        f"**Status:** {_status_line(report)}  ·  **rows:** "
-        f"{report.total_rows:,}",
+        f"**Status:** {_status_line(report)}  ·  **rows:** " f"{report.total_rows:,}",
         "",
     ]
 

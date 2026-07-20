@@ -78,6 +78,13 @@ columns are present.
 | `auto_missing_num_vehicles` | `lead_type_id` == 6 (auto) **and** `num_vehicles` null/blank | Auto lead missing a core field |
 | `home_missing_property_type` | `lead_type_id` == 1 (home) **and** `home_property_type` null/blank | Home lead missing a core field |
 
+The lead-type completeness rules (the last two rows) are generated from the
+feature registry: each type's required raw columns live in
+`features.LEAD_TYPES[<id>].required_raw`, and `cross_field_checks` iterates the
+registry to emit one `{type}_missing_{col}` rule per required column. Adding a
+new lead type's completeness rule is therefore part of the same single registry
+entry — no `lead_type_id ==` branches in `validation/rules.py`.
+
 True-ish tokens: `true`, `t`, `1`, `yes`, `y`. False-ish: `false`, `f`, `0`,
 `no`, `n`.
 

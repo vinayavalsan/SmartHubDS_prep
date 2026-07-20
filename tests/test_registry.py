@@ -41,7 +41,7 @@ def test_load_currently_serving_resolves_path_in_current_env():
     mf.write_text(json.dumps(data))
 
     model, manifest = registry.load_currently_serving_model("auto")
-    assert model == {"fake": "model"}          # loaded via version_path
+    assert model == {"fake": "model"}  # loaded via version_path
     assert manifest["version"] == m["version"]
 
 
@@ -49,7 +49,7 @@ def test_load_currently_serving_none_when_file_missing():
     """Missing pkl yields (None, None) instead of crashing."""
     m = _save()
     registry.promote("auto", m["version"])
-    registry.version_path("auto", m["version"]).unlink()   # pkl gone
+    registry.version_path("auto", m["version"]).unlink()  # pkl gone
     # Graceful bootstrap, not a crash.
     assert registry.load_currently_serving_model("auto") == (None, None)
 
@@ -103,7 +103,9 @@ def test_versions_are_numbered_and_timestamped_and_never_overwritten():
     assert m2["version"].startswith("v2_")
     assert m3["version"].startswith("v3_")
     assert registry.list_versions("auto") == [
-        m1["version"], m2["version"], m3["version"],
+        m1["version"],
+        m2["version"],
+        m3["version"],
     ]
     # all three pkl files exist independently -- nothing was overwritten
     for m in (m1, m2, m3):

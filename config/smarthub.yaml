@@ -38,7 +38,7 @@ features:
   # table, so no re-pull/re-build is needed — just retrain.
   #
   # MANDATORY (auto) — ALWAYS trained on, cannot be removed (locked in code,
-  # features.py:_MANDATORY_AUTO): bid, age, age_missing, age_cohort_<band>,
+  # features.LEAD_TYPES[6].mandatory): bid, age, age_missing, age_cohort_<band>,
   # num_vehicles, multi_vehicle, num_auto_accidents, home_owner, insured, dui,
   # sr22_required.
   #

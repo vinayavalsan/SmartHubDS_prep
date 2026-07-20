@@ -17,17 +17,69 @@ from __future__ import annotations
 import pandas as pd
 
 from smarthub.data_pull import models
+from smarthub.feature_engineering import features as fe
 
 # Columns the pull is expected to produce (drives schema-drift detection).
 EXPECTED_COLUMNS: tuple[str, ...] = tuple(c.key for c in models.LEADS_COLUMNS)
 
 # --- Domains ----------------------------------------------------------------
 US_STATES = {
-    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
-    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
-    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
-    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
-    "WI", "WY", "DC", "PR", "GU", "VI", "AS", "MP",
+    "AL",
+    "AK",
+    "AZ",
+    "AR",
+    "CA",
+    "CO",
+    "CT",
+    "DE",
+    "FL",
+    "GA",
+    "HI",
+    "ID",
+    "IL",
+    "IN",
+    "IA",
+    "KS",
+    "KY",
+    "LA",
+    "ME",
+    "MD",
+    "MA",
+    "MI",
+    "MN",
+    "MS",
+    "MO",
+    "MT",
+    "NE",
+    "NV",
+    "NH",
+    "NJ",
+    "NM",
+    "NY",
+    "NC",
+    "ND",
+    "OH",
+    "OK",
+    "OR",
+    "PA",
+    "RI",
+    "SC",
+    "SD",
+    "TN",
+    "TX",
+    "UT",
+    "VT",
+    "VA",
+    "WA",
+    "WV",
+    "WI",
+    "WY",
+    "DC",
+    "PR",
+    "GU",
+    "VI",
+    "AS",
+    "MP",
 }
 GENDER_DOMAIN = {"Male", "Female", "Non-binary"}
 MARITAL_DOMAIN = {"Single", "Married", "Divorced", "Widowed"}
@@ -35,8 +87,13 @@ MARITAL_DOMAIN = {"Single", "Married", "Divorced", "Widowed"}
 BOOL_TOKENS = {"true", "false", "t", "f", "1", "0", "yes", "no", "y", "n"}
 # Boolean-ish columns whose values should fall in BOOL_TOKENS.
 BOOLISH_COLUMNS = [
-    "insured", "home_owner", "dui", "sr22_required",
-    "pnc_bundle", "military_affiliation", "accepted",
+    "insured",
+    "home_owner",
+    "dui",
+    "sr22_required",
+    "pnc_bundle",
+    "military_affiliation",
+    "accepted",
 ]
 
 # Plausible numeric ranges (min, max), inclusive. Anything outside is flagged.
@@ -53,9 +110,16 @@ NUMERIC_RANGES = {
 }
 # Columns that must simply be non-negative when present.
 NON_NEGATIVE = [
-    "bid", "exp_rev", "rev", "total_listings", "accepted_listings",
-    "household_income", "annual_revenue", "life_coverage_amount",
-    "num_employees", "response_ms",
+    "bid",
+    "exp_rev",
+    "rev",
+    "total_listings",
+    "accepted_listings",
+    "household_income",
+    "annual_revenue",
+    "life_coverage_amount",
+    "num_employees",
+    "response_ms",
 ]
 
 
@@ -76,24 +140,27 @@ def leads_schema():
 
     cols: dict = {
         "id": Column(nullable=False, required=False, unique=True),
-        "state": Column(
-            str, Check.isin(US_STATES), nullable=True, required=False
-        ),
-        "gender": Column(
-            str, Check.isin(GENDER_DOMAIN), nullable=True, required=False
-        ),
+        "state": Column(str, Check.isin(US_STATES), nullable=True, required=False),
+        "gender": Column(str, Check.isin(GENDER_DOMAIN), nullable=True, required=False),
         "marital_status": Column(
             str, Check.isin(MARITAL_DOMAIN), nullable=True, required=False
         ),
     }
     for col, (lo, hi) in NUMERIC_RANGES.items():
         cols[col] = Column(
-            float, Check.in_range(lo, hi), nullable=True,
-            required=False, coerce=True,
+            float,
+            Check.in_range(lo, hi),
+            nullable=True,
+            required=False,
+            coerce=True,
         )
     for col in NON_NEGATIVE:
         cols[col] = Column(
-            float, Check.ge(0), nullable=True, required=False, coerce=True,
+            float,
+            Check.ge(0),
+            nullable=True,
+            required=False,
+            coerce=True,
         )
     return DataFrameSchema(cols, strict=False, coerce=False)
 
@@ -130,6 +197,18 @@ def missing_rates(df: pd.DataFrame) -> dict[str, float]:
     if not n:
         return {c: 0.0 for c in df.columns}
     return {c: float(_null_or_blank(df[c]).mean()) for c in df.columns}
+
+
+def _completeness_rule_name(type_name: str, col: str) -> str:
+    """Rule key for a per-type required-raw-column check.
+
+    ``{type}_missing_{col}``, dropping a leading ``{type}_`` on the column so
+    e.g. (home, home_property_type) -> ``home_missing_property_type`` rather
+    than the doubled ``home_missing_home_property_type``.
+    """
+    prefix = f"{type_name}_"
+    short = col[len(prefix) :] if col.startswith(prefix) else col
+    return f"{type_name}_missing_{short}"
 
 
 def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
@@ -176,15 +255,19 @@ def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
         accepted = _lower(df["accepted"]).isin({"true", "t", "1", "yes", "y"})
         out["accepted_but_won_null"] = int((accepted & (won == "")).sum())
 
-    # Lead-type completeness.
+    # Lead-type completeness — driven by the feature registry so each type's
+    # required raw columns live in one place (features.LEAD_TYPES[id].
+    # required_raw). Adding a type's rule = one registry entry, no branches here.
     if present("lead_type_id"):
         lt = pd.to_numeric(df["lead_type_id"], errors="coerce")
-        if present("num_vehicles"):
-            miss_v = _null_or_blank(df["num_vehicles"])
-            out["auto_missing_num_vehicles"] = int(((lt == 6) & miss_v).sum())
-        if present("home_property_type"):
-            miss_h = _null_or_blank(df["home_property_type"])
-            out["home_missing_property_type"] = int(((lt == 1) & miss_h).sum())
+        for lead_type_id, spec in fe.LEAD_TYPES.items():
+            for col in sorted(spec.required_raw):
+                if not present(col):
+                    continue
+                miss = _null_or_blank(df[col])
+                out[_completeness_rule_name(spec.name, col)] = int(
+                    ((lt == lead_type_id) & miss).sum()
+                )
 
     return out
 
@@ -221,9 +304,7 @@ def batch_metrics(df: pd.DataFrame) -> dict:
         er = pd.to_numeric(df["exp_rev"], errors="coerce")
         m["exp_rev_coverage"] = _rate(int((er > 0).sum()), n)
     if "pst_hour" in df.columns:
-        m["pst_hour_populated"] = _rate(
-            int((~_null_or_blank(df["pst_hour"])).sum()), n
-        )
+        m["pst_hour_populated"] = _rate(int((~_null_or_blank(df["pst_hour"])).sum()), n)
     if "age" in df.columns:
         age = pd.to_numeric(df["age"], errors="coerce")
         lo, hi = NUMERIC_RANGES["age"]

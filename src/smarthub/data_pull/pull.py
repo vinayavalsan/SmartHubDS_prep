@@ -23,6 +23,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sshtunnel import SSHTunnelForwarder
 
+from smarthub.core import notifications, storage
 from smarthub.core.config import (
     ConfigError,
     PullSettings,
@@ -30,8 +31,6 @@ from smarthub.core.config import (
     StorageSettings,
 )
 from smarthub.core.logging_utils import configure_logging, get_logger
-from smarthub.core import notifications
-from smarthub.core import storage
 from smarthub.data_pull.cli import build_pull_parser
 from smarthub.data_pull.models import (
     coerce_leads_dtypes,
@@ -200,9 +199,7 @@ def _validate(leads_df: pd.DataFrame) -> None:
         from smarthub.validation import report as vreport
         from smarthub.validation import validate_leads
 
-        threshold = task_config.get_float(
-            "validation", "high_missing_threshold", 0.5
-        )
+        threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
         vreport.log_summary(validate_leads(leads_df, threshold), logger)
     except Exception as exc:  # noqa: BLE001 - validation must never break a pull
         logger.warning("Data validation skipped (error): %s", exc)

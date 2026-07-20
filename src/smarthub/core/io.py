@@ -9,9 +9,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from smarthub.core import paths
+from smarthub.core import paths, storage, transforms
 from smarthub.core.config import StorageSettings
-from smarthub.core import storage, transforms
 
 # Default on-disk locations, resolved relative to the project root.
 DEFAULT_LEADS_PATH = paths.project_root() / "data" / "leads.parquet"
@@ -183,9 +182,7 @@ def save_training_table(
     return target
 
 
-def load_training_metadata(
-    lead_type_name: str, version: str | None = None
-) -> dict:
+def load_training_metadata(lead_type_name: str, version: str | None = None) -> dict:
     """Load the manifest for a training version (defaults to the latest).
 
     Inputs

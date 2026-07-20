@@ -14,7 +14,6 @@ import pytest
 
 from smarthub.train_and_predict import config, explain, predict
 
-
 # --- _to_native (JSON-safety for numpy scalars) ------------------------------
 
 
@@ -47,10 +46,13 @@ def _facts(**overrides):
         "base_win_rate": 0.30,
         "expected_profit": 3.75,
         "top_factors": [
-            {"feature": "bid", "value": 12.5, "shap": 0.08,
-             "direction": "increased"},
-            {"feature": "state", "value": "TX", "shap": -0.02,
-             "direction": "decreased"},
+            {"feature": "bid", "value": 12.5, "shap": 0.08, "direction": "increased"},
+            {
+                "feature": "state",
+                "value": "TX",
+                "shap": -0.02,
+                "direction": "decreased",
+            },
         ],
     }
     facts.update(overrides)
@@ -83,10 +85,12 @@ def test_format_llm_prompt_includes_monotonic_bid_guardrail():
 def test_format_llm_prompt_includes_bid_curve_when_present():
     """Nearby bid/win-rate points are rendered as facts, not left for the LLM
     to guess at ("the shape of the market" around the chosen bid)."""
-    facts = _facts(bid_curve=[
-        {"bid": 3.25, "predicted_win_rate": 0.50, "expected_profit": 8.0},
-        {"bid": 3.75, "predicted_win_rate": 0.58, "expected_profit": 9.5},
-    ])
+    facts = _facts(
+        bid_curve=[
+            {"bid": 3.25, "predicted_win_rate": 0.50, "expected_profit": 8.0},
+            {"bid": 3.75, "predicted_win_rate": 0.58, "expected_profit": 9.5},
+        ]
+    )
     prompt = explain.format_llm_prompt(facts)
     assert "Nearby bids explored" in prompt
     assert "$3.25 -> 50%" in prompt
@@ -101,11 +105,13 @@ def test_format_llm_prompt_omits_bid_curve_section_when_absent():
 
 def test_format_llm_prompt_lists_all_top_factors_in_order():
     """Factors are rendered in the order given (already SHAP-ranked upstream)."""
-    facts = _facts(top_factors=[
-        {"feature": "a", "value": 1, "shap": 0.5, "direction": "increased"},
-        {"feature": "b", "value": 2, "shap": 0.3, "direction": "increased"},
-        {"feature": "c", "value": 3, "shap": -0.1, "direction": "decreased"},
-    ])
+    facts = _facts(
+        top_factors=[
+            {"feature": "a", "value": 1, "shap": 0.5, "direction": "increased"},
+            {"feature": "b", "value": 2, "shap": 0.3, "direction": "increased"},
+            {"feature": "c", "value": 3, "shap": -0.1, "direction": "decreased"},
+        ]
+    )
     prompt = explain.format_llm_prompt(facts)
     assert prompt.index("a=1") < prompt.index("b=2") < prompt.index("c=3")
 
@@ -180,8 +186,17 @@ def test_call_ollama_uses_ini_defaults_when_unset(monkeypatch):
 def test_explain_bid_no_viable_bid_skips_shap_and_llm(monkeypatch):
     """When no bid clears the margin floor, explain_bid skips SHAP + the LLM."""
 
-    def _fake_optimize(row, model, manifest, expected_revenue, target_cm, min_bid,
-                       bid_step, created_dayofweek=None, created_hour=None):
+    def _fake_optimize(
+        row,
+        model,
+        manifest,
+        expected_revenue,
+        target_cm,
+        min_bid,
+        bid_step,
+        created_dayofweek=None,
+        created_hour=None,
+    ):
         return {
             "recommended_bid": float("nan"),
             "recommended_bid_predicted_win_rate": None,
@@ -192,7 +207,8 @@ def test_explain_bid_no_viable_bid_skips_shap_and_llm(monkeypatch):
 
     monkeypatch.setattr(predict, "decide_bid", _fake_optimize)
     monkeypatch.setattr(
-        explain.preprocessing, "serving_frame",
+        explain.preprocessing,
+        "serving_frame",
         lambda records, lead_type_id: pd.DataFrame([{"bid": 0.25}]),
     )
 
@@ -203,7 +219,10 @@ def test_explain_bid_no_viable_bid_skips_shap_and_llm(monkeypatch):
     monkeypatch.setattr(explain, "call_ollama", _boom)
 
     result = explain.explain_bid(
-        model="unused", record={"bid": 0.25}, lead_type_id=6, expected_revenue=1.0,
+        model="unused",
+        record={"bid": 0.25},
+        lead_type_id=6,
+        expected_revenue=1.0,
     )
     assert pd.isna(result["recommended_bid"])
     assert result["top_factors"] == []
@@ -215,8 +234,15 @@ def test_explain_bid_cold_start_skips_shap_and_llm_uses_policy_text(monkeypatch)
     """A true cold-start bid explains itself via the policy reason, no SHAP/LLM."""
 
     def _fake_decide(
-        row, model, manifest, expected_revenue, target_cm, min_bid,
-        bid_step, created_dayofweek=None, created_hour=None,
+        row,
+        model,
+        manifest,
+        expected_revenue,
+        target_cm,
+        min_bid,
+        bid_step,
+        created_dayofweek=None,
+        created_hour=None,
     ):
         return {
             "recommended_bid": 5.0,
@@ -228,7 +254,8 @@ def test_explain_bid_cold_start_skips_shap_and_llm_uses_policy_text(monkeypatch)
 
     monkeypatch.setattr(predict, "decide_bid", _fake_decide)
     monkeypatch.setattr(
-        explain.preprocessing, "serving_frame",
+        explain.preprocessing,
+        "serving_frame",
         lambda records, lead_type_id: pd.DataFrame([{"bid": 0.25}]),
     )
 
@@ -239,7 +266,10 @@ def test_explain_bid_cold_start_skips_shap_and_llm_uses_policy_text(monkeypatch)
     monkeypatch.setattr(explain, "call_ollama", _boom)
 
     result = explain.explain_bid(
-        model=None, record={"bid": 0.25}, lead_type_id=6, expected_revenue=10.0,
+        model=None,
+        record={"bid": 0.25},
+        lead_type_id=6,
+        expected_revenue=10.0,
     )
     assert result["recommended_bid"] == 5.0
     assert result["top_factors"] == []
@@ -251,8 +281,15 @@ def test_explain_bid_swaps_in_recommended_bid_before_explaining(monkeypatch):
     """SHAP explains the model's prediction AT the chosen bid, not the input bid."""
 
     def _fake_decide(
-        row, model, manifest, expected_revenue, target_cm, min_bid,
-        bid_step, created_dayofweek=None, created_hour=None,
+        row,
+        model,
+        manifest,
+        expected_revenue,
+        target_cm,
+        min_bid,
+        bid_step,
+        created_dayofweek=None,
+        created_hour=None,
     ):
         return {
             "recommended_bid": 15.0,
@@ -271,12 +308,14 @@ def test_explain_bid_swaps_in_recommended_bid_before_explaining(monkeypatch):
 
     monkeypatch.setattr(predict, "decide_bid", _fake_decide)
     monkeypatch.setattr(
-        explain.preprocessing, "serving_frame",
+        explain.preprocessing,
+        "serving_frame",
         lambda records, lead_type_id: pd.DataFrame([{"bid": 0.25}]),
     )
     monkeypatch.setattr(explain, "explain_row", _fake_explain_row)
     monkeypatch.setattr(
-        predict, "bid_curve_around",
+        predict,
+        "bid_curve_around",
         lambda **kwargs: [
             {"bid": 15.0, "predicted_win_rate": 0.5, "expected_profit": 4.0}
         ],
@@ -284,9 +323,12 @@ def test_explain_bid_swaps_in_recommended_bid_before_explaining(monkeypatch):
     monkeypatch.setattr(explain, "call_ollama", lambda prompt: "stub explanation")
 
     result = explain.explain_bid(
-        model="unused", record={"bid": 0.25}, lead_type_id=6, expected_revenue=10.0,
+        model="unused",
+        record={"bid": 0.25},
+        lead_type_id=6,
+        expected_revenue=10.0,
     )
-    assert seen_records["record"]["bid"] == 15.0   # swapped, not the input 0.25
+    assert seen_records["record"]["bid"] == 15.0  # swapped, not the input 0.25
     assert result["recommended_bid"] == 15.0
     assert result["explanation"] == "stub explanation"
     assert result["bid_curve"] == [
@@ -298,8 +340,15 @@ def test_explain_bid_includes_decision_note_for_exploration(monkeypatch):
     """A non-'model' decision path is passed to the LLM as a factual note."""
 
     def _fake_decide(
-        row, model, manifest, expected_revenue, target_cm, min_bid,
-        bid_step, created_dayofweek=None, created_hour=None,
+        row,
+        model,
+        manifest,
+        expected_revenue,
+        target_cm,
+        min_bid,
+        bid_step,
+        created_dayofweek=None,
+        created_hour=None,
     ):
         return {
             "recommended_bid": 12.0,
@@ -312,17 +361,20 @@ def test_explain_bid_includes_decision_note_for_exploration(monkeypatch):
 
     monkeypatch.setattr(predict, "decide_bid", _fake_decide)
     monkeypatch.setattr(
-        explain.preprocessing, "serving_frame",
+        explain.preprocessing,
+        "serving_frame",
         lambda records, lead_type_id: pd.DataFrame([{"bid": 0.25}]),
     )
     monkeypatch.setattr(
-        explain, "explain_row",
+        explain,
+        "explain_row",
         lambda model, record, lead_type_id, top_n=None: (
             {"top_factors": [], "base_win_rate": 0.3}
         ),
     )
     monkeypatch.setattr(
-        predict, "bid_curve_around",
+        predict,
+        "bid_curve_around",
         lambda **kwargs: [
             {"bid": 12.0, "predicted_win_rate": 0.4, "expected_profit": 3.0}
         ],
@@ -337,7 +389,10 @@ def test_explain_bid_includes_decision_note_for_exploration(monkeypatch):
     monkeypatch.setattr(explain, "call_ollama", _fake_ollama)
 
     result = explain.explain_bid(
-        model="unused", record={"bid": 0.25}, lead_type_id=6, expected_revenue=10.0,
+        model="unused",
+        record={"bid": 0.25},
+        lead_type_id=6,
+        expected_revenue=10.0,
     )
     assert result["decision_path"] == "exploration"
     assert "Scheduled exploration probe" in seen_prompts["prompt"]
@@ -356,15 +411,19 @@ def _tiny_lightgbm_pipeline(calibrate=False):
     from smarthub.train_and_predict import models
 
     n = 40
-    frame = pd.DataFrame({
-        "bid": [float(i % 10) for i in range(n)],
-        "age": [20 + (i % 40) for i in range(n)],
-        "state": ["TX", "CA"] * (n // 2),
-    })
+    frame = pd.DataFrame(
+        {
+            "bid": [float(i % 10) for i in range(n)],
+            "age": [20 + (i % 40) for i in range(n)],
+            "state": ["TX", "CA"] * (n // 2),
+        }
+    )
     y = [1 if (i % 10) >= 5 else 0 for i in range(n)]  # correlated with bid
 
     model = models.build_model(
-        "lightgbm", NUMERIC, CATEGORICAL,
+        "lightgbm",
+        NUMERIC,
+        CATEGORICAL,
         model_params={"n_estimators": 5, "min_child_samples": 1, "num_leaves": 7},
         calibrate=calibrate,
     )
@@ -404,7 +463,11 @@ def test_fitted_lgbm_estimators_rejects_non_lightgbm(small_feature_columns):
     from smarthub.train_and_predict import models
 
     model = models.build_model(
-        "logistic_regression", NUMERIC, CATEGORICAL, model_params={}, calibrate=False,
+        "logistic_regression",
+        NUMERIC,
+        CATEGORICAL,
+        model_params={},
+        calibrate=False,
     )
     frame = pd.DataFrame({"bid": [1.0, 2.0], "age": [30, 40], "state": ["TX", "CA"]})
     model.fit(frame, [0, 1])

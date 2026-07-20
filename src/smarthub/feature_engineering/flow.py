@@ -168,9 +168,7 @@ _Day metrics: {_DAY_DEFS}._
     )
 
 
-def _notify_success(
-    lead_type_name, lead_type_id, version, metadata, path
-) -> None:
+def _notify_success(lead_type_name, lead_type_id, version, metadata, path) -> None:
     """Send the Slack 'feature build completed' notification, grouped.
 
     Leads with a headline (training rows + version + win rate), then groups the
@@ -201,37 +199,47 @@ def _notify_success(
         f":bar_chart: *{row_count:,} training rows* · `{version}` "
         f"(win rate {won_rate_str})"
     )
-    rows_summary = (
-        f"{raw_rows:,} → {row_count:,} (dropped {dropped:,} errored/no-bid)"
-    )
+    rows_summary = f"{raw_rows:,} → {row_count:,} (dropped {dropped:,} errored/no-bid)"
     groups = [
-        ("Rows", {
-            "Raw → training": rows_summary,
-            "Wins / losses": (
-                f"{metadata.get('wins'):,} / {metadata.get('losses'):,}"
-            ),
-            "Win rate": won_rate_str,
-        }),
-        ("Coverage", {
-            "expected_revenue coverage": _pct(
-                metadata.get("expected_revenue_coverage")
-            ),
-            "age missing": _pct(metadata.get("age_missing_rate")),
-            "traffic_tier distinct": metadata.get("traffic_tier_distinct"),
-        }),
-        ("Time mix", {
-            "weekday share": _pct(metadata.get("weekday_share")),
-            "weekend share": _pct(metadata.get("weekend_share")),
-            "workday share (is_workday)": _pct(metadata.get("workday_rate")),
-        }),
-        ("Build", {
-            "Training window (days)": metadata.get("training_window_days"),
-            "Feature count": len(feats),
-            "Data range (created_at)": (
-                f"`{metadata.get('data_min_created_at')}` → "
-                f"`{metadata.get('data_max_created_at')}`"
-            ),
-        }),
+        (
+            "Rows",
+            {
+                "Raw → training": rows_summary,
+                "Wins / losses": (
+                    f"{metadata.get('wins'):,} / {metadata.get('losses'):,}"
+                ),
+                "Win rate": won_rate_str,
+            },
+        ),
+        (
+            "Coverage",
+            {
+                "expected_revenue coverage": _pct(
+                    metadata.get("expected_revenue_coverage")
+                ),
+                "age missing": _pct(metadata.get("age_missing_rate")),
+                "traffic_tier distinct": metadata.get("traffic_tier_distinct"),
+            },
+        ),
+        (
+            "Time mix",
+            {
+                "weekday share": _pct(metadata.get("weekday_share")),
+                "weekend share": _pct(metadata.get("weekend_share")),
+                "workday share (is_workday)": _pct(metadata.get("workday_rate")),
+            },
+        ),
+        (
+            "Build",
+            {
+                "Training window (days)": metadata.get("training_window_days"),
+                "Feature count": len(feats),
+                "Data range (created_at)": (
+                    f"`{metadata.get('data_min_created_at')}` → "
+                    f"`{metadata.get('data_max_created_at')}`"
+                ),
+            },
+        ),
     ]
     notifications.notify_success_grouped(
         "build-features",

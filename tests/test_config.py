@@ -48,7 +48,7 @@ def test_training_window_days_from_config_and_default(monkeypatch, tmp_path):
 
     monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(tmp_path / "absent.yaml"))
     task_config.reload()
-    assert training_window_days() == 21               # default
+    assert training_window_days() == 21  # default
 
     cfg = tmp_path / "t.yaml"
     cfg.write_text("feature_engineering:\n  training_window_days: 45\n")

@@ -107,21 +107,36 @@ class ConfigParam:
 # (model_type, training window, bid_step, …) live in config/smarthub.yaml via
 # smarthub.core.task_config; secrets live in .env.
 REGISTRY: list[ConfigParam] = [
-    ConfigParam("target_cm", "float", 0.25,
-                "Target contribution margin kept in the bid (0–1).", 0.0, 1.0),
-    ConfigParam("bid_floor", "float", 0.0,
-                "Minimum bid in dollars (0 = no floor).", 0.0),
-    ConfigParam("bid_max_cap", "float", 100.0,
-                "Hard maximum bid in dollars (safety cap).", 0.0),
-    ConfigParam("min_source_quality", "float", 0.0,
-                "Minimum source-quality score required to bid (0–1).", 0.0, 1.0),
+    ConfigParam(
+        "target_cm",
+        "float",
+        0.25,
+        "Target contribution margin kept in the bid (0–1).",
+        0.0,
+        1.0,
+    ),
+    ConfigParam(
+        "bid_floor", "float", 0.0, "Minimum bid in dollars (0 = no floor).", 0.0
+    ),
+    ConfigParam(
+        "bid_max_cap", "float", 100.0, "Hard maximum bid in dollars (safety cap).", 0.0
+    ),
+    ConfigParam(
+        "min_source_quality",
+        "float",
+        0.0,
+        "Minimum source-quality score required to bid (0–1).",
+        0.0,
+        1.0,
+    ),
 ]
 REGISTRY_BY_KEY = {p.key: p for p in REGISTRY}
 
 _metadata = MetaData()
 
 config_table = Table(
-    "smarthub_config", _metadata,
+    "smarthub_config",
+    _metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("env", String(32), nullable=False),
     Column("scope", String(64), nullable=False, default="global"),
@@ -133,7 +148,8 @@ config_table = Table(
 )
 
 history_table = Table(
-    "smarthub_config_history", _metadata,
+    "smarthub_config_history",
+    _metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("env", String(32), nullable=False),
     Column("scope", String(64), nullable=False),
@@ -264,18 +280,32 @@ class ConfigStore:
                 )
             ).first()
             if existing is None:
-                conn.execute(insert(config_table).values(
-                    env=env, scope=scope, key=key, value=payload,
-                    updated_by=updated_by, updated_at=now,
-                ))
+                conn.execute(
+                    insert(config_table).values(
+                        env=env,
+                        scope=scope,
+                        key=key,
+                        value=payload,
+                        updated_by=updated_by,
+                        updated_at=now,
+                    )
+                )
             else:
-                conn.execute(update(config_table).where(
-                    config_table.c.id == existing[0]
-                ).values(value=payload, updated_by=updated_by, updated_at=now))
-            conn.execute(insert(history_table).values(
-                env=env, scope=scope, key=key, value=payload,
-                updated_by=updated_by, updated_at=now,
-            ))
+                conn.execute(
+                    update(config_table)
+                    .where(config_table.c.id == existing[0])
+                    .values(value=payload, updated_by=updated_by, updated_at=now)
+                )
+            conn.execute(
+                insert(history_table).values(
+                    env=env,
+                    scope=scope,
+                    key=key,
+                    value=payload,
+                    updated_by=updated_by,
+                    updated_at=now,
+                )
+            )
         return typed
 
     def resolved(self, env: str = "prod", scope: str = "global") -> list[dict]:
@@ -302,9 +332,7 @@ class ConfigStore:
                     config_table.c.value,
                     config_table.c.updated_by,
                     config_table.c.updated_at,
-                ).where(
-                    and_(config_table.c.env == env, config_table.c.scope == scope)
-                )
+                ).where(and_(config_table.c.env == env, config_table.c.scope == scope))
             ).all()
         stored = {r[0]: r for r in rows}
         out = []
@@ -312,17 +340,19 @@ class ConfigStore:
             row = stored.get(param.key)
             overridden = row is not None
             value = param.cast(json.loads(row[1])) if overridden else param.default
-            out.append({
-                "key": param.key,
-                "type": param.type,
-                "value": value,
-                "default": param.default,
-                "description": param.description,
-                "choices": param.choices,
-                "minimum": param.minimum,
-                "maximum": param.maximum,
-                "overridden": overridden,
-                "updated_by": row[2] if overridden else None,
-                "updated_at": row[3] if overridden else None,
-            })
+            out.append(
+                {
+                    "key": param.key,
+                    "type": param.type,
+                    "value": value,
+                    "default": param.default,
+                    "description": param.description,
+                    "choices": param.choices,
+                    "minimum": param.minimum,
+                    "maximum": param.maximum,
+                    "overridden": overridden,
+                    "updated_by": row[2] if overridden else None,
+                    "updated_at": row[3] if overridden else None,
+                }
+            )
         return out

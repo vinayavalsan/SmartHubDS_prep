@@ -67,7 +67,10 @@ def train_flow(
     logger = get_run_logger()
     logger.info(
         "STEP 3 train-model starting: lead_type=%s (%s), version=%s, mlflow=%s",
-        lead_type_name, lead_type_id, version or "latest", register_mlflow,
+        lead_type_name,
+        lead_type_id,
+        version or "latest",
+        register_mlflow,
     )
 
     result = _train_task(lead_type_id, lead_type_name, version, register_mlflow)
@@ -76,8 +79,11 @@ def train_flow(
     opt = result["optimizer_summary"] or {}
     logger.info(
         "Trained %s model %s: ROC AUC=%.4f, rows=%s -> %s (promoted=%s)",
-        lead_type_name, result.get("model_version"), m.get("roc_auc", float("nan")),
-        result["prep_summary"]["training_rows"], result["model_path"],
+        lead_type_name,
+        result.get("model_version"),
+        m.get("roc_auc", float("nan")),
+        result["prep_summary"]["training_rows"],
+        result["model_path"],
         result.get("promoted"),
     )
 
@@ -163,6 +169,7 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     sections (Model / Performance / Bid optimizer / Features) instead of one
     long flat field list.
     """
+
     def _f(value, fmt="{:.4f}"):
         try:
             return fmt.format(float(value))
@@ -187,30 +194,43 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
         f"Features · {fb['total']} "
         f"({fb['n_mandatory']} mandatory + {len(fb['optional_on'])} optional)"
     )
+    model_label = f"{lineage.get('model_type')} (cal={lineage.get('calibrated')})"
     groups = [
-        ("Model", {
-            "Model": f"{lineage.get('model_type')} (cal={lineage.get('calibrated')})",
-            "Rows trained": result["prep_summary"].get("training_rows"),
-            "Data range": (
-                f"{lineage.get('data_min_created_at')} → "
-                f"{lineage.get('data_max_created_at')}"
-            ),
-            "Trained on table": f"`{lineage.get('training_table_version')}`",
-        }),
-        ("Performance (held-out)", {
-            "ROC AUC": _f(m.get("roc_auc")),
-            "PR AUC": _f(m.get("pr_auc")),
-            "Log loss": _f(m.get("log_loss")),
-            "Calibration error": _f(m.get("calibration_error")),
-        }),
-        ("Bid optimizer (predicted)", {
-            "Profit lift %": _f(opt.get("expected_profit_lift_pct"), "{:.2%}"),
-            "Avg recommended CM": _f(opt.get("avg_recommended_bid_cm_if_won")),
-        }),
-        (feature_title, {
-            "Optional included": ", ".join(fb["optional_on"]) or "none",
-            "Optional excluded": ", ".join(fb["optional_off"]) or "none",
-        }),
+        (
+            "Model",
+            {
+                "Model": model_label,
+                "Rows trained": result["prep_summary"].get("training_rows"),
+                "Data range": (
+                    f"{lineage.get('data_min_created_at')} → "
+                    f"{lineage.get('data_max_created_at')}"
+                ),
+                "Trained on table": f"`{lineage.get('training_table_version')}`",
+            },
+        ),
+        (
+            "Performance (held-out)",
+            {
+                "ROC AUC": _f(m.get("roc_auc")),
+                "PR AUC": _f(m.get("pr_auc")),
+                "Log loss": _f(m.get("log_loss")),
+                "Calibration error": _f(m.get("calibration_error")),
+            },
+        ),
+        (
+            "Bid optimizer (predicted)",
+            {
+                "Profit lift %": _f(opt.get("expected_profit_lift_pct"), "{:.2%}"),
+                "Avg recommended CM": _f(opt.get("avg_recommended_bid_cm_if_won")),
+            },
+        ),
+        (
+            feature_title,
+            {
+                "Optional included": ", ".join(fb["optional_on"]) or "none",
+                "Optional excluded": ", ".join(fb["optional_off"]) or "none",
+            },
+        ),
     ]
     notifications.notify_success_grouped(
         "train-model",

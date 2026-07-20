@@ -21,8 +21,8 @@ from smarthub.core import paths, task_config
 from smarthub.feature_engineering import features as fe
 
 # Target + revenue come from the feature_engineering contract.
-TARGET_COL = fe.TARGET_COLUMN          # "won_flag"
-REVENUE_COL = fe.REVENUE_COLUMN        # "expected_revenue"
+TARGET_COL = fe.TARGET_COLUMN  # "won_flag"
+REVENUE_COL = fe.REVENUE_COLUMN  # "expected_revenue"
 
 
 def lead_type_name(lead_type_id: int) -> str:
@@ -39,7 +39,7 @@ def feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
 # TASK configs — from config/smarthub.yaml ([training] / [prediction]).
 # The constants are the fallback defaults if the ini/key is absent.
 # =============================================================================
-MODEL_TYPE = "lightgbm"                 # fallback; ini [training] model_type wins
+MODEL_TYPE = "lightgbm"  # fallback; ini [training] model_type wins
 RANDOM_SEED = task_config.get_int("training", "random_seed", 42)
 DROP_ZERO_VARIANCE = task_config.get_bool("training", "drop_zero_variance", True)
 CALIBRATE = task_config.get_bool("training", "calibrate", True)
@@ -117,8 +117,8 @@ LIGHTGBM_PARAMS = {
 # BUSINESS settings — from the Postgres config store (Streamlit Config page).
 # Fall back to the constants if the store is unreachable/unset.
 # =============================================================================
-TARGET_CM = 0.25   # fallback for business `target_cm`
-MIN_BID = 0.25     # fallback for business `bid_floor`
+TARGET_CM = 0.25  # fallback for business `target_cm`
+MIN_BID = 0.25  # fallback for business `bid_floor`
 _CONFIG_ENV = os.getenv("SMARTHUB_CONFIG_ENV", "prod")
 
 

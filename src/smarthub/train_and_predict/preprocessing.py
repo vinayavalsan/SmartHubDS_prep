@@ -77,9 +77,7 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
         table[col] = pd.NA
 
     frame = normalize_model_frame(table, numeric, categorical)
-    frame[config.TARGET_COL] = pd.to_numeric(
-        frame[config.TARGET_COL], errors="coerce"
-    )
+    frame[config.TARGET_COL] = pd.to_numeric(frame[config.TARGET_COL], errors="coerce")
 
     keep = list(feature_cols) + [config.TARGET_COL]
     if config.REVENUE_COL in frame.columns:
@@ -96,9 +94,7 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
         "training_rows": int(len(frame)),
         "dropped_rows": int(raw_rows - len(frame)),
         "missing_feature_columns": missing,
-        "win_rate": (
-            float(frame[config.TARGET_COL].mean()) if len(frame) else None
-        ),
+        "win_rate": (float(frame[config.TARGET_COL].mean()) if len(frame) else None),
         # Lineage — what data this training table came from.
         "training_table_version": resolved_version,
         "data_min_created_at": manifest.get("data_min_created_at"),

@@ -251,9 +251,7 @@ def build_metric_plot_data(
         ).reset_index()
         plot_df["value"] = contribution_margin(plot_df["profit"], plot_df["rev"])
     elif metric_col == "winrate":
-        plot_df = grouped.agg(
-            won=("won", "sum"), count=("id", "count")
-        ).reset_index()
+        plot_df = grouped.agg(won=("won", "sum"), count=("id", "count")).reset_index()
         plot_df["value"] = win_rate(plot_df["won"], plot_df["count"])
     else:
         plot_df = grouped[metric_col].sum().reset_index(name="value")

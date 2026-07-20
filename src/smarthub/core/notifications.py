@@ -132,7 +132,7 @@ def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) 
         if v not in (None, "", [])
     ]
     for i in range(0, len(field_blocks), 10):  # Slack caps 10 fields/section
-        blocks.append({"type": "section", "fields": field_blocks[i:i + 10]})
+        blocks.append({"type": "section", "fields": field_blocks[i : i + 10]})
 
     if error:
         text = str(error)
@@ -278,9 +278,7 @@ def _build_grouped_payload(
         }
     ]
     if headline:
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": headline}}
-        )
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": headline}})
 
     for title, fields in groups:
         fb = _field_blocks(fields)
@@ -292,14 +290,12 @@ def _build_grouped_payload(
             first["text"] = {"type": "mrkdwn", "text": f"*{title}*"}
         blocks.append(first)
         for i in range(10, len(fb), 10):
-            blocks.append({"type": "section", "fields": fb[i:i + 10]})
+            blocks.append({"type": "section", "fields": fb[i : i + 10]})
 
     ctx = f"env: `{_env_label()}` · {_utc_now_str()}"
     if footer_extra:
         ctx += f" · {footer_extra}"
-    blocks.append(
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]}
-    )
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]})
 
     # Fallback text (notifications, screen readers, no-block clients).
     lines = [f"{emoji} {header}"]
@@ -354,9 +350,13 @@ def notify_success_grouped(
 def _run_url(flow_run) -> str:
     """Best-effort Prefect UI URL for a flow run (blank if unknown)."""
     base = (
-        os.environ.get("PREFECT_UI_URL")
-        or os.environ.get("PREFECT_API_URL", "").replace("/api", "")
-    ).strip().rstrip("/")
+        (
+            os.environ.get("PREFECT_UI_URL")
+            or os.environ.get("PREFECT_API_URL", "").replace("/api", "")
+        )
+        .strip()
+        .rstrip("/")
+    )
     run_id = getattr(flow_run, "id", None)
     if base and run_id:
         return f"{base}/runs/flow-run/{run_id}"

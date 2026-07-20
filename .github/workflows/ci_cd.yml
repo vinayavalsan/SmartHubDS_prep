@@ -43,6 +43,12 @@ jobs:
           # imports are guarded/lazy, so the suite runs on this env.
           pip install -e ".[dev,validation]" joblib
 
+      - name: Lint (isort)
+        run: isort --check-only --diff src/smarthub tests
+
+      - name: Lint (black)
+        run: black --check --diff src/smarthub tests
+
       - name: Lint (flake8)
         run: flake8 src/smarthub tests
 

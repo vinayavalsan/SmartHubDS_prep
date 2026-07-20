@@ -43,7 +43,7 @@ def _split_train_test(frame, test_size):
     n = len(frame)
     n_test = max(1, int(round(n * test_size)))
     train_df = frame.iloc[: n - n_test]
-    test_df = frame.iloc[n - n_test:]
+    test_df = frame.iloc[n - n_test :]
     return train_df, test_df
 
 
@@ -130,8 +130,10 @@ def run_training(
     pred, pred_class, model_metrics = metrics.evaluate_model(model, X_test, y_test)
     log.info(
         "ROC AUC=%.4f  PR AUC=%.4f  logloss=%.4f  brier=%.4f",
-        model_metrics["roc_auc"], model_metrics["pr_auc"],
-        model_metrics["log_loss"], model_metrics["brier_score"],
+        model_metrics["roc_auc"],
+        model_metrics["pr_auc"],
+        model_metrics["log_loss"],
+        model_metrics["brier_score"],
     )
 
     # Fixed once so the challenger and the currently-serving model (re-evaluated
@@ -204,8 +206,10 @@ def run_training(
     log.info(
         "Lineage: model=%s trained on table version %s "
         "(data %s -> %s, %s source rows)",
-        model_type, lineage["training_table_version"],
-        lineage["data_min_created_at"], lineage["data_max_created_at"],
+        model_type,
+        lineage["training_table_version"],
+        lineage["data_min_created_at"],
+        lineage["data_max_created_at"],
         lineage["source_row_count"],
     )
     evaluation_summary = {
@@ -263,13 +267,15 @@ def run_training(
         registry.promote(lead_type_name, manifest["version"], reason=decision.reason)
         log.info(
             "Promoted %s to currently-serving for '%s'.",
-            manifest["version"], lead_type_name,
+            manifest["version"],
+            lead_type_name,
         )
     else:
         log.warning(
             "Challenger %s NOT promoted for '%s'; currently-serving model "
             "unchanged.",
-            manifest["version"], lead_type_name,
+            manifest["version"],
+            lead_type_name,
         )
 
     # --- MLflow --------------------------------------------------------------
@@ -347,9 +353,7 @@ def _evaluate_currently_serving_model(
 
         serving_feature_cols = serving_manifest.get("feature_cols") or []
         X_serving = test_df[serving_feature_cols]
-        _, _, serving_metrics = metrics.evaluate_model(
-            serving_model, X_serving, y_test
-        )
+        _, _, serving_metrics = metrics.evaluate_model(serving_model, X_serving, y_test)
         serving_optimizer_result = predict.run_bid_optimizer_evaluation(
             test_eval_df=test_df,
             model=serving_model,
@@ -363,7 +367,8 @@ def _evaluate_currently_serving_model(
         )
         log.info(
             "Currently-serving model (%s) re-scored on this test set: ROC AUC=%.4f",
-            serving_manifest.get("version"), serving_metrics["roc_auc"],
+            serving_manifest.get("version"),
+            serving_metrics["roc_auc"],
         )
         return serving_metrics, serving_optimizer_summary
     except Exception as exc:  # noqa: BLE001 - corrupt pointer, bad schema, etc.
@@ -371,7 +376,8 @@ def _evaluate_currently_serving_model(
             "Could not load/score the currently-serving model for '%s' on "
             "the current test set (%s); treating as nothing comparable "
             "currently serving.",
-            lead_type_name, exc,
+            lead_type_name,
+            exc,
         )
         return None, None
 

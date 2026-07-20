@@ -47,7 +47,7 @@ def test_duckdb_read_projects_columns(tmp_path):
     )
     # Ask for a subset (plus a column that doesn't exist -> silently ignored).
     out = storage.read_duckdb_table(path=db, columns=["id", "won", "nope"])
-    assert list(out.columns) == ["id", "won"]      # projected; missing col dropped
+    assert list(out.columns) == ["id", "won"]  # projected; missing col dropped
     assert len(out) == 2
 
 
@@ -73,7 +73,7 @@ def test_duckdb_window_projects_columns(tmp_path):
     # Project to just id; window filter still works on the unselected created_at.
     out = storage.read_duckdb_window(days=5, path=db, columns=["id"])
     assert list(out.columns) == ["id"]
-    assert out["id"].tolist() == [2]               # only the recent row
+    assert out["id"].tolist() == [2]  # only the recent row
 
 
 def test_duckdb_window(tmp_path):
@@ -172,9 +172,7 @@ def test_parquet_splits_by_day(tmp_path):
 def test_parquet_falls_back_to_created_at_when_date_col_missing(tmp_path):
     """Partitioning falls back to created_at when the date column is missing."""
     root = tmp_path / "leads"
-    df = pd.DataFrame(
-        {"id": [1], "created_at": pd.to_datetime(["2026-06-20 02:00"])}
-    )
+    df = pd.DataFrame({"id": [1], "created_at": pd.to_datetime(["2026-06-20 02:00"])})
     storage.append_parquet(df, root, date_col="pst_date")
     assert (root / "2026" / "06" / "20-06-2026.parquet").exists()
 

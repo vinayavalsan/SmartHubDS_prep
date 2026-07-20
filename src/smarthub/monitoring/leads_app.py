@@ -269,7 +269,9 @@ def display_plot_type_2(df):
         freq_label = st.selectbox("Frequency", options=list(_FREQ_MAP.keys()), index=0)
     with col2:
         metric_cols = st.multiselect(
-            "y-axis metrics", options=metric_options, default=["winrate"],
+            "y-axis metrics",
+            options=metric_options,
+            default=["winrate"],
             key="plot_type_2_metrics",
         )
     with col3:
@@ -414,12 +416,16 @@ def display_plot_type_3(df):
         )
     with col2:
         size_lbl = st.selectbox(
-            "Bin width", options=list(_BUCKET_OPTIONS.keys()), index=1,
+            "Bin width",
+            options=list(_BUCKET_OPTIONS.keys()),
+            index=1,
             key="plot_type_3_frequency",
         )
     with col3:
         metric_cols = st.multiselect(
-            "y-axis metrics", options=metric_options, default=["winrate"],
+            "y-axis metrics",
+            options=metric_options,
+            default=["winrate"],
             key="plot_type_3_metrics",
         )
     with col4:
@@ -629,7 +635,9 @@ def _render_filters(df):
         st.session_state.selected_states = []
 
     selected_states = st.sidebar.multiselect(
-        label="states", options=available_states, key="selected_states",
+        label="states",
+        options=available_states,
+        key="selected_states",
         label_visibility="collapsed",
     )
     if selected_states:

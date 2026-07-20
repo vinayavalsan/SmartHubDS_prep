@@ -123,7 +123,7 @@ class LeadPing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
     pst_date: Mapped[datetime | None] = mapped_column(Date)
-    pst_hour: Mapped[int | None] = mapped_column(Integer)      # Pacific hour 0–23
+    pst_hour: Mapped[int | None] = mapped_column(Integer)  # Pacific hour 0–23
     exp_rev: Mapped[float | None] = mapped_column(Numeric(10, 2))  # backend R
 
 
@@ -319,15 +319,12 @@ def expected_revenue_subquery(selected_only: bool = True):
     sqlalchemy.Subquery
         Subquery aliased ``listing_expected_revenue``.
     """
-    stmt = (
-        select(
-            LeadPingListing.lead_ping_id.label("lead_ping_id"),
-            func.sum(LeadPingListing.est_payout).label("expected_revenue"),
-            func.sum(LeadPingListing.payout).label("realized_payout"),
-            func.count().label("num_selected_listings"),
-        )
-        .group_by(LeadPingListing.lead_ping_id)
-    )
+    stmt = select(
+        LeadPingListing.lead_ping_id.label("lead_ping_id"),
+        func.sum(LeadPingListing.est_payout).label("expected_revenue"),
+        func.sum(LeadPingListing.payout).label("realized_payout"),
+        func.count().label("num_selected_listings"),
+    ).group_by(LeadPingListing.lead_ping_id)
     if selected_only:
         stmt = stmt.where(LeadPingListing.selected == TRUE_TOKEN)
     return stmt.subquery("listing_expected_revenue")

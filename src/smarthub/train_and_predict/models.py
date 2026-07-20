@@ -91,9 +91,7 @@ def build_lightgbm_model(
     monotone = [1 if col == "bid" else 0 for col in ordered]
 
     classifier = LGBMClassifier(monotone_constraints=monotone, **model_params)
-    pipeline = Pipeline(
-        [("preprocessor", preprocessor), ("classifier", classifier)]
-    )
+    pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", classifier)])
     return _maybe_calibrate(pipeline, calibrate)
 
 
@@ -109,8 +107,9 @@ def _maybe_calibrate(pipeline, calibrate):
     return CalibratedClassifierCV(pipeline, method="isotonic", cv=3)
 
 
-def build_model(model_type, numeric_features, categorical_features, model_params,
-                calibrate=False):
+def build_model(
+    model_type, numeric_features, categorical_features, model_params, calibrate=False
+):
     """Dispatch to the requested model family."""
     if model_type == "logistic_regression":
         return build_logistic_regression_model(

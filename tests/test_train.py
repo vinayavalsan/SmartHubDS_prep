@@ -49,6 +49,7 @@ def test_evaluate_currently_serving_model_survives_registry_crash(monkeypatch):
     propagate and crash the training run -- this exact failure mode took
     down a real training flow (see docs/CHANGELOG.md).
     """
+
     def _boom(lead_type_name):
         raise ValueError("Expecting value: line 1 column 1 (char 0)")
 
@@ -65,9 +66,11 @@ def test_evaluate_currently_serving_model_survives_schema_mismatch(monkeypatch):
     """An incompatible feature schema (test_df missing a trained-on column)
     also degrades gracefully rather than raising a KeyError."""
     monkeypatch.setattr(
-        registry, "load_currently_serving_model",
+        registry,
+        "load_currently_serving_model",
         lambda lead_type_name: (
-            object(), {"version": "v1_x", "feature_cols": ["not_a_real_column"]}
+            object(),
+            {"version": "v1_x", "feature_cols": ["not_a_real_column"]},
         ),
     )
     log = _StubLogger()

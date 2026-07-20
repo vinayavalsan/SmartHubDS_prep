@@ -52,9 +52,7 @@ def _data() -> dict:
         with open(path, encoding="utf-8") as fh:
             loaded = yaml.safe_load(fh)
     except (OSError, yaml.YAMLError) as exc:
-        logger.warning(
-            "Could not read task config %s (%s); using defaults.", path, exc
-        )
+        logger.warning("Could not read task config %s (%s); using defaults.", path, exc)
         return {}
     return loaded if isinstance(loaded, dict) else {}
 

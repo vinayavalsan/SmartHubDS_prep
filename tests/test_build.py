@@ -21,11 +21,9 @@ def test_build_metadata_counts():
     table = pd.DataFrame(
         {
             "won_flag": [1, 0, 1],
-            "created_at": pd.to_datetime(
-                ["2026-06-22", "2026-06-20", "2026-06-22"]
-            ),
+            "created_at": pd.to_datetime(["2026-06-22", "2026-06-20", "2026-06-22"]),
             "expected_revenue": [10.0, 0.0, 5.0],
-            "created_dayofweek": [0, 5, 0],   # Mon, Sat, Mon
+            "created_dayofweek": [0, 5, 0],  # Mon, Sat, Mon
             "is_workday": [1, 0, 1],
             "traffic_tier": ["a", "a", "b"],
             "age_missing": [0, 0, 1],
