@@ -256,12 +256,12 @@ matches black's style, so the two never fight over the same line. Config
 lives in `pyproject.toml` (`[tool.isort]` / `[tool.black]`); `.flake8`'s
 `E203`/`W503` ignores exist so flake8 doesn't flag black's own style choices.
 
-**CI** (`.github/workflows/ci_cd.yml`) runs isort, black, flake8, then pytest
-on every push/PR across Python 3.11 and 3.12 — a PR fails if any of the four
-fail. **pre-commit** (`.pre-commit-config.yaml`) runs the same isort + black +
-flake8 (plus basic hygiene hooks) on every commit, and the full `pytest` suite
-on every push (kept out of the commit hook since it's slower). Enable both
-once with:
+**CI** (`.github/workflows/ci_cd.yml`) runs isort, black and flake8 as three
+independent jobs, then pytest (which needs all three), across Python 3.11 and
+3.12, on every push/PR — a PR fails if any of the four fail. **pre-commit**
+(`.pre-commit-config.yaml`) runs the same isort + black + flake8 (plus basic
+hygiene hooks) on every commit, and the full `pytest` suite on every push
+(kept out of the commit hook since it's slower). Enable both once with:
 
 ```bash
 pip install -e ".[dev]"
@@ -272,27 +272,44 @@ pre-commit run --all-files --hook-stage pre-push   # optional: run pytest now
 
 ## CI/CD
 
-**One pipeline** (`.github/workflows/ci_cd.yml`), two stages:
+**One pipeline** (`.github/workflows/ci_cd.yml`):
 
-- **`lint-test`** — isort, black, flake8, then pytest across Python 3.11 and
-  3.12, on every push/PR. Any one of the four failing fails the whole job (and
-  blocks `build-push` below, which needs it).
-- **`build-push`** — `needs: lint-test`, so it only starts **after the whole
-  test matrix passes** (never in parallel, never on a red build), and only on a
-  push to the deploy branch. Builds the `worker` + `dashboard` images and pushes
-  them to Docker Hub. Both images share **one repo** (`<account>/smarthub`) —
-  the free tier's single private repo — differentiated by a **tag prefix**:
+- **`isort` / `black` / `flake8`** — three independent jobs, each across
+  Python 3.11 and 3.12, on every push/PR.
+- **`pytest`** — `needs` all three lint jobs, same Python matrix.
+- **`build-ready`** — a no-op gate: `needs: pytest`, and only runs on a push
+  to the deploy branch (`smarthub.etl.pipeline`). Exists purely so
+  `build-worker`/`build-dashboard` below can both depend on "tests passed AND
+  this is the deploy branch" without repeating that condition twice.
+- **`build-worker` / `build-dashboard`** — both `needs: build-ready`, so they
+  run **in parallel** once it's clear the images should be built (never
+  before pytest passes, never on a PR). Both images share **one repo**
+  (`<account>/smarthub`) — the free tier's single private repo —
+  differentiated by a **tag prefix**:
 
 ```
 <account>/smarthub:worker-latest      <account>/smarthub:worker-<sha>
 <account>/smarthub:dashboard-latest   <account>/smarthub:dashboard-<sha>
 ```
 
+- **`notify`** — `needs` all of the above, `if: always()` (so it still runs
+  when something upstream failed), and gated the same way as the build jobs
+  (push to `smarthub.etl.pipeline` only — PRs stay quiet; GitHub's own
+  per-check status already covers those). Posts one Slack message via
+  `smarthub.core.notifications` (same webhook, same Block Kit style as the
+  Prefect flow-failure alerts): on success, the `docker pull` commands for
+  both images; on failure, which stage failed and a trimmed excerpt of its
+  actual output (the isort/black diff, the flake8 findings, or the pytest
+  failure summary — for a `build-worker`/`build-dashboard` failure it's just
+  a pointer to that job's log, since `docker/build-push-action` doesn't
+  expose its build log as a capturable value). See
+  `.github/scripts/notify_ci.py`.
+
 **No inbound access to the server is needed** — the server pulls the new images
 itself:
 
 ```
-push → flake8 + pytest → build worker + dashboard → push to <account>/smarthub
+push → isort/black/flake8 + pytest → build worker + dashboard (parallel) → push to <account>/smarthub
      → Watchtower (on the server) pulls the -latest tags → recreates the containers
      → worker re-runs `prefect deploy --all` on boot
 ```
@@ -314,7 +331,12 @@ locally (it would pull the Hub image and clobber your local build).
 Set up once:
 
 - **GitHub repo secrets:** `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (a Docker Hub
-  access token with **Read & Write** — a read-only token fails the push).
+  access token with **Read & Write** — a read-only token fails the push);
+  `SLACK_WEBHOOK_URL` for the `notify` job (same value as the runtime
+  `SLACK_WEBHOOK_URL` env var used by `core/notifications.py` — GitHub Actions
+  can't read that one directly, it needs its own copy as a repo secret).
+  Without it, `notify` simply no-ops (same "disabled when unconfigured"
+  behavior as the Prefect alerts).
 - **On the server `.env`:** `IMAGE_REPO=<account>/smarthub` (must equal
   `${DOCKERHUB_USERNAME}/smarthub`); `IMAGE_TAG=latest` for rolling deploys.
 - **Private repo:** `docker login` on the host so Watchtower can pull it.

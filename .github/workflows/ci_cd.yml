@@ -127,6 +127,13 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
 
+    # Same content on both matrix legs (isort's output only depends on the
+    # source, not the Python version), so which leg's value the `notify` job
+    # sees (GitHub doesn't guarantee which, for a matrixed job's outputs)
+    # doesn't matter here.
+    outputs:
+      error_message: ${{ steps.run_isort.outputs.message }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -141,7 +148,19 @@ jobs:
           pip install -e ".[dev,validation]" joblib
 
       - name: Run isort
-        run: isort --check-only --diff src/smarthub tests
+        id: run_isort
+        run: |
+          set +e
+          output=$(isort --check-only --diff src/smarthub tests 2>&1)
+          status=$?
+          echo "$output"
+          trimmed=$(printf '%s' "$output" | tail -c 4000)
+          {
+            echo "message<<CI_NOTIFY_EOF"
+            echo "$trimmed"
+            echo "CI_NOTIFY_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $status
 
   black:
     name: black (py${{ matrix.python-version }})
@@ -151,6 +170,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+
+    # Same content on both matrix legs (black's output only depends on the
+    # source, not the Python version) -- see the isort job's comment above.
+    outputs:
+      error_message: ${{ steps.run_black.outputs.message }}
 
     steps:
       - uses: actions/checkout@v4
@@ -166,7 +190,19 @@ jobs:
           pip install -e ".[dev,validation]" joblib
 
       - name: Run black
-        run: black --check --diff src/smarthub tests
+        id: run_black
+        run: |
+          set +e
+          output=$(black --check --diff src/smarthub tests 2>&1)
+          status=$?
+          echo "$output"
+          trimmed=$(printf '%s' "$output" | tail -c 4000)
+          {
+            echo "message<<CI_NOTIFY_EOF"
+            echo "$trimmed"
+            echo "CI_NOTIFY_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $status
 
   flake8:
     name: flake8 (py${{ matrix.python-version }})
@@ -176,6 +212,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+
+    # Same content on both matrix legs (flake8's output only depends on the
+    # source, not the Python version) -- see the isort job's comment above.
+    outputs:
+      error_message: ${{ steps.run_flake8.outputs.message }}
 
     steps:
       - uses: actions/checkout@v4
@@ -191,7 +232,19 @@ jobs:
           pip install -e ".[dev,validation]" joblib
 
       - name: Run flake8
-        run: flake8 src/smarthub tests
+        id: run_flake8
+        run: |
+          set +e
+          output=$(flake8 src/smarthub tests 2>&1)
+          status=$?
+          echo "$output"
+          trimmed=$(printf '%s' "$output" | tail -c 4000)
+          {
+            echo "message<<CI_NOTIFY_EOF"
+            echo "$trimmed"
+            echo "CI_NOTIFY_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $status
 
   pytest:
     name: pytest (py${{ matrix.python-version }})
@@ -207,6 +260,15 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
 
+    # Unlike isort/black/flake8, pytest's result *could* in principle differ
+    # between 3.11 and 3.12 -- if it ever does, the `notify` job's message
+    # reflects whichever matrix leg's output GitHub happens to expose (not
+    # guaranteed which, for a matrixed job's outputs), so it may not name
+    # both failures. Job status itself (needs.pytest.result) is unaffected --
+    # it's failure if *either* leg fails.
+    outputs:
+      error_message: ${{ steps.run_pytest.outputs.message }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -221,7 +283,19 @@ jobs:
           pip install -e ".[dev,validation]" joblib
 
       - name: Run pytest
-        run: pytest -q
+        id: run_pytest
+        run: |
+          set +e
+          output=$(pytest -q 2>&1)
+          status=$?
+          echo "$output"
+          trimmed=$(printf '%s' "$output" | tail -c 4000)
+          {
+            echo "message<<CI_NOTIFY_EOF"
+            echo "$trimmed"
+            echo "CI_NOTIFY_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $status
 
   build-ready:
     name: Build Ready
@@ -245,6 +319,13 @@ jobs:
     env:
       REPO: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
 
+    # docker/build-push-action doesn't expose its build log as a step
+    # output, so (unlike the lint/test jobs above) a build failure here
+    # can't carry the actual log text into the `notify` job -- just a
+    # pointer to go look at this job's log.
+    outputs:
+      error_message: ${{ steps.build_worker_failed.outputs.message }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -256,6 +337,8 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push worker image
+        id: build_worker_image
+        continue-on-error: true
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -267,6 +350,13 @@ jobs:
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
 
+      - name: Fail the job if the build/push failed
+        id: build_worker_failed
+        if: steps.build_worker_image.outcome == 'failure'
+        run: |
+          echo "message=Docker build/push failed for the worker image. See this job's log for the full build output." >> "$GITHUB_OUTPUT"
+          exit 1
+
   build-dashboard:
     name: build dashboard image
     needs: build-ready
@@ -275,6 +365,11 @@ jobs:
 
     env:
       REPO: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
+
+    # See build-worker's comment above -- no captured log text here, just a
+    # pointer to this job's log.
+    outputs:
+      error_message: ${{ steps.build_dashboard_failed.outputs.message }}
 
     steps:
       - uses: actions/checkout@v4
@@ -287,6 +382,8 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push dashboard image
+        id: build_dashboard_image
+        continue-on-error: true
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -297,3 +394,68 @@ jobs:
             ${{ env.REPO }}:dashboard-${{ github.sha }}
           cache-from: type=gha,scope=dashboard
           cache-to: type=gha,mode=max,scope=dashboard
+
+      - name: Fail the job if the build/push failed
+        id: build_dashboard_failed
+        if: steps.build_dashboard_image.outcome == 'failure'
+        run: |
+          echo "message=Docker build/push failed for the dashboard image. See this job's log for the full build output." >> "$GITHUB_OUTPUT"
+          exit 1
+
+  notify:
+    name: Notify Slack
+    needs:
+      - isort
+      - black
+      - flake8
+      - pytest
+      - build-worker
+      - build-dashboard
+    # Only for the actual deploy pipeline (the one case where images get
+    # built) -- PRs and other branches stay quiet here; GitHub's own
+    # per-check status already covers those. `if: always()` is required so
+    # this job still runs (and can report a FAILURE) even though some of
+    # its `needs` above didn't succeed.
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/smarthub.etl.pipeline'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Only smarthub.core.notifications is needed (stdlib-only Slack
+      # webhook client) -- installing the base package is enough, no extras.
+      - name: Install smarthub
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Notify Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          RESULT_ISORT: ${{ needs.isort.result }}
+          RESULT_BLACK: ${{ needs.black.result }}
+          RESULT_FLAKE8: ${{ needs.flake8.result }}
+          RESULT_PYTEST: ${{ needs.pytest.result }}
+          RESULT_BUILD_WORKER: ${{ needs.build-worker.result }}
+          RESULT_BUILD_DASHBOARD: ${{ needs.build-dashboard.result }}
+          MSG_ISORT: ${{ needs.isort.outputs.error_message }}
+          MSG_BLACK: ${{ needs.black.outputs.error_message }}
+          MSG_FLAKE8: ${{ needs.flake8.outputs.error_message }}
+          MSG_PYTEST: ${{ needs.pytest.outputs.error_message }}
+          MSG_BUILD_WORKER: ${{ needs.build-worker.outputs.error_message }}
+          MSG_BUILD_DASHBOARD: ${{ needs.build-dashboard.outputs.error_message }}
+          GITHUB_SHA_FULL: ${{ github.sha }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
+          GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python .github/scripts/notify_ci.py

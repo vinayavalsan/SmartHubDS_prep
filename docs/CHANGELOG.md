@@ -1,6 +1,44 @@
 # Changelog
 
 
+## 2026-07-21
+
+### CI/CD: Slack notification on the deploy pipeline (success = image names, failure = stage + log)
+- New **`notify`** job in `.github/workflows/ci_cd.yml` — `needs` every
+  other job (`isort`, `black`, `flake8`, `pytest`, `build-worker`,
+  `build-dashboard`), `if: always()`, gated to a push on the deploy branch
+  (`smarthub.etl.pipeline`) only — PRs and other branches stay quiet, same
+  as the existing build jobs. Reuses `smarthub.core.notifications`
+  (`notify_success`/`notify_failure`) so the message looks and behaves
+  exactly like the existing Prefect flow-failure Slack alerts: same webhook
+  env var (`SLACK_WEBHOOK_URL`), same Block Kit formatting, same
+  disabled-when-unconfigured behavior.
+- **On success**: the `docker pull` commands for both the `worker` and
+  `dashboard` images (`-latest` and `-<sha>` tags), plus branch/commit/actor/
+  run-link.
+- **On failure**: which stage(s) failed and a trimmed excerpt of the actual
+  tool output (the isort/black diff, the flake8 findings, or the pytest
+  failure summary) — added an output-capture step to `isort`/`black`/
+  `flake8`/`pytest` (each keeps failing normally; it also now exposes a
+  `error_message` job output with its last ~4000 chars of output).
+  `build-worker`/`build-dashboard` failures fall back to "see this job's
+  log" since `docker/build-push-action` doesn't expose its build log as a
+  capturable output — flagged explicitly rather than silently omitted.
+- New `.github/scripts/notify_ci.py` — reads the six jobs' results/messages
+  from env vars, builds the success/failure fields, and calls
+  `notify_success`/`notify_failure`. Verified locally (monkeypatched
+  `notifications._post`) for both a clean run and a mid-pipeline failure
+  (downstream jobs correctly reported as "skipped as a result", not as
+  additional failures).
+- **New required GitHub secret**: `SLACK_WEBHOOK_URL` (mirrors the runtime
+  env var of the same name; GitHub Actions can't read the runtime one
+  directly).
+- README's "Testing & linting" and "CI/CD" sections updated: fixed the
+  stale `lint-test`/`build-push` job names left over from the user's own
+  `isort`/`black`/`flake8`/`pytest`/`build-ready`/`build-worker`/
+  `build-dashboard` job split, and documented the new `notify` job and
+  secret.
+
 ## 2026-07-17
 
 ### Enforced formatting/import-order/lint/test checks (pre-commit + CI)
