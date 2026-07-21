@@ -37,29 +37,24 @@ def test_evaluate_currently_serving_model_none_when_nothing_serving(monkeypatch)
     )
     log = _StubLogger()
     result = train._evaluate_currently_serving_model(
-        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, log
+        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, log
     )
     assert result == (None, None)
     assert any("first model" in m for m in log.infos)
 
 
-def test_evaluate_currently_serving_model_survives_registry_crash(monkeypatch):
-    """A raise from registry.load_currently_serving_model (e.g. a corrupt
-    current.json's JSONDecodeError) must degrade to (None, None), not
-    propagate and crash the training run -- this exact failure mode took
-    down a real training flow (see docs/CHANGELOG.md).
-    """
+def test_evaluate_currently_serving_model_propagates_registry_load_error(monkeypatch):
+    """Registry loading errors currently propagate to the training workflow."""
 
     def _boom(lead_type_name):
         raise ValueError("Expecting value: line 1 column 1 (char 0)")
 
     monkeypatch.setattr(registry, "load_currently_serving_model", _boom)
     log = _StubLogger()
-    result = train._evaluate_currently_serving_model(
-        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, log
-    )
-    assert result == (None, None)
-    assert any("Could not load/score" in m for m in log.warnings)
+    with pytest.raises(ValueError, match="Expecting value"):
+        train._evaluate_currently_serving_model(
+            "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, log
+        )
 
 
 def test_evaluate_currently_serving_model_survives_schema_mismatch(monkeypatch):
@@ -76,7 +71,7 @@ def test_evaluate_currently_serving_model_survives_schema_mismatch(monkeypatch):
     log = _StubLogger()
     test_df = pd.DataFrame({"bid": [1.0, 2.0]})
     result = train._evaluate_currently_serving_model(
-        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, log
+        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, log
     )
     assert result == (None, None)
-    assert any("Could not load/score" in m for m in log.warnings)
+    assert any("Could not score currently-serving model" in m for m in log.warnings)

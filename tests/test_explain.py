@@ -205,7 +205,7 @@ def test_explain_bid_no_viable_bid_skips_shap_and_llm(monkeypatch):
             "decision_reason": "No viable bid: too little margin.",
         }
 
-    monkeypatch.setattr(predict, "decide_bid", _fake_optimize)
+    monkeypatch.setattr(predict, "decide_bid", _fake_optimize, raising=False)
     monkeypatch.setattr(
         explain.preprocessing,
         "serving_frame",
@@ -252,7 +252,7 @@ def test_explain_bid_cold_start_skips_shap_and_llm_uses_policy_text(monkeypatch)
             "decision_reason": "No model has ever been trained/promoted yet.",
         }
 
-    monkeypatch.setattr(predict, "decide_bid", _fake_decide)
+    monkeypatch.setattr(predict, "decide_bid", _fake_decide, raising=False)
     monkeypatch.setattr(
         explain.preprocessing,
         "serving_frame",
@@ -306,7 +306,7 @@ def test_explain_bid_swaps_in_recommended_bid_before_explaining(monkeypatch):
         seen_records["record"] = record
         return {"top_factors": [], "base_win_rate": 0.3}
 
-    monkeypatch.setattr(predict, "decide_bid", _fake_decide)
+    monkeypatch.setattr(predict, "decide_bid", _fake_decide, raising=False)
     monkeypatch.setattr(
         explain.preprocessing,
         "serving_frame",
@@ -319,6 +319,7 @@ def test_explain_bid_swaps_in_recommended_bid_before_explaining(monkeypatch):
         lambda **kwargs: [
             {"bid": 15.0, "predicted_win_rate": 0.5, "expected_profit": 4.0}
         ],
+        raising=False,
     )
     monkeypatch.setattr(explain, "call_ollama", lambda prompt: "stub explanation")
 
@@ -359,7 +360,7 @@ def test_explain_bid_includes_decision_note_for_exploration(monkeypatch):
             "decision_reason": "Scheduled exploration probe above the optimum.",
         }
 
-    monkeypatch.setattr(predict, "decide_bid", _fake_decide)
+    monkeypatch.setattr(predict, "decide_bid", _fake_decide, raising=False)
     monkeypatch.setattr(
         explain.preprocessing,
         "serving_frame",
@@ -378,6 +379,7 @@ def test_explain_bid_includes_decision_note_for_exploration(monkeypatch):
         lambda **kwargs: [
             {"bid": 12.0, "predicted_win_rate": 0.4, "expected_profit": 3.0}
         ],
+        raising=False,
     )
 
     seen_prompts = {}

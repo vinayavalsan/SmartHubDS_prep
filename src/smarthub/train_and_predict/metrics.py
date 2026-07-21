@@ -1,6 +1,12 @@
+"""Model evaluation metrics for SmartHub training.
+
+This module computes, stores, and logs classifier and calibration metrics.
 """
-Evaluation metrics for Anton model training.
-"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import asdict, dataclass
 
 from sklearn.metrics import (
     accuracy_score,
@@ -13,62 +19,149 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+logger = logging.getLogger("smarthub.train_and_predict.metrics")
+
+
+@dataclass(frozen=True)
+class ModelMetrics:
+    """Store classifier, calibration, and predicted win-rate metrics."""
+
+    roc_auc: float
+    pr_auc: float
+    log_loss: float
+    brier_score: float
+    accuracy: float
+    precision: float
+    recall: float
+    f1: float
+    observed_win_rate: float
+    predicted_current_bid_win_rate: float
+    calibration_error: float
+    predicted_recommended_bid_win_rate: float = float("nan")
+
+    def to_dict(self) -> dict:
+        """Execute to dict.
+
+        Returns
+        -------
+        dict
+            Serializable dictionary representation.
+        """
+        return asdict(self)
+
+    def with_recommended_win_rate(self, value: float) -> "ModelMetrics":
+        """Return a copy with the optimizer win-rate estimate.
+
+        Inputs
+        ------
+        value : Any
+            Value to process.
+
+        Returns
+        -------
+        ModelMetrics
+            New metrics object with the supplied win rate.
+        """
+        values = self.to_dict()
+        values["predicted_recommended_bid_win_rate"] = float(value)
+        return ModelMetrics(**values)
+
 
 def evaluate_model(model, X_test, y_test):
-    """Evaluate a trained model and return predictions and metrics."""
+    """Evaluate a fitted classifier on held-out data.
+
+    Inputs
+    ------
+    model : Any
+        Fitted model or model pipeline.
+    X_test : pandas.DataFrame
+        Held-out feature matrix.
+    y_test : pandas.Series | numpy.ndarray
+        Held-out target values.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, ModelMetrics]
+        Predicted probabilities, predicted classes, and metrics, in that order.
+    """
     pred = model.predict_proba(X_test)[:, 1]
     pred_class = (pred >= 0.5).astype(int)
-
-    metrics = {
-        "roc_auc": float(roc_auc_score(y_test, pred)),
-        "pr_auc": float(average_precision_score(y_test, pred)),
-        "log_loss": float(log_loss(y_test, pred)),
-        "brier_score": float(brier_score_loss(y_test, pred)),
-        "accuracy": float(accuracy_score(y_test, pred_class)),
-        "precision": float(precision_score(y_test, pred_class, zero_division=0)),
-        "recall": float(recall_score(y_test, pred_class, zero_division=0)),
-        "f1": float(f1_score(y_test, pred_class, zero_division=0)),
-        "observed_win_rate": float(y_test.mean()),
-        "predicted_current_bid_win_rate": float(pred.mean()),
-    }
-
-    metrics["calibration_error"] = abs(
-        metrics["observed_win_rate"] - metrics["predicted_current_bid_win_rate"]
+    observed = float(y_test.mean())
+    predicted = float(pred.mean())
+    result = ModelMetrics(
+        roc_auc=float(roc_auc_score(y_test, pred)),
+        pr_auc=float(average_precision_score(y_test, pred)),
+        log_loss=float(log_loss(y_test, pred)),
+        brier_score=float(brier_score_loss(y_test, pred)),
+        accuracy=float(accuracy_score(y_test, pred_class)),
+        precision=float(precision_score(y_test, pred_class, zero_division=0)),
+        recall=float(recall_score(y_test, pred_class, zero_division=0)),
+        f1=float(f1_score(y_test, pred_class, zero_division=0)),
+        observed_win_rate=observed,
+        predicted_current_bid_win_rate=predicted,
+        calibration_error=abs(observed - predicted),
     )
+    return pred, pred_class, result
 
-    return pred, pred_class, metrics
 
+def log_model_evaluation(
+    model_metrics: ModelMetrics,
+    rows_trained: int,
+    train_rows: int,
+    test_rows: int,
+    log=None,
+):
+    """Log classifier and business-facing evaluation metrics.
 
-def print_model_evaluation(metrics, rows_trained, train_rows, test_rows):
-    """Print model metrics to the console."""
-    print()
-    print("=" * 80)
-    print("Anton Model Evaluation")
-    print("=" * 80)
-    print(f"Rows Trained:                       {rows_trained:,}")
-    print(f"Train Rows:                         {train_rows:,}")
-    print(f"Test Rows:                          {test_rows:,}")
-    print()
-    print(f"ROC AUC:                            {metrics['roc_auc']:.4f}")
-    print(f"PR AUC:                             {metrics['pr_auc']:.4f}")
-    print(f"Log Loss:                           {metrics['log_loss']:.4f}")
-    print(f"Brier Score:                        {metrics['brier_score']:.4f}")
-    print()
-    print(f"Accuracy (TP+TN)/N:                 {metrics['accuracy']:.4f}")
-    print(f"Precision TP/(TP+FP):               {metrics['precision']:.4f}")
-    print(f"Recall TP/(TP+FN):                  {metrics['recall']:.4f}")
-    print(f"F1 Score (2*Prec*Recl)/(Prec+Recl): {metrics['f1']:.4f}")
-    print(f"Calibration Error:                  {metrics['calibration_error']:.4f}")
-    print()
-    print("=" * 80)
-    print("Business Metrics")
-    print("=" * 80)
-    print(f"Observed Win Rate:                  " f"{metrics['observed_win_rate']:.4f}")
-    print(
-        f"Predicted Win Rate (Current Bids):  "
-        f"{metrics['predicted_current_bid_win_rate']:.4f}"
+    Inputs
+    ------
+    model_metrics : ModelMetrics
+        Computed model metrics.
+    rows_trained : int
+        Total prepared training rows.
+    train_rows : int
+        Number of model-fitting rows.
+    test_rows : int
+        Number of held-out rows.
+    log : logging.Logger | None
+        Optional logger for structured output.
+    """
+    log = log or logger
+    log.info("Model Evaluation")
+    log.info("  Rows trained                       : %s", f"{rows_trained:,}")
+    log.info(
+        "  Train / test rows                  : %s / %s",
+        f"{train_rows:,}",
+        f"{test_rows:,}",
     )
-    print(
-        f"Predicted Win Rate (Recommended):   "
-        f"{metrics.get('predicted_recommended_bid_win_rate', float('nan')):.4f}"
+    log.info("  ROC AUC                            : %.4f", model_metrics.roc_auc)
+    log.info("  PR AUC                             : %.4f", model_metrics.pr_auc)
+    log.info("  Log loss                           : %.4f", model_metrics.log_loss)
+    log.info(
+        "  Brier score                        : %.4f",
+        model_metrics.brier_score,
+    )
+    log.info(
+        "  Accuracy / precision / recall / F1 : %.4f / %.4f / %.4f / %.4f",
+        model_metrics.accuracy,
+        model_metrics.precision,
+        model_metrics.recall,
+        model_metrics.f1,
+    )
+    log.info(
+        "  Calibration error                  : %.4f",
+        model_metrics.calibration_error,
+    )
+    log.info("Business Metrics")
+    log.info(
+        "  Observed win rate                  : %.4f",
+        model_metrics.observed_win_rate,
+    )
+    log.info(
+        "  Predicted win rate, current bids   : %.4f",
+        model_metrics.predicted_current_bid_win_rate,
+    )
+    log.info(
+        "  Predicted win rate, recommended    : %.4f",
+        model_metrics.predicted_recommended_bid_win_rate,
     )

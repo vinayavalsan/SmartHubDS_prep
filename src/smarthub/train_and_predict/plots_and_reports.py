@@ -1,14 +1,18 @@
-"""
-Plots and report utilities for Anton training.
+"""Training reports and plots for SmartHub models.
+
+This module summarizes data and writes model and optimizer report artifacts.
 """
 
 import json
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve
+
+logger = logging.getLogger("smarthub.train_and_predict.plots_and_reports")
 
 
 def build_feature_summary_dataframe(
@@ -17,7 +21,24 @@ def build_feature_summary_dataframe(
     discrete_features,
     categorical_features,
 ):
-    """Create one compact summary row per feature."""
+    """Build one summary row for each configured feature.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Input dataframe.
+    continuous_features : list[str]
+        Continuous feature names.
+    discrete_features : list[str]
+        Discrete feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Feature-level summary table.
+    """
     rows = []
 
     feature_types = {
@@ -71,7 +92,22 @@ def build_feature_summary_dataframe(
 
 
 def build_feature_value_counts_dataframe(df, features, top_n_per_feature=30):
-    """Create long-format counts and percentages per feature value."""
+    """Build long-format value counts for selected features.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Input dataframe.
+    features : list[str]
+        Feature names to summarize.
+    top_n_per_feature : int
+        Maximum values retained per feature.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Long-format value-count table.
+    """
     long_df = df[features].copy()
 
     # for col in features:
@@ -112,6 +148,113 @@ def build_feature_value_counts_dataframe(df, features, top_n_per_feature=30):
     return counts_df
 
 
+def build_training_data_summary(
+    df,
+    continuous_features,
+    discrete_features,
+    categorical_features,
+):
+    """Build feature summaries and value-count tables.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Input dataframe.
+    continuous_features : list[str]
+        Continuous feature names.
+    discrete_features : list[str]
+        Discrete feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame]
+        Feature summary followed by feature-value counts.
+    """
+    feature_summary_df = build_feature_summary_dataframe(
+        df=df,
+        continuous_features=continuous_features,
+        discrete_features=discrete_features,
+        categorical_features=categorical_features,
+    )
+    count_features = list(discrete_features) + list(categorical_features)
+    feature_counts_df = build_feature_value_counts_dataframe(
+        df=df,
+        features=count_features,
+        top_n_per_feature=30,
+    )
+    return feature_summary_df, feature_counts_df
+
+
+def log_training_data_summary(
+    df,
+    feature_summary_df,
+    feature_counts_df,
+    target_col=None,
+    log=None,
+):
+    """Log a compact summary of the prepared training data.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Input dataframe.
+    feature_summary_df : pandas.DataFrame
+        Feature-level summary dataframe.
+    feature_counts_df : pandas.DataFrame
+        Feature-value count dataframe.
+    target_col : str | None
+        Optional target column name.
+    log : logging.Logger | None
+        Optional logger for structured output.
+    """
+    log = log or logger
+    log.info("Dataset Summary")
+    log.info("  Total rows                            : %s", f"{len(df):,}")
+
+    if target_col is not None and target_col in df.columns:
+        target = pd.to_numeric(df[target_col], errors="coerce")
+        if target.notna().any():
+            log.info("  Target win rate                       : %.4f", target.mean())
+
+    if not feature_summary_df.empty:
+        total_missing = int(feature_summary_df["missing_count"].sum())
+        missing_features = int((feature_summary_df["missing_count"] > 0).sum())
+        log.info(
+            "  Features summarized                   : %s",
+            f"{len(feature_summary_df):,}",
+        )
+        log.info(
+            "  Features with missing values          : %s",
+            f"{missing_features:,}",
+        )
+        log.info(
+            "  Total missing feature values          : %s",
+            f"{total_missing:,}",
+        )
+
+        top_missing = feature_summary_df.sort_values(
+            "missing_pct", ascending=False
+        ).head(8)
+        top_missing = top_missing[top_missing["missing_count"] > 0]
+        if not top_missing.empty:
+            log.info("  Top missing features")
+            for row in top_missing.itertuples(index=False):
+                log.info(
+                    "    %-35s %8s (%6.2f%%)",
+                    row.feature,
+                    f"{int(row.missing_count):,}",
+                    float(row.missing_pct),
+                )
+
+    if feature_counts_df is not None and not feature_counts_df.empty:
+        log.info(
+            "  Feature-value count rows saved        : %s",
+            f"{len(feature_counts_df):,}",
+        )
+
+
 def print_training_data_summary(
     df,
     continuous_features,
@@ -119,45 +262,38 @@ def print_training_data_summary(
     categorical_features,
     target_col=None,
 ):
-    """Print compact feature summary tables and return them as DataFrames."""
-    print()
-    print("=" * 80)
-    print("Training Data Feature Summary")
-    print("=" * 80)
-    print(f"Total Rows: {len(df):,}")
+    """Build and log training-data summaries.
 
-    if target_col is not None and target_col in df.columns:
-        target = pd.to_numeric(df[target_col], errors="coerce")
-        if target.notna().any():
-            print(f"Target Win Rate: {target.mean():.4f}")
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Input dataframe.
+    continuous_features : list[str]
+        Continuous feature names.
+    discrete_features : list[str]
+        Discrete feature names.
+    categorical_features : list[str]
+        Categorical feature names.
+    target_col : str | None
+        Optional target column name.
 
-    feature_summary_df = build_feature_summary_dataframe(
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame]
+        Feature summary followed by feature-value counts.
+    """
+    feature_summary_df, feature_counts_df = build_training_data_summary(
         df=df,
         continuous_features=continuous_features,
         discrete_features=discrete_features,
         categorical_features=categorical_features,
     )
-
-    print()
-    print("=" * 80)
-    print("Feature Summary")
-    print("=" * 80)
-    print(feature_summary_df.to_string(index=False))
-
-    count_features = discrete_features + categorical_features
-
-    feature_counts_df = build_feature_value_counts_dataframe(
+    log_training_data_summary(
         df=df,
-        features=count_features,
-        top_n_per_feature=30,
+        feature_summary_df=feature_summary_df,
+        feature_counts_df=feature_counts_df,
+        target_col=target_col,
     )
-
-    print()
-    print("=" * 80)
-    print("Discrete and Categorical Feature Value Counts")
-    print("=" * 80)
-    print(feature_counts_df.to_string(index=False))
-
     return feature_summary_df, feature_counts_df
 
 
@@ -166,12 +302,135 @@ def save_feature_summary_files(
     feature_summary_df,
     feature_counts_df,
 ):
-    """Save feature summary outputs to CSV files."""
+    """Write feature-summary tables to CSV files.
+
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    feature_summary_df : pandas.DataFrame
+        Feature-level summary dataframe.
+    feature_counts_df : pandas.DataFrame
+        Feature-value count dataframe.
+    """
     report_dir = Path(report_dir)
     report_dir.mkdir(exist_ok=True)
 
     feature_summary_df.to_csv(report_dir / "feature_summary.csv", index=False)
     feature_counts_df.to_csv(report_dir / "feature_value_counts.csv", index=False)
+
+
+def _plot_histogram(report_dir, df, column, filename, xlabel, title, bins=40):
+    """Save a histogram for an available optimizer diagnostic.
+
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    df : pandas.DataFrame
+        Input dataframe.
+    column : str
+        Column to process.
+    filename : str
+        Output filename.
+    xlabel : str
+        Horizontal-axis label.
+    title : str
+        Plot title.
+    bins : int
+        Number of histogram bins.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Saved plot path, or ``None`` when no valid values exist.
+    """
+    if column not in df.columns:
+        return None
+    values = pd.to_numeric(df[column], errors="coerce").dropna()
+    if values.empty:
+        return None
+
+    plt.figure(figsize=(8, 6))
+    plt.hist(values, bins=bins)
+    plt.xlabel(xlabel)
+    plt.ylabel("Number of rows")
+    plt.title(title)
+    plt.tight_layout()
+    path = Path(report_dir) / filename
+    plt.savefig(path)
+    plt.close()
+    return path
+
+
+def _save_optimizer_plots(report_dir, optimizer_eval_df):
+    """Write the retained optimizer diagnostic plots.
+
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    optimizer_eval_df : pandas.DataFrame | None
+        Row-level optimizer evaluation results.
+
+    Returns
+    -------
+    list[str]
+        Generated optimizer plot filenames.
+    """
+    files = []
+    specs = [
+        (
+            "expected_profit_lift",
+            "optimizer_expected_profit_lift.png",
+            "Expected profit lift: recommended bid - current bid",
+            "Expected Profit Lift from Recommended Bid",
+        ),
+        (
+            "bid_change",
+            "recommended_bid_change.png",
+            "Recommended bid - current bid",
+            "Recommended Bid Change from Current Bid",
+        ),
+        (
+            "recommended_bid_cm_if_won",
+            "recommended_cm_distribution.png",
+            "Recommended CM if won",
+            "Recommended CM Distribution",
+        ),
+    ]
+    for column, filename, xlabel, title in specs:
+        path = _plot_histogram(
+            report_dir,
+            optimizer_eval_df,
+            column,
+            filename,
+            xlabel,
+            title,
+        )
+        if path is not None:
+            files.append(filename)
+
+    if {
+        "current_bid_predicted_win_rate",
+        "recommended_bid_predicted_win_rate",
+    }.issubset(optimizer_eval_df.columns):
+        plt.figure(figsize=(8, 6))
+        plt.scatter(
+            optimizer_eval_df["current_bid_predicted_win_rate"],
+            optimizer_eval_df["recommended_bid_predicted_win_rate"],
+            alpha=0.3,
+        )
+        plt.plot([0, 1], [0, 1], linestyle="--")
+        plt.xlabel("Predicted win rate using current bid")
+        plt.ylabel("Predicted win rate using recommended bid")
+        plt.title("Current vs Recommended Predicted Win Rate")
+        plt.tight_layout()
+        plt.savefig(Path(report_dir) / "current_vs_recommended_win_rate.png")
+        plt.close()
+        files.append("current_vs_recommended_win_rate.png")
+
+    return files
 
 
 def save_performance_plots(
@@ -187,7 +446,33 @@ def save_performance_plots(
     f1,
     optimizer_eval_df=None,
 ):
-    """Save model-performance and optimizer diagnostic plots."""
+    """Write classifier and optimizer diagnostic plots.
+
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    y_test : pandas.Series | numpy.ndarray
+        Held-out target values.
+    pred : numpy.ndarray
+        Predicted positive-class probabilities.
+    pred_class : numpy.ndarray
+        Predicted binary classes.
+    roc_auc : float
+        ROC AUC displayed in the report.
+    pr_auc : float
+        PR AUC displayed in the report.
+    accuracy : float
+        Classification accuracy.
+    precision : float
+        Classification precision.
+    recall : float
+        Classification recall.
+    f1 : float
+        F1 score.
+    optimizer_eval_df : pandas.DataFrame | None
+        Row-level optimizer evaluation results.
+    """
     report_dir = Path(report_dir)
     report_dir.mkdir(exist_ok=True)
 
@@ -309,55 +594,7 @@ def save_performance_plots(
     plt.close()
 
     if optimizer_eval_df is not None:
-        plt.figure(figsize=(8, 6))
-        plt.hist(optimizer_eval_df["expected_profit_lift"], bins=40)
-        plt.xlabel("Expected profit lift: recommended bid - current bid")
-        plt.ylabel("Number of rows")
-        plt.title("Expected Profit Lift from Recommended Bid")
-        plt.tight_layout()
-        plt.savefig(report_dir / "optimizer_expected_profit_lift.png")
-        plt.close()
-
-        plt.figure(figsize=(8, 6))
-        plt.hist(optimizer_eval_df["bid_change"], bins=40)
-        plt.xlabel("Recommended bid - current bid")
-        plt.ylabel("Number of rows")
-        plt.title("Recommended Bid Change from Current Bid")
-        plt.tight_layout()
-        plt.savefig(report_dir / "recommended_bid_change.png")
-        plt.close()
-
-        plt.figure(figsize=(8, 6))
-        plt.hist(optimizer_eval_df["predicted_win_rate_lift"], bins=40)
-        plt.xlabel("Predicted win-rate lift: recommended bid - current bid")
-        plt.ylabel("Number of rows")
-        plt.title("Predicted Win-Rate Lift from Recommended Bid")
-        plt.tight_layout()
-        plt.savefig(report_dir / "predicted_win_rate_lift.png")
-        plt.close()
-
-        plt.figure(figsize=(8, 6))
-        plt.hist(optimizer_eval_df["recommended_bid_cm_if_won"], bins=40)
-        plt.xlabel("Recommended CM if won")
-        plt.ylabel("Number of rows")
-        plt.title("Recommended CM Distribution")
-        plt.tight_layout()
-        plt.savefig(report_dir / "recommended_cm_distribution.png")
-        plt.close()
-
-        plt.figure(figsize=(8, 6))
-        plt.scatter(
-            optimizer_eval_df["current_bid_predicted_win_rate"],
-            optimizer_eval_df["recommended_bid_predicted_win_rate"],
-            alpha=0.3,
-        )
-        plt.plot([0, 1], [0, 1], linestyle="--")
-        plt.xlabel("Predicted win rate using current bid")
-        plt.ylabel("Predicted win rate using recommended bid")
-        plt.title("Current vs Recommended Predicted Win Rate")
-        plt.tight_layout()
-        plt.savefig(report_dir / "current_vs_recommended_win_rate.png")
-        plt.close()
+        _save_optimizer_plots(report_dir, optimizer_eval_df)
 
 
 def save_evaluation_summary(
@@ -365,7 +602,17 @@ def save_evaluation_summary(
     evaluation_summary,
     optimizer_eval_df=None,
 ):
-    """Save evaluation summary JSON and optional optimizer row-level CSV."""
+    """Write evaluation summaries and row-level optimizer results.
+
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    evaluation_summary : dict
+        Combined model and optimizer evaluation summary.
+    optimizer_eval_df : pandas.DataFrame | None
+        Row-level optimizer evaluation results.
+    """
     report_dir = Path(report_dir)
     report_dir.mkdir(exist_ok=True)
 
@@ -381,14 +628,20 @@ def save_evaluation_summary(
     return summary_json_path
 
 
-def print_saved_report_files(report_dir, optimizer_eval_df=None):
-    """Print files generated in the training report."""
-    report_dir = Path(report_dir)
+def log_saved_report_files(report_dir, optimizer_eval_df=None, log=None):
+    """Log the report artifacts written by the training run.
 
-    print()
-    print("=" * 80)
-    print("Saved Training Report Files")
-    print("=" * 80)
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    optimizer_eval_df : pandas.DataFrame | None
+        Row-level optimizer evaluation results.
+    log : logging.Logger | None
+        Optional logger for structured output.
+    """
+    log = log or logger
+    report_dir = Path(report_dir)
 
     files = [
         "feature_summary.csv",
@@ -406,12 +659,28 @@ def print_saved_report_files(report_dir, optimizer_eval_df=None):
             [
                 "optimizer_expected_profit_lift.png",
                 "recommended_bid_change.png",
-                "predicted_win_rate_lift.png",
                 "recommended_cm_distribution.png",
                 "current_vs_recommended_win_rate.png",
                 "bid_optimizer_test_rows.csv",
             ]
         )
 
-    for filename in files:
-        print(report_dir / filename)
+    existing = [filename for filename in files if (report_dir / filename).exists()]
+    log.info("Saved Training Reports")
+    log.info("  Report directory                      : %s", report_dir)
+    log.info("  Files generated                       : %s", f"{len(existing):,}")
+    for filename in existing:
+        log.info("    %s", report_dir / filename)
+
+
+def print_saved_report_files(report_dir, optimizer_eval_df=None):
+    """Log report artifacts using the module logger.
+
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    optimizer_eval_df : pandas.DataFrame | None
+        Row-level optimizer evaluation results.
+    """
+    log_saved_report_files(report_dir, optimizer_eval_df)

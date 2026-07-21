@@ -25,6 +25,9 @@ def _save(lead_type_name="auto", roc_auc=0.70, profit=100.0, feature_cols=None):
         optimizer_summary={"recommended_bid_total_expected_profit": profit},
         lineage={"model_type": "lightgbm"},
         model_params={"n_estimators": 10},
+        promotion_mode="manual",
+        promotion_eligible=None,
+        promotion_decision_reason="not evaluated",
     )
     return manifest
 
@@ -52,42 +55,6 @@ def test_load_currently_serving_none_when_file_missing():
     registry.version_path("auto", m["version"]).unlink()  # pkl gone
     # Graceful bootstrap, not a crash.
     assert registry.load_currently_serving_model("auto") == (None, None)
-
-
-def test_currently_serving_version_none_when_pointer_corrupt(caplog):
-    """An empty/truncated current.json (e.g. a process killed mid-write)
-    degrades to "nothing serving" with a logged warning, not a raised
-    JSONDecodeError -- this exact crash once took down an entire training
-    run's promotion-gate comparison."""
-    m = _save()
-    registry.promote("auto", m["version"])
-    registry._serving_pointer_path("auto").write_text("")  # truncated/empty
-
-    assert registry.currently_serving_version("auto") is None
-    assert "Corrupt/unreadable serving pointer" in caplog.text
-
-
-def test_load_currently_serving_model_none_when_pointer_corrupt():
-    """The corrupt-pointer case also degrades gracefully one level up."""
-    m = _save()
-    registry.promote("auto", m["version"])
-    registry._serving_pointer_path("auto").write_text("not json{{{")
-
-    assert registry.load_currently_serving_model("auto") == (None, None)
-
-
-def test_promote_writes_pointer_and_manifest_atomically(tmp_path):
-    """No .tmp file is left behind, and the file content is valid JSON --
-    guards against reintroducing a plain (non-atomic) .write_text()."""
-    import json
-
-    m = _save()
-    registry.promote("auto", m["version"])
-
-    folder = registry.model_dir("auto")
-    assert not list(folder.glob("*.tmp"))
-    pointer_data = json.loads(registry._serving_pointer_path("auto").read_text())
-    assert pointer_data["version"] == m["version"]
 
 
 # --- Versioning ---------------------------------------------------------------

@@ -1,16 +1,6 @@
-"""Train Anton's win-probability model: ``P(won | bid, lead features)``.
+"""Training workflow for Anton's win-probability model.
 
-STEP 3 of the pipeline. Consumes the leakage-safe training table from
-``smarthub.feature_engineering`` (STEP 2), trains, evaluates, runs the offline
-bid-optimizer evaluation, saves the model + reports, and (optionally) logs the
-run to MLflow.
-
-Run directly:
-
-    python -m smarthub.train_and_predict.train --lead-type-id 6   # auto
-    python -m smarthub.train_and_predict.train --lead-type-id 1   # home
-
-or call ``run_training(...)`` (used by the Prefect ``train_flow``).
+This module trains, evaluates, versions, and optionally registers models.
 """
 
 from __future__ import annotations
@@ -18,15 +8,18 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 from . import (
     config,
     metrics,
     models,
+    optimizer_evaluation,
     plots_and_reports,
-    predict,
     preprocessing,
     registry,
 )
@@ -34,175 +27,386 @@ from . import (
 logger = logging.getLogger("smarthub.train_and_predict.train")
 
 
-def _split_train_test(frame, test_size):
-    """Time-ordered split: the most recent ``test_size`` fraction is the test set.
+def split_training_data(
+    frame: pd.DataFrame,
+    target_column: str,
+    split_settings: dict[str, Any],
+    random_seed: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split prepared data using the configured strategy.
 
-    ``prepare_training_data`` sorts by ``created_at`` when available, so holding
-    out the tail avoids training on the future (no look-ahead leakage).
+    Inputs
+    ------
+    frame : pandas.DataFrame
+        Input dataframe.
+    target_column : str
+        Target column used for optional stratification.
+    split_settings : dict[str, Any]
+        Selected split strategy and options.
+    random_seed : int
+        Seed for reproducible random splitting.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame]
+        Training dataframe followed by test dataframe.
+
+    Raises
+    ------
+    ValueError
+        If split settings are invalid or produce an empty dataset.
     """
-    n = len(frame)
-    n_test = max(1, int(round(n * test_size)))
-    train_df = frame.iloc[: n - n_test]
-    test_df = frame.iloc[n - n_test :]
+    strategy = str(split_settings["strategy"]).strip().lower()
+    test_size = float(split_settings["test_size"])
+
+    if not 0.0 < test_size < 1.0:
+        raise ValueError("Split test_size must be between 0 and 1.")
+
+    if strategy == "time":
+        n_test = max(1, int(round(len(frame) * test_size)))
+        split_index = len(frame) - n_test
+        train_df = frame.iloc[:split_index].copy()
+        test_df = frame.iloc[split_index:].copy()
+    elif strategy == "random":
+        use_stratification = bool(split_settings.get("stratify", False))
+        stratify = None
+
+        if use_stratification:
+            if target_column not in frame.columns:
+                raise ValueError(
+                    f"Cannot stratify because target column "
+                    f"{target_column!r} is missing."
+                )
+            stratify = frame[target_column]
+
+        train_df, test_df = train_test_split(
+            frame,
+            test_size=test_size,
+            random_state=random_seed,
+            shuffle=True,
+            stratify=stratify,
+        )
+        train_df = train_df.copy()
+        test_df = test_df.copy()
+    else:
+        raise ValueError(f"Unsupported split strategy: {strategy!r}.")
+
+    if train_df.empty or test_df.empty:
+        raise ValueError(
+            "Configured train/test split produced an empty dataset. "
+            "Adjust split.test_size."
+        )
+
     return train_df, test_df
 
 
-def run_training(
-    lead_type_id=6,
-    lead_type_name=None,
-    version=None,
-    register_mlflow=True,
-    log=None,
-):
-    """Train + evaluate + save a model for one lead type. Returns a result dict.
+def _optimizer_metrics_for_mlflow(
+    optimizer_summary: dict | None,
+) -> dict[str, float | int]:
+    """Select the retained numeric optimizer metrics for MLflow.
 
-    ``log`` is an optional logger (e.g. Prefect's ``get_run_logger()``); step
-    messages are sent there so the whole run is visible in the caller's logs.
+    Inputs
+    ------
+    optimizer_summary : dict | None
+        Offline optimizer summary metrics.
+
+    Returns
+    -------
+    dict[str, float | int]
+        Flat numeric optimizer metrics.
+    """
+    if not optimizer_summary:
+        return {}
+
+    selected_keys = {
+        "optimizer_rows",
+        "target_cm",
+        "current_bid_total_expected_profit",
+        "recommended_bid_total_expected_profit",
+        "expected_profit_lift_total",
+        "expected_profit_lift_pct",
+        "avg_current_bid_predicted_win_rate",
+        "avg_recommended_bid_predicted_win_rate",
+        "avg_bid_change",
+        "median_bid_change",
+        "bid_increase_pct",
+        "bid_decrease_pct",
+        "bid_unchanged_pct",
+        "avg_recommended_bid_cm_if_won",
+    }
+    return {
+        f"optimizer_{key}": value
+        for key, value in optimizer_summary.items()
+        if key in selected_keys and isinstance(value, (int, float))
+    }
+
+
+def run_training(
+    lead_type_id: int,
+    version: str | None = None,
+    register_mlflow: bool = True,
+    log: logging.Logger | None = None,
+) -> dict[str, Any]:
+    """Train, evaluate, version, and optionally register one model.
+
+    Inputs
+    ------
+    lead_type_id : int
+        SmartHub lead type identifier.
+    version : str | None
+        Optional training-table or model version identifier.
+    register_mlflow : bool
+        Whether to log and register the run in MLflow.
+    log : logging.Logger | None
+        Optional logger for structured output.
+
+    Returns
+    -------
+    dict[str, Any]
+        Training outputs, metrics, lineage, and promotion information.
+
+    Raises
+    ------
+    ValueError
+        If the prepared data cannot support model training.
     """
     log = log or logger
-    lead_type_name = lead_type_name or config.lead_type_name(lead_type_id)
-    np.random.seed(config.RANDOM_SEED)
+    training_config = config.load_training_config()
+    lead_type_name = config.lead_type_name(lead_type_id)
+    np.random.seed(training_config.random_seed)
 
     log.info(
-        "Loading training table for lead_type=%s (%s)", lead_type_name, lead_type_id
+        "Loading training table for lead_type=%s (%s)",
+        lead_type_name,
+        lead_type_id,
     )
     frame, numeric, categorical, prep_summary = preprocessing.prepare_training_data(
-        lead_type_id, lead_type_name, version
+        lead_type_id,
+        lead_type_name,
+        version,
     )
     feature_cols = numeric + categorical
+
+    log.info("Dataset Prepared")
     log.info(
-        "Prepared %s rows (%s dropped); win_rate=%s; %s numeric + %s categorical "
-        "features; missing columns=%s",
-        prep_summary["training_rows"],
-        prep_summary["dropped_rows"],
-        prep_summary["win_rate"],
+        "  Training rows                         : %s",
+        f"{prep_summary['training_rows']:,}",
+    )
+    log.info(
+        "  Dropped rows                          : %s",
+        f"{prep_summary['dropped_rows']:,}",
+    )
+    log.info(
+        "  Win rate                              : %.4f",
+        prep_summary["win_rate"] or 0.0,
+    )
+    log.info(
+        "  Feature count                         : %s numeric, %s categorical",
         len(numeric),
         len(categorical),
+    )
+    log.info(
+        "  Missing feature columns               : %s",
         prep_summary["missing_feature_columns"] or "none",
     )
+
     if prep_summary["training_rows"] < 50:
         raise ValueError(
             f"Only {prep_summary['training_rows']} training rows for "
             f"{lead_type_name}; need more data before training."
         )
-    # Both wins and losses must be present (raises a clear message otherwise).
+
     preprocessing.assert_trainable(frame, lead_type_name)
 
-    train_df, test_df = _split_train_test(frame, config.TEST_SIZE)
+    split_settings = training_config.split
+    train_df, test_df = split_training_data(
+        frame=frame,
+        target_column=config.TARGET_COL,
+        split_settings=split_settings,
+        random_seed=training_config.random_seed,
+    )
 
-    # Drop no-signal (constant) feature columns from the model input.
-    if config.DROP_ZERO_VARIANCE:
+    if training_config.drop_zero_variance:
         numeric, categorical, dropped = preprocessing.drop_zero_variance(
-            train_df, numeric, categorical
+            train_df,
+            numeric,
+            categorical,
         )
         if dropped:
-            log.info("Dropped %s zero-variance features: %s", len(dropped), dropped)
+            log.info("Cleaning Data")
+            log.info(
+                "  Dropped zero-variance features        : %s",
+                f"{len(dropped):,}",
+            )
+            log.info(
+                "  Zero-variance feature names           : %s",
+                ", ".join(dropped),
+            )
         feature_cols = numeric + categorical
 
-    X_train, y_train = train_df[feature_cols], train_df[config.TARGET_COL]
-    X_test, y_test = test_df[feature_cols], test_df[config.TARGET_COL]
-    log.info("Split: %s train / %s test rows (time-ordered)", len(X_train), len(X_test))
+    log.info("Feature columns: %s", feature_cols)
 
-    model_type = config.model_type()
-    model_params = (
-        config.LIGHTGBM_PARAMS
-        if model_type == "lightgbm"
-        else config.LOGISTIC_REGRESSION_PARAMS
+    feature_summary_df, feature_counts_df = (
+        plots_and_reports.build_training_data_summary(
+            df=frame,
+            continuous_features=[
+                column for column in numeric if column in ("bid", "age")
+            ],
+            discrete_features=[
+                column for column in numeric if column not in ("bid", "age")
+            ],
+            categorical_features=categorical,
+        )
     )
-    calibrate = config.CALIBRATE
-    log.info("Fitting %s (calibrate=%s)", model_type, calibrate)
+    plots_and_reports.log_training_data_summary(
+        df=frame,
+        feature_summary_df=feature_summary_df,
+        feature_counts_df=feature_counts_df,
+        target_col=config.TARGET_COL,
+        log=log,
+    )
+
+    X_train = train_df[feature_cols]
+    y_train = train_df[config.TARGET_COL]
+    X_test = test_df[feature_cols]
+    y_test = test_df[config.TARGET_COL]
+
+    log.info("Train/Test Split")
+    log.info(
+        "  Train rows                            : %s",
+        f"{len(X_train):,}",
+    )
+    log.info(
+        "  Test rows                             : %s",
+        f"{len(X_test):,}",
+    )
+    log.info(
+        "  Split method                          : %s",
+        split_settings["strategy"],
+    )
+    log.info(
+        "  Test fraction                         : %.2f",
+        split_settings["test_size"],
+    )
+    if split_settings["strategy"] == "random":
+        log.info(
+            "  Stratified                            : %s",
+            bool(split_settings.get("stratify", False)),
+        )
+
+    model_type = training_config.model_type
+    model_params = training_config.model_parameters
+    calibrate = training_config.calibrate
+
+    log.info("Training Model")
+    log.info("  Model type                            : %s", model_type)
+    log.info("  Calibrate probabilities               : %s", calibrate)
+
     try:
         model = models.build_model(
-            model_type, numeric, categorical, model_params, calibrate=calibrate
+            model_type,
+            numeric,
+            categorical,
+            model_params,
+            calibrate=calibrate,
         )
         model.fit(X_train, y_train)
-    except Exception as exc:  # noqa: BLE001 - fall back if calibration errors
+    except Exception as exc:  # noqa: BLE001
         if not calibrate:
             raise
-        log.warning("Calibration failed (%s); refitting without calibration", exc)
+
+        log.warning(
+            "Calibration failed (%s); refitting without calibration",
+            exc,
+        )
         calibrate = False
         model = models.build_model(
-            model_type, numeric, categorical, model_params, calibrate=False
+            model_type,
+            numeric,
+            categorical,
+            model_params,
+            calibrate=False,
         )
         model.fit(X_train, y_train)
 
-    log.info("Evaluating on held-out test set")
-    pred, pred_class, model_metrics = metrics.evaluate_model(model, X_test, y_test)
-    log.info(
-        "ROC AUC=%.4f  PR AUC=%.4f  logloss=%.4f  brier=%.4f",
-        model_metrics["roc_auc"],
-        model_metrics["pr_auc"],
-        model_metrics["log_loss"],
-        model_metrics["brier_score"],
+    log.info("Evaluating Model")
+    pred, pred_class, model_metrics = metrics.evaluate_model(
+        model,
+        X_test,
+        y_test,
     )
 
-    # Fixed once so the challenger and the currently-serving model (re-evaluated
-    # below) are scored under the identical objective — a fair comparison.
-    target_cm = config.target_cm_value()
-    min_bid = config.min_bid_value()
+    optimizer_config = training_config.optimizer
+    target_cm = optimizer_config.target_cm
+    min_bid = optimizer_config.minimum_bid
+    bid_step = optimizer_config.bid_step
 
-    log.info("Running offline bid-optimizer evaluation")
-    optimizer_result = predict.run_bid_optimizer_evaluation(
+    optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
         test_eval_df=test_df,
         model=model,
         feature_cols=feature_cols,
         target_cm=target_cm,
         min_bid=min_bid,
-        bid_step=config.BID_STEP,
+        bid_step=bid_step,
+        log=log,
     )
+
     if optimizer_result is not None:
         optimizer_eval_df, optimizer_summary = optimizer_result
-        model_metrics["predicted_recommended_bid_win_rate"] = optimizer_summary[
-            "avg_recommended_bid_predicted_win_rate"
-        ]
+        model_metrics = model_metrics.with_recommended_win_rate(
+            optimizer_summary.avg_recommended_bid_predicted_win_rate
+        )
     else:
-        optimizer_eval_df, optimizer_summary = None, {}
-        model_metrics["predicted_recommended_bid_win_rate"] = float("nan")
+        optimizer_eval_df = None
+        optimizer_summary = None
 
-    metrics.print_model_evaluation(
-        metrics=model_metrics,
+    optimizer_summary_dict = (
+        optimizer_summary.to_dict() if optimizer_summary is not None else {}
+    )
+    optimizer_mlflow_metrics = _optimizer_metrics_for_mlflow(optimizer_summary_dict)
+
+    metrics.log_model_evaluation(
+        model_metrics=model_metrics,
         rows_trained=len(frame),
         train_rows=len(X_train),
         test_rows=len(X_test),
+        log=log,
     )
 
-    # --- Reports -------------------------------------------------------------
-    report_dir = config.report_dir(lead_type_name)
+    log.info("Saving Reports")
+    report_dir = training_config.report_dir(lead_type_name)
     Path(report_dir).mkdir(parents=True, exist_ok=True)
-    feature_summary_df, feature_counts_df = (
-        plots_and_reports.print_training_data_summary(
-            df=frame,
-            continuous_features=[c for c in numeric if c in ("bid", "age")],
-            discrete_features=[c for c in numeric if c not in ("bid", "age")],
-            categorical_features=categorical,
-            target_col=config.TARGET_COL,
-        )
-    )
+
     plots_and_reports.save_feature_summary_files(
-        report_dir, feature_summary_df, feature_counts_df
+        report_dir,
+        feature_summary_df,
+        feature_counts_df,
     )
     plots_and_reports.save_performance_plots(
         report_dir=report_dir,
         y_test=y_test,
         pred=pred,
         pred_class=pred_class,
-        roc_auc=model_metrics["roc_auc"],
-        pr_auc=model_metrics["pr_auc"],
-        accuracy=model_metrics["accuracy"],
-        precision=model_metrics["precision"],
-        recall=model_metrics["recall"],
-        f1=model_metrics["f1"],
+        roc_auc=model_metrics.roc_auc,
+        pr_auc=model_metrics.pr_auc,
+        accuracy=model_metrics.accuracy,
+        precision=model_metrics.precision,
+        recall=model_metrics.recall,
+        f1=model_metrics.f1,
         optimizer_eval_df=optimizer_eval_df,
     )
-    # Lineage: exactly which data this model was trained on.
+
     lineage = {
         "model_type": model_type,
         "calibrated": bool(calibrate),
+        "split_strategy": split_settings["strategy"],
+        "split_test_size": split_settings["test_size"],
         "training_table_version": prep_summary.get("training_table_version"),
         "data_min_created_at": prep_summary.get("data_min_created_at"),
         "data_max_created_at": prep_summary.get("data_max_created_at"),
         "source_row_count": prep_summary.get("source_row_count"),
     }
+
     log.info(
         "Lineage: model=%s trained on table version %s "
         "(data %s -> %s, %s source rows)",
@@ -212,6 +416,7 @@ def run_training(
         lineage["data_max_created_at"],
         lineage["source_row_count"],
     )
+
     evaluation_summary = {
         "lead_type_id": lead_type_id,
         "lead_type_name": lead_type_name,
@@ -219,92 +424,153 @@ def run_training(
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
         **lineage,
-        **model_metrics,
-        "bid_optimizer": optimizer_summary,
+        **model_metrics.to_dict(),
+        "bid_optimizer": optimizer_summary_dict,
     }
+
     plots_and_reports.save_evaluation_summary(
-        report_dir, evaluation_summary, optimizer_eval_df
+        report_dir,
+        evaluation_summary,
+        optimizer_eval_df,
+    )
+    plots_and_reports.log_saved_report_files(
+        report_dir,
+        optimizer_eval_df,
+        log=log,
     )
 
-    # --- Promotion gate --------------------------------------------------------
-    # Re-score the model CURRENTLY SERVING traffic on this run's exact
-    # held-out test set, so the comparison is apples-to-apples instead of
-    # diffing metrics computed on two different data snapshots. Any failure
-    # here (e.g. it predates a feature-schema change) is logged and treated as
-    # "nothing comparable currently serving" rather than blocking training.
-    serving_metrics, serving_optimizer_summary = _evaluate_currently_serving_model(
-        lead_type_name, test_df, y_test, target_cm, min_bid, log
-    )
+    promotion_mode = training_config.promotion_mode
+    if promotion_mode == "disabled":
+        decision = None
+        promotion_eligible = None
+        promotion_reason = "Promotion evaluation disabled."
+        promotion_comparison = {}
+        log.info("Promotion Evaluation")
+        log.info("  Mode                                  : %s", promotion_mode)
+        log.info("  Status                                : SKIPPED")
+        log.info("  Reason                                : %s", promotion_reason)
+    else:
+        serving_metrics, serving_optimizer_summary = _evaluate_currently_serving_model(
+            lead_type_name,
+            test_df,
+            y_test,
+            target_cm,
+            min_bid,
+            bid_step,
+            log,
+        )
+        decision = registry.decide_promotion(
+            challenger_metrics=model_metrics.to_dict(),
+            challenger_optimizer=optimizer_summary_dict,
+            currently_serving_metrics=serving_metrics,
+            currently_serving_optimizer=serving_optimizer_summary,
+            min_roc_auc_regression=(training_config.promotion_min_roc_auc_regression),
+            min_profit_ratio=training_config.promotion_min_profit_ratio,
+        )
+        promotion_eligible = decision.promote
+        promotion_reason = decision.reason
+        promotion_comparison = decision.comparison
+        log.info("Promotion Evaluation")
+        log.info("  Mode                                  : %s", promotion_mode)
+        log.info(
+            "  Policy recommendation                 : %s",
+            "ELIGIBLE" if decision.promote else "NOT ELIGIBLE",
+        )
+        log.info("  Reason                                : %s", decision.reason)
 
-    decision = registry.decide_promotion(
-        challenger_metrics=model_metrics,
-        challenger_optimizer=optimizer_summary,
-        currently_serving_metrics=serving_metrics,
-        currently_serving_optimizer=serving_optimizer_summary,
-        min_roc_auc_regression=config.PROMOTION_MIN_ROC_AUC_REGRESSION,
-        min_profit_ratio=config.PROMOTION_MIN_PROFIT_RATIO,
-    )
-    log.info(
-        "Promotion decision: %s — %s",
-        "PROMOTE" if decision.promote else "HOLD (keep serving current model)",
-        decision.reason,
-    )
-
-    # --- Save model (always versioned; never overwrites a prior version) -----
     manifest = registry.save_version(
         model,
         lead_type_name,
         feature_cols=feature_cols,
-        metrics=model_metrics,
-        optimizer_summary=optimizer_summary,
+        metrics=model_metrics.to_dict(),
+        optimizer_summary=optimizer_summary_dict,
         lineage=lineage,
         model_params=model_params,
+        promotion_mode=promotion_mode,
+        promotion_eligible=promotion_eligible,
+        promotion_decision_reason=promotion_reason,
     )
-    model_path = manifest["model_path"]
-    log.info("Saved model version %s -> %s", manifest["version"], model_path)
 
-    if decision.promote:
-        registry.promote(lead_type_name, manifest["version"], reason=decision.reason)
+    model_path = manifest["model_path"]
+
+    log.info(
+        "Saved model version %s -> %s",
+        manifest["version"],
+        model_path,
+    )
+
+    promoted = False
+    if promotion_mode == "automatic" and decision is not None and decision.promote:
+        registry.promote(
+            lead_type_name,
+            manifest["version"],
+            reason=decision.reason,
+        )
+        promoted = True
         log.info(
-            "Promoted %s to currently-serving for '%s'.",
+            "Automatically promoted %s to currently-serving for '%s'.",
             manifest["version"],
             lead_type_name,
+        )
+    elif promotion_mode == "manual":
+        log.info(
+            "Model %s was saved but not promoted because promotion mode "
+            "is manual. Currently-serving model remains unchanged.",
+            manifest["version"],
+        )
+    elif promotion_mode == "disabled":
+        log.info(
+            "Model %s was saved; promotion evaluation and execution " "were skipped.",
+            manifest["version"],
         )
     else:
         log.warning(
-            "Challenger %s NOT promoted for '%s'; currently-serving model "
-            "unchanged.",
+            "Model %s is not eligible for automatic promotion; "
+            "currently-serving model remains unchanged.",
             manifest["version"],
-            lead_type_name,
         )
 
-    # --- MLflow --------------------------------------------------------------
     if register_mlflow:
         try:
             from . import mlflow_utils
+
+            experiment_name = (
+                f"{training_config.mlflow_experiment_name}_{lead_type_name}"
+            )
 
             mlflow_utils.log_training_run(
                 model=model,
                 model_params=model_params,
                 feature_cols=feature_cols,
-                metrics=model_metrics,
+                metrics=model_metrics.to_dict(),
+                optimizer_metrics=optimizer_mlflow_metrics,
                 report_dir=report_dir,
-                experiment_name=config.MLFLOW_EXPERIMENT_NAME,
-                run_name=f"{config.MLFLOW_RUN_NAME}_{lead_type_name}",
-                registered_model_name=config.MLFLOW_REGISTERED_MODEL_NAME,
+                report_artifact_path=training_config.report_root,
+                tracking_db_path=training_config.mlflow_tracking_db_path,
+                artifact_root=training_config.mlflow_artifact_root,
+                experiment_name=experiment_name,
+                run_name=manifest["version"],
+                registered_model_name=(training_config.mlflow_registered_model_name),
                 extra_params={
                     "lead_type_name": lead_type_name,
                     "model_version": manifest["version"],
-                    "promoted": decision.promote,
-                    "promotion_reason": decision.reason,
+                    "promotion_mode": promotion_mode,
+                    "promotion_eligible": promotion_eligible,
+                    "promoted": promoted,
+                    "promotion_reason": promotion_reason,
                     **lineage,
                 },
             )
             log.info(
-                "Logged run to MLflow experiment '%s'",
-                config.MLFLOW_EXPERIMENT_NAME,
+                "Logged run '%s' to MLflow experiment '%s'",
+                manifest["version"],
+                experiment_name,
             )
-        except Exception as exc:  # noqa: BLE001 - MLflow must not fail the run
+            log.info(
+                "Logged run to MLflow experiment '%s'",
+                training_config.mlflow_experiment_name,
+            )
+        except Exception as exc:  # noqa: BLE001
             log.warning("MLflow logging skipped: %s", exc)
 
     return {
@@ -312,99 +578,149 @@ def run_training(
         "lead_type_name": lead_type_name,
         "model_path": model_path,
         "model_version": manifest["version"],
-        "promoted": decision.promote,
-        "promotion_reason": decision.reason,
-        "promotion_comparison": decision.comparison,
+        "promotion_mode": promotion_mode,
+        "promotion_eligible": promotion_eligible,
+        "promoted": promoted,
+        "promotion_reason": promotion_reason,
+        "promotion_comparison": promotion_comparison,
         "report_dir": report_dir,
-        "metrics": model_metrics,
-        "optimizer_summary": optimizer_summary,
+        "metrics": model_metrics.to_dict(),
+        "optimizer_summary": optimizer_summary_dict,
         "prep_summary": prep_summary,
         "lineage": lineage,
         "feature_cols": list(feature_cols),
+        "split_settings": split_settings,
     }
 
 
 def _evaluate_currently_serving_model(
-    lead_type_name, test_df, y_test, target_cm, min_bid, log
-):
-    """Score the model currently serving traffic on this run's held-out test set.
+    lead_type_name: str,
+    test_df: pd.DataFrame,
+    y_test: pd.Series,
+    target_cm: float,
+    min_bid: float,
+    bid_step: float,
+    log: logging.Logger,
+) -> tuple[dict | None, dict | None]:
+    """Evaluate the serving model on the challenger test rows.
 
-    Returns ``(metrics, optimizer_summary)``, or ``(None, None)`` if nothing
-    is serving yet, or if it can't be loaded/scored (e.g. its feature schema
-    has since changed, or its registry pointer is corrupt) — in which case
-    ``decide_promotion`` treats this as the bootstrap case and promotes the
-    challenger. The ``registry.load_currently_serving_model`` call is
-    deliberately INSIDE the try/except below (not before it): a corrupt
-    ``current.json`` (e.g. left truncated by a process killed mid-write) once
-    raised a raw ``JSONDecodeError`` from there that was outside the
-    try/except, crashing the entire training run instead of just skipping
-    this comparison — this is a "nice to have" re-score, not something that
-    should ever be able to block training a new model.
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    test_df : Any
+        Input value.
+    y_test : pandas.Series | numpy.ndarray
+        Held-out target values.
+    target_cm : float
+        Target contribution margin as a decimal.
+    min_bid : float
+        Minimum candidate bid.
+    bid_step : float
+        Increment between candidate bids.
+    log : logging.Logger | None
+        Optional logger for structured output.
+
+    Returns
+    -------
+    tuple[dict | None, dict | None]
+        Serving model metrics followed by optimizer metrics.
     """
-    try:
-        serving_model, serving_manifest = registry.load_currently_serving_model(
-            lead_type_name
-        )
-        if serving_model is None:
-            log.info(
-                "Nothing currently serving for '%s' (first model).", lead_type_name
-            )
-            return None, None
+    serving_model, serving_manifest = registry.load_currently_serving_model(
+        lead_type_name
+    )
 
-        serving_feature_cols = serving_manifest.get("feature_cols") or []
+    if serving_model is None:
+        log.info(
+            "Nothing currently serving for '%s' (first model).",
+            lead_type_name,
+        )
+        return None, None
+
+    serving_feature_cols = serving_manifest.get("feature_cols") or []
+
+    try:
         X_serving = test_df[serving_feature_cols]
-        _, _, serving_metrics = metrics.evaluate_model(serving_model, X_serving, y_test)
-        serving_optimizer_result = predict.run_bid_optimizer_evaluation(
+        _, _, serving_metrics = metrics.evaluate_model(
+            serving_model,
+            X_serving,
+            y_test,
+        )
+        serving_optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
             test_eval_df=test_df,
             model=serving_model,
             feature_cols=serving_feature_cols,
             target_cm=target_cm,
             min_bid=min_bid,
-            bid_step=config.BID_STEP,
+            bid_step=bid_step,
+            log=log,
+            log_summary_result=False,
         )
         serving_optimizer_summary = (
-            serving_optimizer_result[1] if serving_optimizer_result else {}
+            serving_optimizer_result[1].to_dict() if serving_optimizer_result else {}
         )
         log.info(
-            "Currently-serving model (%s) re-scored on this test set: ROC AUC=%.4f",
+            "Currently-serving model (%s) re-scored on this test set: " "ROC AUC=%.4f",
             serving_manifest.get("version"),
-            serving_metrics["roc_auc"],
+            serving_metrics.roc_auc,
         )
-        return serving_metrics, serving_optimizer_summary
-    except Exception as exc:  # noqa: BLE001 - corrupt pointer, bad schema, etc.
+        return serving_metrics.to_dict(), serving_optimizer_summary
+    except Exception as exc:  # noqa: BLE001
         log.warning(
-            "Could not load/score the currently-serving model for '%s' on "
-            "the current test set (%s); treating as nothing comparable "
-            "currently serving.",
-            lead_type_name,
+            "Could not score currently-serving model %s on the current "
+            "test set (%s); treating as nothing comparable currently "
+            "serving.",
+            serving_manifest.get("version"),
             exc,
         )
         return None, None
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
+    """Run model training from command-line arguments.
+
+    Inputs
+    ------
+    argv : list[str] | None
+        Optional command-line argument sequence.
+
+    Returns
+    -------
+    int
+        Process exit status.
+    """
     parser = argparse.ArgumentParser(
         description="Train the Anton win-probability model."
     )
     parser.add_argument(
-        "--lead-type-id", type=int, default=6, help="6=auto (default), 1=home"
+        "--lead-type-id",
+        type=int,
+        required=True,
+        help="Lead type ID: 6=auto, 1=home, 5=commercial",
     )
     parser.add_argument(
-        "--version", default=None, help="Training-table version (default: latest)"
+        "--version",
+        default=None,
+        help="Training-table version (default: latest)",
     )
     parser.add_argument(
-        "--no-mlflow", action="store_true", help="Skip MLflow logging/registration"
+        "--no-mlflow",
+        action="store_true",
+        help="Skip MLflow logging and registration",
     )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
     )
+
     run_training(
         lead_type_id=args.lead_type_id,
+        version=args.version,
         register_mlflow=not args.no_mlflow,
     )
-    print("Done.")
+    logger.info("Done.")
     return 0
 
 
