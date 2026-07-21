@@ -13,29 +13,36 @@
   exactly like the existing Prefect flow-failure Slack alerts: same webhook
   env var (`SLACK_WEBHOOK_URL`), same Block Kit formatting, same
   disabled-when-unconfigured behavior.
-- **On success**: the `docker pull` command for each image's `-latest` tag
-  (the one Watchtower actually pulls) — trimmed down from an earlier
-  version that also listed the `-<sha>` tags, after confirming live in
-  Slack that only the two `-latest` commands were actually useful.
-- **On failure**: which stage(s) failed and a trimmed excerpt of the actual
+- **On success**: `✅ SmartHub CI/CD Pipeline Succeeded` header, a bulleted
+  metadata list (`🔹 Branch` / `Commit` / `Triggered by` / `Environment` /
+  `Time`), a `🐳 Pull the latest images:` section with the `docker pull`
+  command for each image's `-<sha>` tag (pinned to this exact build), and a
+  `🔗 Workflow:` section with the run link — a specific custom layout the
+  team asked for after iterating on a couple of earlier formats (a 4-line
+  field grid, then a compact grouped layout) live in Slack.
+- **On failure**: `🔴 SmartHub CI/CD Pipeline Failed`, the same bulleted
+  metadata plus `Failed stage` (and `Skipped as a result` when a failure
+  short-circuited downstream jobs), then a trimmed excerpt of the actual
   tool output (the isort/black diff, the flake8 findings, or the pytest
   failure summary) — added an output-capture step to `isort`/`black`/
-  `flake8`/`pytest` (each keeps failing normally; it also now exposes a
+  `flake8`/`pytest` (each keeps failing normally; it also now exposes an
   `error_message` job output with its last ~4000 chars of output).
   `build-worker`/`build-dashboard` failures fall back to "see this job's
   log" since `docker/build-push-action` doesn't expose its build log as a
   capturable output — flagged explicitly rather than silently omitted.
 - New `.github/scripts/notify_ci.py` — reads the six jobs' results/messages
-  from env vars and calls `notify_success_grouped`/`notify_failure_grouped`.
-  Layout is intentionally compact: branch/commit/actor collapse into one
-  headline under the header, the run link lives in the small context
-  footer, and the group section holds only the part that actually matters
-  (the pull commands on success, the error excerpt on failure). Added a new
-  `notify_failure_grouped` to `core/notifications.py`, mirroring the
-  existing `notify_success_grouped` (including the same `@`-mention-on-
-  failure block `_build_payload` already had, which the grouped builder was
-  missing). Verified locally (monkeypatched `notifications._post`) for both
-  a clean run and a mid-pipeline failure with a mention configured
+  from env vars and builds this exact Block Kit layout directly (custom
+  enough — emoji section headers, non-code-fenced pull commands, a flat
+  bulleted metadata section — that it doesn't fit the existing structured
+  templates). Sends via a new `notify_raw(payload)` escape hatch added to
+  `core/notifications.py`, which still goes through the same webhook
+  config check / timeout / best-effort-and-swallow-errors behavior as
+  every other function in that module, just without imposing a layout.
+  (An intermediate version added a symmetric `notify_failure_grouped` next
+  to the existing `notify_success_grouped` — removed again once the final
+  layout stopped using it, so no unused public API was left behind.)
+  Verified locally (monkeypatched `notifications._post`) for a clean run
+  and a mid-pipeline failure with `SLACK_MENTION_ON_FAILURE` configured
   (downstream jobs correctly reported as "skipped as a result", not as
   additional failures).
 - **New required GitHub secret**: `SLACK_WEBHOOK_URL` (mirrors the runtime
