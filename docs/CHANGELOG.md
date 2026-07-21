@@ -13,9 +13,10 @@
   exactly like the existing Prefect flow-failure Slack alerts: same webhook
   env var (`SLACK_WEBHOOK_URL`), same Block Kit formatting, same
   disabled-when-unconfigured behavior.
-- **On success**: the `docker pull` commands for both the `worker` and
-  `dashboard` images (`-latest` and `-<sha>` tags), plus branch/commit/actor/
-  run-link.
+- **On success**: the `docker pull` command for each image's `-latest` tag
+  (the one Watchtower actually pulls) — trimmed down from an earlier
+  version that also listed the `-<sha>` tags, after confirming live in
+  Slack that only the two `-latest` commands were actually useful.
 - **On failure**: which stage(s) failed and a trimmed excerpt of the actual
   tool output (the isort/black diff, the flake8 findings, or the pytest
   failure summary) — added an output-capture step to `isort`/`black`/
@@ -25,9 +26,16 @@
   log" since `docker/build-push-action` doesn't expose its build log as a
   capturable output — flagged explicitly rather than silently omitted.
 - New `.github/scripts/notify_ci.py` — reads the six jobs' results/messages
-  from env vars, builds the success/failure fields, and calls
-  `notify_success`/`notify_failure`. Verified locally (monkeypatched
-  `notifications._post`) for both a clean run and a mid-pipeline failure
+  from env vars and calls `notify_success_grouped`/`notify_failure_grouped`.
+  Layout is intentionally compact: branch/commit/actor collapse into one
+  headline under the header, the run link lives in the small context
+  footer, and the group section holds only the part that actually matters
+  (the pull commands on success, the error excerpt on failure). Added a new
+  `notify_failure_grouped` to `core/notifications.py`, mirroring the
+  existing `notify_success_grouped` (including the same `@`-mention-on-
+  failure block `_build_payload` already had, which the grouped builder was
+  missing). Verified locally (monkeypatched `notifications._post`) for both
+  a clean run and a mid-pipeline failure with a mention configured
   (downstream jobs correctly reported as "skipped as a result", not as
   additional failures).
 - **New required GitHub secret**: `SLACK_WEBHOOK_URL` (mirrors the runtime

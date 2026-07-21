@@ -280,6 +280,17 @@ def _build_grouped_payload(
     if headline:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": headline}})
 
+    # Optional @-mention on failure -- same as _build_payload's.
+    if status == _FAILURE:
+        mention = os.environ.get(MENTION_ENV, "").strip()
+        if mention:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"{mention} attention needed"},
+                }
+            )
+
     for title, fields in groups:
         fb = _field_blocks(fields)
         if not fb:
@@ -343,6 +354,44 @@ def notify_success_grouped(
     return _post(
         _build_grouped_payload(
             _SUCCESS, pipeline, subject, headline, groups or [], footer_extra
+        )
+    )
+
+
+def notify_failure_grouped(
+    pipeline: str,
+    *,
+    subject: str | None = None,
+    headline: str | None = None,
+    groups: list | None = None,
+    footer_extra: str | None = None,
+) -> bool:
+    """Notify failure with a grouped, sectioned layout (best-effort).
+
+    Mirrors ``notify_success_grouped`` (same grouped/sectioned rendering),
+    just with the failure emoji/verb and the optional @-mention block.
+
+    Inputs
+    ------
+    pipeline : str
+        Pipeline name shown in the header.
+    subject : str | None
+        Optional subject appended to the header.
+    headline : str | None
+        Prominent mrkdwn line under the header.
+    groups : list | None
+        Ordered ``(title, fields_dict)`` pairs to render.
+    footer_extra : str | None
+        Extra text appended to the context footer.
+
+    Returns
+    -------
+    bool
+        True when delivered.
+    """
+    return _post(
+        _build_grouped_payload(
+            _FAILURE, pipeline, subject, headline, groups or [], footer_extra
         )
     )
 

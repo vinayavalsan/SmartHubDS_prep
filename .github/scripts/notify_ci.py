@@ -3,10 +3,19 @@
 Called from the `notify` job in .github/workflows/ci_cd.yml, which only runs
 on a push to the deploy branch (smarthub.etl.pipeline) -- the one case where
 Docker images actually get built, so a success notification's "pull this
-image" is meaningful. Reuses smarthub.core.notifications so this looks and
-behaves exactly like the existing Prefect flow-failure Slack alerts (same
-Block Kit formatting, same best-effort/no-op-when-unconfigured behavior),
-rather than being a second, differently-styled notification path.
+image" is meaningful. Reuses smarthub.core.notifications's grouped layout
+(notify_success_grouped / notify_failure_grouped) so this looks and behaves
+like the existing Prefect flow alerts, not a second, differently-styled
+notification path.
+
+Compact layout: branch/commit/actor collapse into one headline under the
+header, the run link lives in the small context footer, and the group
+section holds only the part that actually matters -- the pull commands on
+success, the error excerpt on failure.
+
+Only the `-latest` tag is shown for each image (not `-<sha>`) -- that's the
+tag Watchtower actually pulls on the server (see README's CI/CD section), so
+it's the command someone would realistically run right after this alert.
 
 All inputs come from environment variables set by the `notify` job -- see
 that job's `env:` block for exactly what each one is.
@@ -16,7 +25,7 @@ from __future__ import annotations
 
 import os
 
-from smarthub.core.notifications import notify_failure, notify_success
+from smarthub.core.notifications import notify_failure_grouped, notify_success_grouped
 
 # Job name (as used in RESULT_*/MSG_* env var suffixes) -> human label.
 STAGES = {
@@ -33,46 +42,56 @@ def _env(name: str) -> str:
     return os.environ.get(name, "") or ""
 
 
-def _common_fields() -> dict:
+def _headline() -> str:
     sha = _env("GITHUB_SHA_FULL")
-    return {
-        "Branch": _env("GITHUB_REF_NAME_VALUE"),
-        "Commit": sha[:7] if sha else None,
-        "Triggered by": _env("GITHUB_ACTOR_NAME"),
-        "Run": _env("RUN_URL"),
-    }
+    branch = _env("GITHUB_REF_NAME_VALUE") or "?"
+    commit = sha[:7] if sha else "?"
+    actor = _env("GITHUB_ACTOR_NAME") or "?"
+    return f"`{branch}` @ `{commit}` · triggered by {actor}"
+
+
+def _footer() -> str | None:
+    run_url = _env("RUN_URL")
+    return f"Run: {run_url}" if run_url else None
 
 
 def _notify_success() -> None:
-    sha = _env("GITHUB_SHA_FULL")[:7]
     dockerhub_user = _env("DOCKERHUB_USERNAME")
     repo = f"{dockerhub_user}/smarthub" if dockerhub_user else "smarthub"
     pulls = "\n".join(
         [
             f"docker pull {repo}:worker-latest",
-            f"docker pull {repo}:worker-{sha}",
             f"docker pull {repo}:dashboard-latest",
-            f"docker pull {repo}:dashboard-{sha}",
         ]
     )
-    fields = _common_fields()
-    fields["Pull the new images"] = f"```{pulls}```"
-    notify_success("CI/CD", fields)
+    notify_success_grouped(
+        "CI/CD",
+        headline=_headline(),
+        groups=[(None, {"Pull the new images": f"```{pulls}```"})],
+        footer_extra=_footer(),
+    )
 
 
 def _notify_failure(failed: list[str], not_run: list[str], messages: dict) -> None:
-    fields = _common_fields()
-    fields["Failed stage"] = ", ".join(STAGES[s] for s in failed) or "unknown"
-    if not_run:
-        fields["Skipped as a result"] = ", ".join(STAGES[s] for s in not_run)
+    stage_label = ", ".join(STAGES[s] for s in failed) or "unknown"
 
     error_text = "\n\n".join(
         f"[{STAGES[s]}]\n{messages[s]}" for s in failed if messages.get(s)
     )
     if not error_text:
-        error_text = "(no captured output for this stage -- see the run link above)"
+        error_text = "(no captured output for this stage -- see the run link below)"
 
-    notify_failure("CI/CD", fields, error=error_text)
+    fields = {"Error": f"```{error_text}```"}
+    if not_run:
+        fields["Skipped as a result"] = ", ".join(STAGES[s] for s in not_run)
+
+    notify_failure_grouped(
+        "CI/CD",
+        subject=f"stage: {stage_label}",
+        headline=_headline(),
+        groups=[(None, fields)],
+        footer_extra=_footer(),
+    )
 
 
 def main() -> None:

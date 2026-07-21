@@ -296,9 +296,10 @@ pre-commit run --all-files --hook-stage pre-push   # optional: run pytest now
   when something upstream failed), and gated the same way as the build jobs
   (push to `smarthub.etl.pipeline` only — PRs stay quiet; GitHub's own
   per-check status already covers those). Posts one Slack message via
-  `smarthub.core.notifications` (same webhook, same Block Kit style as the
-  Prefect flow-failure alerts): on success, the `docker pull` commands for
-  both images; on failure, which stage failed and a trimmed excerpt of its
+  `smarthub.core.notifications`' grouped layout (same webhook/style as the
+  Prefect flow alerts): on success, the `docker pull` command for each
+  image's `-latest` tag (the tag Watchtower actually pulls, so it's the one
+  worth showing); on failure, which stage failed and a trimmed excerpt of its
   actual output (the isort/black diff, the flake8 findings, or the pytest
   failure summary — for a `build-worker`/`build-dashboard` failure it's just
   a pointer to that job's log, since `docker/build-push-action` doesn't
