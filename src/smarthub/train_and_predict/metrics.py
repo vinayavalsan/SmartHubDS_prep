@@ -13,6 +13,7 @@ from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
     f1_score,
+    fbeta_score,
     log_loss,
     precision_score,
     recall_score,
@@ -34,6 +35,7 @@ class ModelMetrics:
     precision: float
     recall: float
     f1: float
+    f2: float
     observed_win_rate: float
     predicted_current_bid_win_rate: float
     calibration_error: float
@@ -97,6 +99,7 @@ def evaluate_model(model, X_test, y_test):
         precision=float(precision_score(y_test, pred_class, zero_division=0)),
         recall=float(recall_score(y_test, pred_class, zero_division=0)),
         f1=float(f1_score(y_test, pred_class, zero_division=0)),
+        f2=float(fbeta_score(y_test, pred_class, beta=2, zero_division=0)),
         observed_win_rate=observed,
         predicted_current_bid_win_rate=predicted,
         calibration_error=abs(observed - predicted),
@@ -142,11 +145,12 @@ def log_model_evaluation(
         model_metrics.brier_score,
     )
     log.info(
-        "  Accuracy / precision / recall / F1 : %.4f / %.4f / %.4f / %.4f",
+        "  Accuracy / precision / recall / F1 / F2: %.4f / %.4f / %.4f / %.4f / %.4f",
         model_metrics.accuracy,
         model_metrics.precision,
         model_metrics.recall,
         model_metrics.f1,
+        model_metrics.f2,
     )
     log.info(
         "  Calibration error                  : %.4f",

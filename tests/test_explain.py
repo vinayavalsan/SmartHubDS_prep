@@ -469,6 +469,9 @@ def test_explain_bid_no_viable_bid_skips_shap_and_llm(monkeypatch):
         record={"bid": 0.25},
         lead_type_id=6,
         expected_revenue=1.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert pd.isna(result["recommended_bid"])
     assert result["top_factors"] == []
@@ -516,6 +519,9 @@ def test_explain_bid_cold_start_skips_shap_and_llm_uses_policy_text(monkeypatch)
         record={"bid": 0.25},
         lead_type_id=6,
         expected_revenue=10.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert result["recommended_bid"] == 5.0
     assert result["top_factors"] == []
@@ -574,6 +580,9 @@ def test_explain_bid_swaps_in_recommended_bid_before_explaining(monkeypatch):
         record={"bid": 0.25},
         lead_type_id=6,
         expected_revenue=10.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert seen_records["record"]["bid"] == 15.0  # swapped, not the input 0.25
     assert result["recommended_bid"] == 15.0
@@ -641,6 +650,9 @@ def test_explain_bid_includes_decision_note_for_exploration(monkeypatch):
         record={"bid": 0.25},
         lead_type_id=6,
         expected_revenue=10.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
     )
     assert result["decision_path"] == "exploration"
     assert "Scheduled exploration probe" in seen_prompts["prompt"]

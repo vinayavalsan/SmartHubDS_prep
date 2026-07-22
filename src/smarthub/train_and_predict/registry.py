@@ -422,93 +422,164 @@ def decide_promotion(
     currently_serving_metrics: dict | None,
     currently_serving_optimizer: dict | None,
     *,
-    min_roc_auc_regression: float = 0.01,
-    min_profit_ratio: float = 0.98,
+    max_log_loss_regression: float,
+    min_profit_ratio: float,
+    max_absolute_profit_loss_tolerance: float,
+    target_cm: float,
+    max_log_loss: float,
+    min_expected_profit: float,
 ) -> PromotionDecision:
-    """Compare challenger and serving metrics and decide promotion.
+    """Compare challenger and serving performance and decide promotion.
 
-    Inputs
-    ------
-    challenger_metrics : dict
-        Challenger model metrics.
-    challenger_optimizer : dict | None
-        Challenger optimizer metrics.
-    currently_serving_metrics : dict | None
-        Serving model metrics, when available.
-    currently_serving_optimizer : dict | None
-        Serving optimizer metrics, when available.
-    min_roc_auc_regression : float
-        Maximum permitted ROC AUC regression.
-    min_profit_ratio : float
-        Minimum challenger-to-serving profit ratio.
-
-    Returns
-    -------
-    PromotionDecision
-        Promotion decision and comparison details.
+    Every challenger must pass absolute log-loss, expected-profit, and
+    contribution-margin gates. When a serving model exists, the challenger
+    must also satisfy the relative profit and log-loss requirements.
     """
-    if currently_serving_metrics is None:
-        return PromotionDecision(
-            True,
-            "Nothing currently serving for this lead type — promoting by default.",
-        )
-
-    challenger_auc = challenger_metrics.get("roc_auc", 0.0)
-    serving_auc = currently_serving_metrics.get("roc_auc", 0.0)
-    auc_drop = serving_auc - challenger_auc
-    comparison = {
-        "challenger_roc_auc": challenger_auc,
-        "currently_serving_roc_auc": serving_auc,
-        "roc_auc_drop": auc_drop,
-    }
-    if auc_drop > min_roc_auc_regression:
-        return PromotionDecision(
-            False,
-            f"Challenger ROC AUC regressed by {auc_drop:.4f} versus the "
-            f"currently-serving model (tolerance {min_roc_auc_regression:.4f}).",
-            comparison,
-        )
-
-    serving_profit = (currently_serving_optimizer or {}).get(
-        "recommended_bid_total_expected_profit"
-    )
+    challenger_log_loss = challenger_metrics.get("log_loss")
     challenger_profit = (challenger_optimizer or {}).get(
         "recommended_bid_total_expected_profit"
     )
-    comparison["challenger_profit"] = challenger_profit
-    comparison["currently_serving_profit"] = serving_profit
+    challenger_cm = (challenger_optimizer or {}).get("avg_recommended_bid_cm_if_won")
 
-    if serving_profit is not None and challenger_profit is not None:
-        if serving_profit <= 0:
-            # The currently-serving model wasn't profitable on this test set;
-            # any non-regressing challenger profit is an improvement or a wash.
-            ok = challenger_profit >= serving_profit
-        else:
-            ok = challenger_profit >= serving_profit * min_profit_ratio
-        comparison["profit_ratio"] = (
-            (challenger_profit / serving_profit) if serving_profit else None
+    comparison = {
+        "challenger_log_loss": challenger_log_loss,
+        "maximum_log_loss": max_log_loss,
+        "challenger_profit": challenger_profit,
+        "minimum_expected_profit": min_expected_profit,
+        "challenger_recommended_cm": challenger_cm,
+        "target_cm": target_cm,
+    }
+
+    if challenger_log_loss is None:
+        return PromotionDecision(
+            False,
+            "Challenger log loss is unavailable.",
+            comparison,
         )
-        if not ok:
-            return PromotionDecision(
-                False,
-                f"Challenger expected profit ({challenger_profit:.2f}) is below "
-                f"{min_profit_ratio:.0%} of the currently-serving model's "
-                f"({serving_profit:.2f}) on the same held-out test set.",
-                comparison,
-            )
+    if challenger_log_loss > max_log_loss:
+        return PromotionDecision(
+            False,
+            f"Challenger log loss ({challenger_log_loss:.4f}) exceeds the "
+            f"maximum allowed ({max_log_loss:.4f}).",
+            comparison,
+        )
+
+    if challenger_profit is None:
+        return PromotionDecision(
+            False,
+            "Challenger expected profit is unavailable.",
+            comparison,
+        )
+    if challenger_profit < min_expected_profit:
+        return PromotionDecision(
+            False,
+            f"Challenger expected profit ({challenger_profit:.2f}) is below "
+            f"the required minimum ({min_expected_profit:.2f}).",
+            comparison,
+        )
+
+    if challenger_cm is None:
+        return PromotionDecision(
+            False,
+            "Challenger recommended contribution margin is unavailable.",
+            comparison,
+        )
+    if challenger_cm < target_cm:
+        return PromotionDecision(
+            False,
+            f"Challenger recommended CM ({challenger_cm:.2%}) is below the "
+            f"optimizer target CM ({target_cm:.2%}).",
+            comparison,
+        )
+
+    if currently_serving_metrics is None:
         return PromotionDecision(
             True,
-            f"Challenger profit {challenger_profit:.2f} >= "
-            f"{min_profit_ratio:.0%} of currently-serving profit "
-            f"{serving_profit:.2f} (ROC AUC drop {auc_drop:.4f} within tolerance).",
+            f"First model passed all absolute promotion thresholds: log loss "
+            f"{challenger_log_loss:.4f}, expected profit "
+            f"{challenger_profit:.2f}, and recommended CM "
+            f"{challenger_cm:.2%}.",
+            comparison,
+        )
+
+    serving_log_loss = currently_serving_metrics.get("log_loss")
+    serving_profit = (currently_serving_optimizer or {}).get(
+        "recommended_bid_total_expected_profit"
+    )
+    comparison.update(
+        {
+            "currently_serving_log_loss": serving_log_loss,
+            "currently_serving_profit": serving_profit,
+            "log_loss_regression": None,
+        }
+    )
+
+    if serving_log_loss is None:
+        return PromotionDecision(
+            False,
+            "Currently-serving model log loss is unavailable.",
+            comparison,
+        )
+    if serving_profit is None:
+        return PromotionDecision(
+            False,
+            "Currently-serving model expected profit is unavailable.",
+            comparison,
+        )
+    if serving_profit <= 0:
+        return PromotionDecision(
+            False,
+            f"Currently-serving expected profit ({serving_profit:.2f}) must be "
+            "greater than zero for a valid relative profit comparison.",
+            comparison,
+        )
+
+    log_loss_regression = challenger_log_loss - serving_log_loss
+    profit_ratio = challenger_profit / serving_profit
+    absolute_profit_loss = serving_profit - challenger_profit
+    comparison["log_loss_regression"] = log_loss_regression
+    comparison["profit_ratio"] = profit_ratio
+    comparison["absolute_profit_loss"] = absolute_profit_loss
+    comparison["max_absolute_profit_loss_tolerance"] = (
+        max_absolute_profit_loss_tolerance
+    )
+
+    if profit_ratio < min_profit_ratio:
+        return PromotionDecision(
+            False,
+            f"Challenger expected profit ({challenger_profit:.2f}) is below "
+            f"{min_profit_ratio:.0%} of the currently-serving model's "
+            f"({serving_profit:.2f}) on the same held-out rows.",
+            comparison,
+        )
+
+    if absolute_profit_loss > max_absolute_profit_loss_tolerance:
+        return PromotionDecision(
+            False,
+            f"Challenger expected profit is lower by "
+            f"{absolute_profit_loss:.2f}, exceeding the allowed "
+            "absolute profit-loss tolerance "
+            f"of {max_absolute_profit_loss_tolerance:.2f} on the same held-out rows.",
+            comparison,
+        )
+
+    if log_loss_regression > max_log_loss_regression:
+        return PromotionDecision(
+            False,
+            f"Challenger log loss regressed by {log_loss_regression:.4f} versus "
+            f"the currently-serving model (tolerance "
+            f"{max_log_loss_regression:.4f}).",
             comparison,
         )
 
     return PromotionDecision(
         True,
-        f"ROC AUC drop {auc_drop:.4f} within tolerance "
-        f"({min_roc_auc_regression:.4f}); no optimizer comparison available "
-        "on one or both sides.",
+        f"Challenger passed the absolute thresholds and satisfies the "
+        f"{min_profit_ratio:.0%} relative profit requirement and the "
+        f"{max_absolute_profit_loss_tolerance:.2f} absolute profit-loss "
+        f"tolerance; recommended CM "
+        f"is {challenger_cm:.2%}, and log-loss regression "
+        f"{log_loss_regression:.4f} is within tolerance.",
         comparison,
     )
 

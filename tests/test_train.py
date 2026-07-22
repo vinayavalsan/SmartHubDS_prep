@@ -33,11 +33,11 @@ class _StubLogger:
 def test_evaluate_currently_serving_model_none_when_nothing_serving(monkeypatch):
     """No promoted version yet -> (None, None), logged as the bootstrap case."""
     monkeypatch.setattr(
-        registry, "load_currently_serving_model", lambda lead_type_name: (None, None)
+        registry, "currently_serving_version", lambda lead_type_name: None
     )
     log = _StubLogger()
     result = train._evaluate_currently_serving_model(
-        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, log
+        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100, log
     )
     assert result == (None, None)
     assert any("first model" in m for m in log.infos)
@@ -49,17 +49,22 @@ def test_evaluate_currently_serving_model_propagates_registry_load_error(monkeyp
     def _boom(lead_type_name):
         raise ValueError("Expecting value: line 1 column 1 (char 0)")
 
+    monkeypatch.setattr(
+        registry, "currently_serving_version", lambda lead_type_name: "v1_x"
+    )
     monkeypatch.setattr(registry, "load_currently_serving_model", _boom)
     log = _StubLogger()
     with pytest.raises(ValueError, match="Expecting value"):
         train._evaluate_currently_serving_model(
-            "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, log
+            "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100, log
         )
 
 
-def test_evaluate_currently_serving_model_survives_schema_mismatch(monkeypatch):
-    """An incompatible feature schema (test_df missing a trained-on column)
-    also degrades gracefully rather than raising a KeyError."""
+def test_evaluate_currently_serving_model_propagates_schema_mismatch(monkeypatch):
+    """An incompatible serving feature schema raises a clear KeyError."""
+    monkeypatch.setattr(
+        registry, "currently_serving_version", lambda lead_type_name: "v1_x"
+    )
     monkeypatch.setattr(
         registry,
         "load_currently_serving_model",
@@ -70,8 +75,7 @@ def test_evaluate_currently_serving_model_survives_schema_mismatch(monkeypatch):
     )
     log = _StubLogger()
     test_df = pd.DataFrame({"bid": [1.0, 2.0]})
-    result = train._evaluate_currently_serving_model(
-        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, log
-    )
-    assert result == (None, None)
-    assert any("Could not score currently-serving model" in m for m in log.warnings)
+    with pytest.raises(KeyError, match="not_a_real_column"):
+        train._evaluate_currently_serving_model(
+            "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100, log
+        )

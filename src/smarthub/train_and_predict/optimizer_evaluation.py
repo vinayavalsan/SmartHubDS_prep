@@ -247,9 +247,11 @@ def run_bid_optimizer_evaluation(
     test_eval_df,
     model,
     feature_cols,
-    target_cm=0.25,
-    min_bid=0.25,
-    bid_step=0.25,
+    *,
+    target_cm,
+    min_bid,
+    bid_step,
+    chunk_size,
     log=None,
     log_summary_result=True,
 ):
@@ -269,6 +271,8 @@ def run_bid_optimizer_evaluation(
         Minimum candidate bid.
     bid_step : float
         Increment between candidate bids.
+    chunk_size : int
+        Maximum rows processed per optimizer scoring chunk.
     log : logging.Logger | None
         Optional logger for structured output.
     log_summary_result : bool
@@ -291,6 +295,7 @@ def run_bid_optimizer_evaluation(
         target_cm,
         min_bid,
         bid_step,
+        chunk_size,
         log=log,
     )
     if eval_df is None:

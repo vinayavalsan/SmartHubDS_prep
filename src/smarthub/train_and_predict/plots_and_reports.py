@@ -444,6 +444,7 @@ def save_performance_plots(
     precision,
     recall,
     f1,
+    f2,
     optimizer_eval_df=None,
 ):
     """Write classifier and optimizer diagnostic plots.
@@ -470,6 +471,8 @@ def save_performance_plots(
         Classification recall.
     f1 : float
         F1 score.
+    f2 : float
+        F2 score, weighting recall more heavily than precision.
     optimizer_eval_df : pandas.DataFrame | None
         Row-level optimizer evaluation results.
     """
@@ -574,7 +577,7 @@ def save_performance_plots(
         f"Accuracy: {accuracy:.1%}    "
         f"Precision: {precision:.1%}    "
         f"Recall: {recall:.1%}\n"
-        f"F1 Score: {f1:.1%}    "
+        f"F1 Score: {f1:.1%}    F2 Score: {f2:.1%}    "
         f"Specificity: {specificity:.1%}    "
         f"NPV: {negative_predictive_value:.1%}"
     )

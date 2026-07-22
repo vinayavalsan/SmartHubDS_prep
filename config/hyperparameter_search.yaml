@@ -1,4 +1,5 @@
 search:
+  model_type: lightgbm
   scoring: neg_log_loss
   n_trials: 50
   cv_folds: 3

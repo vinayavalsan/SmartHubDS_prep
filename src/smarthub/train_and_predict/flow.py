@@ -5,6 +5,8 @@ This module runs training, publishes run summaries, and sends notifications.
 
 from __future__ import annotations
 
+import argparse
+
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 
@@ -74,7 +76,7 @@ def _train_task(lead_type_id, version, register_mlflow):
     on_failure=[notifications.flow_failure_hook],
 )
 def train_flow(
-    lead_type_id: int = 6,
+    lead_type_id: int,
     version: str | None = None,
     register_mlflow: bool = True,
 ) -> dict:
@@ -109,10 +111,10 @@ def train_flow(
     m = result["metrics"]
     opt = result["optimizer_summary"] or {}
     logger.info(
-        "Trained %s model %s: ROC AUC=%.4f, rows=%s -> %s (promoted=%s)",
+        "Trained %s model %s: log loss=%.4f, rows=%s -> %s (promoted=%s)",
         lead_type_name,
         result.get("model_version"),
-        m.get("roc_auc", float("nan")),
+        m.get("log_loss", float("nan")),
         result["prep_summary"]["training_rows"],
         result["model_path"],
         result.get("promoted"),
@@ -122,7 +124,7 @@ def train_flow(
     _notify_success(lead_type_name, lead_type_id, result, m, opt)
     return {
         "lead_type": lead_type_name,
-        "roc_auc": m.get("roc_auc"),
+        "log_loss": m.get("log_loss"),
         "rows_trained": result["prep_summary"]["training_rows"],
         "model_path": result["model_path"],
     }
@@ -222,6 +224,7 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 | ROC AUC | {_f(m.get('roc_auc'))} |
 | PR AUC | {_f(m.get('pr_auc'))} |
 | Log loss | {_f(m.get('log_loss'))} |
+| F2 | {_f(m.get('f2'))} |
 | Brier score | {_f(m.get('brier_score'))} |
 | Calibration error | {_f(m.get('calibration_error'))} |
 
@@ -327,6 +330,7 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
                 "ROC AUC": _f(m.get("roc_auc")),
                 "PR AUC": _f(m.get("pr_auc")),
                 "Log loss": _f(m.get("log_loss")),
+                "F2": _f(m.get("f2")),
                 "Calibration error": _f(m.get("calibration_error")),
             },
         ),
@@ -375,5 +379,40 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     )
 
 
+def _parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for local flow execution.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed command-line arguments.
+    """
+    parser = argparse.ArgumentParser(
+        description="Run the SmartHub Prefect model-training flow."
+    )
+    parser.add_argument(
+        "--lead-type-id",
+        type=int,
+        required=True,
+        help="SmartHub lead type identifier to train.",
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        help="Optional training-table or model version identifier.",
+    )
+    parser.add_argument(
+        "--no-register-mlflow",
+        action="store_true",
+        help="Disable MLflow logging and registration for this run.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    train_flow(lead_type_id=6)
+    args = _parse_args()
+    train_flow(
+        lead_type_id=args.lead_type_id,
+        version=args.version,
+        register_mlflow=not args.no_register_mlflow,
+    )

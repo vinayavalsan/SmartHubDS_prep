@@ -162,91 +162,171 @@ def test_rollback_without_anything_serving_raises():
 # --- Promotion policy (decide_promotion) --------------------------------------
 
 
-def test_decide_promotion_bootstraps_with_nothing_currently_serving():
-    """decide_promotion promotes when nothing is currently serving."""
+POLICY = {
+    "max_log_loss_regression": 0.01,
+    "min_profit_ratio": 0.98,
+    "max_absolute_profit_loss_tolerance": 5.0,
+    "target_cm": 0.20,
+    "max_log_loss": 0.55,
+    "min_expected_profit": 0.0,
+}
+
+
+def _optimizer(profit, cm=0.25):
+    return {
+        "recommended_bid_total_expected_profit": profit,
+        "avg_recommended_bid_cm_if_won": cm,
+    }
+
+
+def test_decide_promotion_bootstraps_when_absolute_gates_pass():
+    """The first model is eligible only after passing all absolute gates."""
     decision = registry.decide_promotion(
-        challenger_metrics={"roc_auc": 0.5},
-        challenger_optimizer={},
+        challenger_metrics={"log_loss": 0.50},
+        challenger_optimizer=_optimizer(100, cm=0.25),
         currently_serving_metrics=None,
         currently_serving_optimizer=None,
+        **POLICY,
     )
     assert decision.promote is True
-    assert "Nothing currently serving" in decision.reason
+    assert "First model passed all absolute promotion thresholds" in decision.reason
 
 
-def test_decide_promotion_blocks_on_roc_auc_regression():
-    """decide_promotion blocks a challenger whose ROC AUC regressed."""
+def test_decide_promotion_blocks_first_model_above_max_log_loss():
+    """The first model must satisfy the absolute log-loss threshold."""
     decision = registry.decide_promotion(
-        challenger_metrics={"roc_auc": 0.60},
-        challenger_optimizer={"recommended_bid_total_expected_profit": 1000},
-        currently_serving_metrics={"roc_auc": 0.70},
-        currently_serving_optimizer={"recommended_bid_total_expected_profit": 500},
-        min_roc_auc_regression=0.01,
+        challenger_metrics={"log_loss": 0.60},
+        challenger_optimizer=_optimizer(100),
+        currently_serving_metrics=None,
+        currently_serving_optimizer=None,
+        **POLICY,
     )
-    # AUC dropped by 0.10, way past the 0.01 tolerance -- profit doesn't matter
     assert decision.promote is False
-    assert "ROC AUC regressed" in decision.reason
+    assert "exceeds the maximum allowed" in decision.reason
+
+
+def test_decide_promotion_blocks_negative_challenger_profit():
+    """A challenger with negative expected profit is never eligible."""
+    decision = registry.decide_promotion(
+        challenger_metrics={"log_loss": 0.50},
+        challenger_optimizer=_optimizer(-1),
+        currently_serving_metrics=None,
+        currently_serving_optimizer=None,
+        **POLICY,
+    )
+    assert decision.promote is False
+    assert "below the required minimum" in decision.reason
+
+
+def test_decide_promotion_blocks_on_log_loss_regression():
+    """Profit improvement cannot override excessive log-loss regression."""
+    decision = registry.decide_promotion(
+        challenger_metrics={"log_loss": 0.52},
+        challenger_optimizer=_optimizer(1000),
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(500),
+        **POLICY,
+    )
+    assert decision.promote is False
+    assert "log loss regressed" in decision.reason
+    assert decision.comparison["log_loss_regression"] == pytest.approx(0.02)
 
 
 def test_decide_promotion_blocks_on_profit_regression():
-    """decide_promotion blocks a challenger below the profit-ratio floor."""
+    """A challenger below the configured profit-ratio floor is rejected."""
     decision = registry.decide_promotion(
-        challenger_metrics={"roc_auc": 0.70},
-        challenger_optimizer={"recommended_bid_total_expected_profit": 80},
-        currently_serving_metrics={"roc_auc": 0.70},
-        currently_serving_optimizer={"recommended_bid_total_expected_profit": 100},
-        min_profit_ratio=0.98,
+        challenger_metrics={"log_loss": 0.50},
+        challenger_optimizer=_optimizer(80),
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(100),
+        **POLICY,
     )
-    # 80/100 = 80% of the currently-serving model's profit, below the 98% floor
     assert decision.promote is False
     assert "expected profit" in decision.reason
     assert decision.comparison["profit_ratio"] == pytest.approx(0.8)
 
 
 def test_decide_promotion_allows_small_profit_dip_within_tolerance():
-    """decide_promotion allows a small profit dip within tolerance."""
+    """A small profit dip is allowed when both profit tolerances pass."""
     decision = registry.decide_promotion(
-        challenger_metrics={"roc_auc": 0.70},
-        challenger_optimizer={"recommended_bid_total_expected_profit": 99},
-        currently_serving_metrics={"roc_auc": 0.70},
-        currently_serving_optimizer={"recommended_bid_total_expected_profit": 100},
-        min_profit_ratio=0.98,
+        challenger_metrics={"log_loss": 0.50},
+        challenger_optimizer=_optimizer(99),
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(100),
+        **POLICY,
     )
-    # 99/100 = 99% >= 98% floor
     assert decision.promote is True
 
 
-def test_decide_promotion_promotes_on_clear_improvement():
-    """decide_promotion promotes on a clear AUC and profit improvement."""
+def test_decide_promotion_blocks_when_absolute_profit_loss_exceeds_tolerance():
+    """A challenger is rejected when its absolute profit loss is too large."""
     decision = registry.decide_promotion(
-        challenger_metrics={"roc_auc": 0.75},
-        challenger_optimizer={"recommended_bid_total_expected_profit": 150},
-        currently_serving_metrics={"roc_auc": 0.70},
-        currently_serving_optimizer={"recommended_bid_total_expected_profit": 100},
+        challenger_metrics={"log_loss": 0.50},
+        challenger_optimizer=_optimizer(94),
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(100),
+        min_profit_ratio=0.90,
+        max_absolute_profit_loss_tolerance=5.0,
+        target_cm=0.20,
+        max_log_loss=0.55,
+        min_expected_profit=0.0,
+        max_log_loss_regression=0.01,
+    )
+    assert decision.promote is False
+    assert "absolute profit-loss tolerance" in decision.reason
+    assert decision.comparison["absolute_profit_loss"] == pytest.approx(6.0)
+    assert decision.comparison["max_absolute_profit_loss_tolerance"] == pytest.approx(
+        5.0
+    )
+
+
+def test_decide_promotion_promotes_on_clear_improvement():
+    """Profit, margin, and log-loss requirements all passing permits promotion."""
+    decision = registry.decide_promotion(
+        challenger_metrics={"log_loss": 0.45},
+        challenger_optimizer=_optimizer(150, cm=0.30),
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(100),
+        **POLICY,
     )
     assert decision.promote is True
     assert decision.comparison["profit_ratio"] == pytest.approx(1.5)
 
 
-def test_decide_promotion_falls_back_to_auc_when_no_optimizer_data():
-    """decide_promotion falls back to ROC AUC when no optimizer data exists."""
+def test_decide_promotion_blocks_when_challenger_profit_is_unavailable():
+    """Every challenger must provide expected-profit evaluation results."""
     decision = registry.decide_promotion(
-        challenger_metrics={"roc_auc": 0.70},
+        challenger_metrics={"log_loss": 0.49},
         challenger_optimizer={},
-        currently_serving_metrics={"roc_auc": 0.69},
-        currently_serving_optimizer={},
-        min_roc_auc_regression=0.01,
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(100),
+        **POLICY,
     )
-    assert decision.promote is True
-    assert "no optimizer comparison available" in decision.reason
+    assert decision.promote is False
+    assert "Challenger expected profit is unavailable" in decision.reason
 
 
-def test_decide_promotion_unprofitable_serving_model_any_nonnegative_challenger_ok():
-    """Any non-negative challenger beats an unprofitable serving model."""
+def test_decide_promotion_blocks_when_recommended_cm_is_below_floor():
+    """The challenger must satisfy the configured recommended-CM floor."""
     decision = registry.decide_promotion(
-        challenger_metrics={"roc_auc": 0.70},
-        challenger_optimizer={"recommended_bid_total_expected_profit": 0},
-        currently_serving_metrics={"roc_auc": 0.70},
-        currently_serving_optimizer={"recommended_bid_total_expected_profit": -10},
+        challenger_metrics={"log_loss": 0.49},
+        challenger_optimizer=_optimizer(120, cm=0.15),
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(100),
+        **POLICY,
     )
-    assert decision.promote is True
+    assert decision.promote is False
+    assert "recommended CM" in decision.reason
+
+
+def test_decide_promotion_blocks_invalid_nonpositive_serving_profit():
+    """A nonpositive serving profit is an invalid relative-comparison state."""
+    decision = registry.decide_promotion(
+        challenger_metrics={"log_loss": 0.50},
+        challenger_optimizer=_optimizer(10),
+        currently_serving_metrics={"log_loss": 0.50},
+        currently_serving_optimizer=_optimizer(-10),
+        **POLICY,
+    )
+    assert decision.promote is False
+    assert "must be greater than zero" in decision.reason

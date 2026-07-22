@@ -181,8 +181,22 @@ def test_prepare_training_data_missing_target(monkeypatch):
     monkeypatch.setattr(
         preprocessing.io, "load_training_table", lambda name, v=None: table
     )
+    monkeypatch.setattr(
+        preprocessing.io,
+        "load_training_metadata",
+        lambda name, v=None: {
+            "data_min_created_at": "2026-06-20",
+            "data_max_created_at": "2026-07-06",
+            "row_count": len(table),
+        },
+    )
+
     with pytest.raises(ValueError, match="missing target"):
-        preprocessing.prepare_training_data(fe.LEAD_TYPE_AUTO, "auto")
+        preprocessing.prepare_training_data(
+            fe.LEAD_TYPE_AUTO,
+            "auto",
+            version="test-version",
+        )
 
 
 # --- Bid optimizer math ------------------------------------------------------
@@ -309,6 +323,10 @@ def test_run_bid_optimizer_evaluation_summary():
         test_eval_df=df,
         model=_StubModel(0.5),
         feature_cols=feature_cols,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
+        chunk_size=100,
     )
     assert out is not None
     eval_df, summary = out

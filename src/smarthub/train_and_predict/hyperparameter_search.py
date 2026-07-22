@@ -62,18 +62,18 @@ def _suggest_parameter(
             parameter_name,
             int(specification["low"]),
             int(specification["high"]),
-            step=int(specification.get("step", 1)),
-            log=bool(specification.get("log", False)),
+            step=int(specification["step"]),
+            log=specification["log"],
         )
 
     if parameter_type == "float":
-        step = specification.get("step")
+        step = specification["step"]
         return trial.suggest_float(
             parameter_name,
             float(specification["low"]),
             float(specification["high"]),
             step=float(step) if step is not None else None,
-            log=bool(specification.get("log", False)),
+            log=specification["log"],
         )
 
     raise ValueError(
@@ -109,6 +109,127 @@ def _suggest_parameters(
     }
 
 
+def _scoring_plot_config(scoring: str) -> tuple[None, str]:
+    """Build a plot label from the configured sklearn scoring name.
+
+    All plots use the raw cross-validation score returned by scikit-learn,
+    so larger values are always better. Negative loss scorers therefore
+    remain negative in the plots (for example, ``neg_log_loss`` is shown as
+    ``Negative Log Loss``).
+
+    Inputs
+    ------
+    scoring : str
+        Scikit-learn scoring name used by cross-validation.
+
+    Returns
+    -------
+    tuple[None, str]
+        No target transformation and a human-readable plot label.
+    """
+    metric_names = {
+        "accuracy": "Accuracy",
+        "average_precision": "Average Precision",
+        "balanced_accuracy": "Balanced Accuracy",
+        "f1": "F1 Score",
+        "neg_brier_score": "Negative Brier Score",
+        "neg_log_loss": "Negative Log Loss",
+        "neg_mean_absolute_error": "Negative Mean Absolute Error",
+        "neg_mean_absolute_percentage_error": (
+            "Negative Mean Absolute Percentage Error"
+        ),
+        "neg_mean_gamma_deviance": "Negative Mean Gamma Deviance",
+        "neg_mean_poisson_deviance": "Negative Mean Poisson Deviance",
+        "neg_mean_squared_error": "Negative Mean Squared Error",
+        "neg_mean_squared_log_error": "Negative Mean Squared Log Error",
+        "neg_median_absolute_error": "Negative Median Absolute Error",
+        "neg_root_mean_squared_error": "Negative Root Mean Squared Error",
+        "precision": "Precision",
+        "r2": "R²",
+        "recall": "Recall",
+        "roc_auc": "ROC AUC",
+    }
+
+    metric_name = metric_names.get(
+        scoring,
+        scoring.replace("neg_", "negative_").replace("_", " ").title(),
+    )
+    target_name = f"Mean Cross-Validation {metric_name} " "(higher is better)"
+    return None, target_name
+
+
+def _write_optuna_plots(
+    run_output_dir: Path,
+    study: optuna.Study,
+    parameter_names: list[str],
+    scoring: str,
+    log: logging.Logger,
+) -> dict[str, Path]:
+    """Write interactive Optuna visualizations as HTML artifacts.
+
+    Inputs
+    ------
+    run_output_dir : pathlib.Path
+        Directory for the current hyperparameter-search run.
+    study : optuna.Study
+        Completed Optuna study.
+    parameter_names : list[str]
+        Hyperparameters to include in the multi-parameter contour matrix.
+    scoring : str
+        Scikit-learn scoring name used by the Optuna objective.
+    log : logging.Logger
+        Logger used to report any visualization failures.
+
+    Returns
+    -------
+    dict[str, pathlib.Path]
+        Successfully written visualization names and paths.
+    """
+    plots_dir = run_output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    target, target_name = _scoring_plot_config(scoring)
+
+    plot_builders = {
+        "optimization_history": lambda: (
+            optuna.visualization.plot_optimization_history(
+                study,
+                target=target,
+                target_name=target_name,
+            )
+        ),
+        "parameter_importance": lambda: (
+            optuna.visualization.plot_param_importances(
+                study,
+                target=target,
+                target_name=target_name,
+            )
+        ),
+        "contour_matrix": lambda: optuna.visualization.plot_contour(
+            study,
+            params=parameter_names,
+            target=target,
+            target_name=target_name,
+        ),
+    }
+
+    plot_paths: dict[str, Path] = {}
+    for plot_name, build_plot in plot_builders.items():
+        plot_path = plots_dir / f"{plot_name}.html"
+        try:
+            figure = build_plot()
+            figure.write_html(
+                str(plot_path),
+                include_plotlyjs=True,
+                full_html=True,
+            )
+            plot_paths[plot_name] = plot_path
+        except (ImportError, RuntimeError, ValueError, ZeroDivisionError) as exc:
+            log.warning("Unable to create %s plot: %s", plot_name, exc)
+
+    return plot_paths
+
+
 def _write_outputs(
     output_dir: Path,
     lead_type_id: int,
@@ -118,7 +239,9 @@ def _write_outputs(
     prep_summary: dict[str, Any],
     study: optuna.Study,
     best_parameters: dict[str, Any],
-) -> tuple[Path, Path]:
+    parameter_names: list[str],
+    log: logging.Logger,
+) -> tuple[Path, Path, dict[str, Path]]:
     """Write the minimal tuning summary and copy-paste YAML block.
 
     Inputs
@@ -139,13 +262,19 @@ def _write_outputs(
         Completed Optuna study.
     best_parameters : dict[str, Any]
         Winning parameters including fixed values.
+    parameter_names : list[str]
+        Hyperparameters to include in the contour matrix.
+    log : logging.Logger
+        Logger used to report visualization output and failures.
 
     Returns
     -------
-    tuple[pathlib.Path, pathlib.Path]
-        Summary JSON path followed by best-parameters YAML path.
+    tuple[pathlib.Path, pathlib.Path, dict[str, pathlib.Path]]
+        Summary JSON path, best-parameters YAML path, and visualization paths.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
+    run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_output_dir = output_dir / run_timestamp
+    run_output_dir.mkdir(parents=True, exist_ok=False)
 
     summary = {
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -162,7 +291,7 @@ def _write_outputs(
         "best_parameters": best_parameters,
     }
 
-    summary_path = output_dir / "summary.json"
+    summary_path = run_output_dir / "summary.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, default=str),
         encoding="utf-8",
@@ -173,17 +302,29 @@ def _write_outputs(
             model_type: best_parameters,
         }
     }
-    parameters_path = output_dir / "best_parameters.yaml"
+    parameters_path = run_output_dir / "best_parameters.yaml"
     parameters_path.write_text(
         yaml.safe_dump(yaml_payload, sort_keys=False),
         encoding="utf-8",
     )
-    return summary_path, parameters_path
+
+    source_config_path = Path(search_config.raw["resolved"]["config_path"])
+    config_copy_path = run_output_dir / "hyperparameter_search.yaml"
+    config_copy_path.write_bytes(source_config_path.read_bytes())
+
+    plot_paths = _write_optuna_plots(
+        run_output_dir=run_output_dir,
+        study=study,
+        parameter_names=parameter_names,
+        scoring=search_config.scoring,
+        log=log,
+    )
+
+    return summary_path, parameters_path, plot_paths
 
 
 def run_hyperparameter_search(
     lead_type_id: int,
-    model_type: str,
     version: str | None = None,
     config_path: str | Path | None = None,
     log: logging.Logger | None = None,
@@ -194,8 +335,6 @@ def run_hyperparameter_search(
     ------
     lead_type_id : int
         SmartHub lead type identifier.
-    model_type : str
-        Model family to optimize.
     version : str | None
         Optional training-table version. The latest is used when omitted.
     config_path : str | pathlib.Path | None
@@ -210,7 +349,7 @@ def run_hyperparameter_search(
     """
     log = log or logger
     search_config = config.load_hyperparameter_search_config(config_path)
-    normalized_model_type = model_type.strip().lower()
+    normalized_model_type = search_config.model_type.strip().lower()
     model_config = search_config.model_config(normalized_model_type)
     lead_type_name = config.lead_type_name(lead_type_id)
 
@@ -286,6 +425,7 @@ def run_hyperparameter_search(
     log.info("  Scoring                               : %s", search_config.scoring)
 
     study = optuna.create_study(
+        study_name=f"{lead_type_name}_{normalized_model_type}",
         direction="maximize",
         sampler=optuna.samplers.TPESampler(
             seed=search_config.random_seed,
@@ -307,7 +447,7 @@ def run_hyperparameter_search(
             normalized_model_type,
         )
     )
-    summary_path, parameters_path = _write_outputs(
+    summary_path, parameters_path, plot_paths = _write_outputs(
         output_dir=output_dir,
         lead_type_id=lead_type_id,
         lead_type_name=lead_type_name,
@@ -316,6 +456,8 @@ def run_hyperparameter_search(
         prep_summary=prep_summary,
         study=study,
         best_parameters=best_parameters,
+        parameter_names=list(search_space),
+        log=log,
     )
 
     yaml_text = parameters_path.read_text(encoding="utf-8").rstrip()
@@ -324,6 +466,8 @@ def run_hyperparameter_search(
     log.info("Copy the following into config/training.yaml:\n%s", yaml_text)
     log.info("Saved summary: %s", summary_path)
     log.info("Saved parameters: %s", parameters_path)
+    for plot_name, plot_path in plot_paths.items():
+        log.info("Saved %s plot: %s", plot_name, plot_path)
 
     return {
         "lead_type_id": lead_type_id,
@@ -333,6 +477,9 @@ def run_hyperparameter_search(
         "best_parameters": best_parameters,
         "summary_path": str(summary_path),
         "parameters_path": str(parameters_path),
+        "plot_paths": {
+            plot_name: str(plot_path) for plot_name, plot_path in plot_paths.items()
+        },
     }
 
 
@@ -359,12 +506,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Lead type ID: 6=auto, 1=home, 5=commercial",
     )
     parser.add_argument(
-        "--model-type",
-        required=True,
-        choices=["logistic_regression", "xgboost", "lightgbm"],
-        help="Model family to optimize.",
-    )
-    parser.add_argument(
         "--version",
         default=None,
         help="Training-table version (default: latest).",
@@ -384,7 +525,6 @@ def main(argv: list[str] | None = None) -> int:
 
     run_hyperparameter_search(
         lead_type_id=args.lead_type_id,
-        model_type=args.model_type,
         version=args.version,
         config_path=args.config,
     )

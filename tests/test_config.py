@@ -62,6 +62,17 @@ def test_training_window_days_from_config_and_default(monkeypatch, tmp_path):
     task_config.reload()  # restore real config for other tests
 
 
+def test_training_config_defaults_to_repo_yaml(monkeypatch):
+    """load_training_config falls back to the checked-in repo default YAML."""
+    from smarthub.train_and_predict import config as training_config
+
+    monkeypatch.delenv("SMARTHUB_TRAINING_CONFIG", raising=False)
+    cfg = training_config.load_training_config()
+
+    assert cfg.model_type in {"logistic_regression", "xgboost", "lightgbm"}
+    assert cfg.raw["resolved"]["config_path"].endswith("config/training.yaml")
+
+
 def test_ssh_settings_ok(monkeypatch, tmp_path):
     """SSHSettings.from_env returns settings with defaults when key exists."""
     key = tmp_path / "id_rsa"
