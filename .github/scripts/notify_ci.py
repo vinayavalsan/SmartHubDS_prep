@@ -31,6 +31,7 @@ STAGES = {
     "pytest": "pytest",
     "build_worker": "build-worker",
     "build_dashboard": "build-dashboard",
+    "build_serve": "build-serve",
 }
 
 _DIAMOND = ":small_blue_diamond:"
@@ -104,6 +105,7 @@ def _notify_success() -> None:
         [
             f"docker pull {repo}:worker-{tag}",
             f"docker pull {repo}:dashboard-{tag}",
+            f"docker pull {repo}:serve-{tag}",
         ]
     )
     metadata = _metadata_bullets()

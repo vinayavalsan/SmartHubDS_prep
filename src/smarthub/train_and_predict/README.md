@@ -299,18 +299,23 @@ the production training configuration or promote a model.
 
 ## Prediction API
 
-Start the FastAPI application using the project deployment command or an ASGI
-server pointed at:
+The FastAPI application lives in `smarthub/server/predict.py` (a separate
+top-level package, not part of `train_and_predict` — see that package's own
+`__init__.py` for why). Start it using the project deployment command or an
+ASGI server pointed at:
 
 ```text
-smarthub.train_and_predict.predict:app
+smarthub.server.predict:app
 ```
 
 Endpoints:
 
-- `GET /health`: returns service status and the resolved model artifact.
+- `GET /health`: returns service status, the resolved model artifact, and
+  `model_loaded` (whether that lead type's model is currently cached in
+  memory — a cheap check, not a forced load).
 - `POST /recommend_bid`: validates lead and optimizer inputs, loads the serving
-  model, and returns the expected-profit-maximizing bid.
+  model (from an in-memory cache when possible — see below), and returns the
+  expected-profit-maximizing bid.
 
 Model resolution order is:
 
@@ -321,6 +326,16 @@ Model resolution order is:
 The request supplies `expected_revenue`, optimizer controls, and lead features.
 The API initializes the row with the minimum bid and then evaluates the complete
 candidate-bid grid.
+
+**Model caching.** Loaded models are kept in memory, keyed by the resolved
+model URI (plus the file's mtime for local `.pkl` paths, as a safety net if a
+pinned `MODEL_URI` gets overwritten in place). Registry-resolved URIs are
+immutable versioned filenames, so a newly promoted model always busts the
+cache on its own. The app also eager-loads every configured lead type's
+model at startup (`_eager_load_models`, wired into FastAPI's `lifespan`), so
+the first live request isn't the one paying the disk-load cost; a lead type
+with no promoted model yet just logs a warning and picks it up lazily once
+one is trained. `predict.clear_model_cache()` clears it manually if needed.
 
 A sample request is available in `manual_api_check.py`.
 
@@ -349,6 +364,8 @@ serving can run without the explainability extras installed.
 - `registry.py`: immutable model versions, promotion, serving pointer, rollback.
 - `mlflow_utils.py`: MLflow experiment and artifact logging.
 - `hyperparameter_search.py`: manual Optuna search.
-- `predict.py`: serving model resolution and FastAPI endpoints.
 - `flow.py`: Prefect orchestration, artifacts, and notifications.
 - `explain.py`: optional LightGBM/SHAP explanation workflow.
+
+`predict.py` (serving model resolution + FastAPI endpoints) has moved to the
+separate `smarthub/server/` package — see "Prediction API" above.

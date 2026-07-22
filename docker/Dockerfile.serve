@@ -1,0 +1,40 @@
+# Serving image: the FastAPI bid-recommendation API (smarthub/server/predict.py).
+# Only reachable inside the Docker network -- see docker-compose.prefect.yml,
+# where this container gets no host `ports:` mapping; `nginx` is the only
+# service exposed to the host, reverse-proxying to this one.
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    SMARTHUB_ROOT=/app \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install dependencies first for better layer caching. Only the `ml` extra is
+# needed -- it already includes fastapi/uvicorn/pydantic alongside the model
+# libraries predict.py needs (sklearn/lightgbm/joblib/mlflow). No orchestration
+# (Prefect) or validation (pandera) extras -- serving doesn't touch either.
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml requirements.txt ./
+COPY src ./src
+COPY config ./config
+RUN pip install --upgrade pip && pip install -e ".[ml]"
+
+COPY README.md ./
+
+EXPOSE 8000
+
+# Container-level healthcheck: hits the app's own /health route. Compose's
+# `nginx` service also depends on this container being up, but doesn't gate
+# on this healthcheck today -- see docker-compose.prefect.yml.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=3)" || exit 1
+
+CMD ["uvicorn", "smarthub.server.predict:app", \
+     "--host", "0.0.0.0", "--port", "8000"]

@@ -12,7 +12,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from smarthub.train_and_predict import config, explain, predict
+from smarthub.server import predict
+from smarthub.train_and_predict import config, explain
 
 # --- _to_native (JSON-safety for numpy scalars) ------------------------------
 

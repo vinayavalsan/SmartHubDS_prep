@@ -68,10 +68,12 @@ training:
 
 prediction:
   bid_step: 0.25
-  # Cold-start / exploration bidding policy (train_and_predict/predict.py:
-  # decide_bid). Kiran's ask: "recent" must be an explicit config value, and
+  # Cold-start / exploration bidding policy (smarthub/server/predict.py:
+  # decide_bid -- see docs/CHANGELOG.md 2026-07-22 "Cold-start/exploration
+  # bidding policy implemented"). Kiran's ask: "recent" must be an
+  # explicit config value, and
   # cold-start/exploration behaviour must be a defined, auditable rule, not
-  # emergent or random (docs/CONTEXT.md §3).
+  # emergent or random (docs/CONTEXT.md §7).
   #
   # Fraction of a bid's optimum to probe above/below on a scheduled explore
   # slot (hour-of-week bucketed — see exploration_slot()). Also sets schedule

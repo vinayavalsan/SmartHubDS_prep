@@ -32,7 +32,7 @@ dev = ["pytest>=8.0", "flake8>=7.0", "black>=24.0", "isort>=5.13", "pre-commit>=
 orchestration = ["prefect>=3.0"]
 # Data validation (D1) — pandera schema/range/domain checks on the pull.
 validation = ["pandera>=0.20"]
-# Model training + serving (STEP 3, train_and_predict).
+# Model training (STEP 3, train_and_predict) + serving (smarthub.server).
 ml = [
     "scikit-learn>=1.3",
     "lightgbm>=4.0",

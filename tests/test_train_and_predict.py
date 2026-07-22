@@ -10,11 +10,11 @@ import pandas as pd
 import pytest
 
 from smarthub.feature_engineering import features as fe
+from smarthub.server import predict
 from smarthub.train_and_predict import (
     config,
     optimizer,
     optimizer_evaluation,
-    predict,
     preprocessing,
     registry,
 )

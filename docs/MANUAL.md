@@ -225,10 +225,11 @@ The FastAPI service serves whichever model version is currently promoted for the
 request's `lead_type_id`:
 
 ```bash
-uvicorn smarthub.train_and_predict.predict:app --reload --port 8000
+uvicorn smarthub.server.predict:app --reload --port 8000
 ```
 
-- `GET  /health?lead_type_id=6` — reports which model artifact would be served.
+- `GET  /health?lead_type_id=6` — reports which model artifact would be served
+  and whether it's currently cached in memory (`model_loaded`).
 - `POST /recommend_bid` — returns the profit-maximising bid for one lead.
 
 Pin a specific model instead of the promoted one via `MODEL_URI` (a `.pkl` path

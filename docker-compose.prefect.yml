@@ -97,10 +97,45 @@ services:
     volumes:
       - ./data:/app/data
 
+  # Bid-recommendation API (FastAPI, smarthub/server/predict.py). No `ports:`
+  # here on purpose -- this container is reachable ONLY on the internal Docker
+  # network (by service name, `serve:8000`). `nginx` below is the sole
+  # container exposed to the host; nothing can hit the API directly.
+  serve:
+    container_name: smarthub-serve
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      # Model registry lookups (registry.currently_serving_model_path /
+      # version_path) are plain filesystem reads under data/models/, written
+      # by the training flow's promote() -- no database involved, hence just
+      # the shared `data` volume, not a DB URL.
+    volumes:
+      - ./data:/app/data
+
+  # Reverse proxy in front of `serve` -- the only way to reach the bid API
+  # from outside the Docker network. Plain HTTP for now (see
+  # docker/nginx/nginx.conf for where TLS would go later).
+  nginx:
+    container_name: smarthub-nginx
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - serve
+    ports:
+      - "8000:80"                   # http://localhost:8000  (bid API, via proxy)
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
   # CD auto-deploy: polls Docker Hub and recreates any labelled container
-  # (worker, dashboard) when a newer image is pushed by the CD workflow.
-  # `--label-enable` scopes it to those two — postgres/prefect-server are left
-  # alone. Needs the Docker socket to manage sibling containers.
+  # (worker, dashboard, serve) when a newer image is pushed by the CD
+  # workflow. `--label-enable` scopes it to those three — postgres/
+  # prefect-server/nginx are left alone. Needs the Docker socket to manage
+  # sibling containers.
   #
   # `prod` profile ONLY: it must NOT run for local builds, or it would pull the
   # Hub image and overwrite the image you just built from source. It starts only

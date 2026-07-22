@@ -20,3 +20,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.app
+
+  serve:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.serve

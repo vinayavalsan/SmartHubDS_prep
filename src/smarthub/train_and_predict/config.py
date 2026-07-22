@@ -354,6 +354,50 @@ def active_model_version() -> str | None:
     return None if raw.lower() == "none" else raw
 
 
+def exploration_variance_pct() -> float:
+    """Return the scheduled-exploration bid perturbation fraction.
+
+    Also sets the exploration schedule's density: ``N = round(1 / this)``
+    hour-of-week buckets are scheduled explore slots (see
+    ``server.predict.exploration_slot``).
+
+    Returns
+    -------
+    float
+        Configured ``[prediction] exploration_variance_pct`` (default 0.10).
+    """
+    return task_config.get_float("prediction", "exploration_variance_pct", 0.10)
+
+
+def recency_window_days() -> int:
+    """Return how many days old a serving model's training data can be
+    before ``/recommend_bid``/``/explain_bid`` flag it as stale.
+
+    Informational only -- doesn't change the bid itself, just the
+    ``model_data_age_days`` retraining-cadence signal.
+
+    Returns
+    -------
+    int
+        Configured ``[prediction] recency_window_days`` (default 30).
+    """
+    return task_config.get_int("prediction", "recency_window_days", 30)
+
+
+def cold_start_fallback_bid_pct() -> float:
+    """Return the true-cold-start fallback bid fraction.
+
+    Fraction of the way from ``min_bid`` to the CM-respecting ceiling to bid
+    when a lead type has no model ever trained/promoted yet.
+
+    Returns
+    -------
+    float
+        Configured ``[prediction] cold_start_fallback_bid_pct`` (default 0.50).
+    """
+    return task_config.get_float("prediction", "cold_start_fallback_bid_pct", 0.50)
+
+
 # Compatibility aliases allow existing prediction and optimizer modules to use
 # the new YAML-backed values without a second configuration source.
 _DEFAULT_CONFIG = load_training_config()

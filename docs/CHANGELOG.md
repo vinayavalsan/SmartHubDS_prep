@@ -1,6 +1,111 @@
 # Changelog
 
 
+## 2026-07-22
+
+### Model serving: dedicated `serve` container behind `nginx`, plus in-memory model caching
+- New `docker/Dockerfile.serve` — runs the existing FastAPI bid-recommendation
+  app (`train_and_predict/predict.py`) via uvicorn. Previously this had no
+  Docker image at all and was only documented as a manual
+  `uvicorn ... --port 8000` command.
+- `docker-compose.prefect.yml`: new `serve` service (image
+  `${IMAGE_REPO}:serve-${IMAGE_TAG}`, Watchtower-labelled like
+  worker/dashboard) with **no host `ports:` mapping** — reachable only on the
+  internal Docker network. New `nginx` service (`nginx:alpine`,
+  `docker/nginx/nginx.conf`, plain HTTP reverse proxy to `serve:8000`) is the
+  only container exposed to the host — the API can't be hit directly.
+  `docker-compose.local.yml` gained the matching `build:` override for local
+  source builds.
+- `.github/workflows/ci_cd.yml`: new `build-serve` job, identical pattern to
+  `build-worker`/`build-dashboard` (same output-capture/`continue-on-error`
+  approach), pushing `<account>/smarthub:serve-latest` /
+  `:serve-<sha>`. Added to the `notify` job's `needs`; `notify_ci.py`'s
+  success message now lists all three images' pull commands (previously two).
+- `predict.py`: `load_model` now caches the loaded model in memory, keyed by
+  the resolved model URI (registry-resolved URIs are immutable versioned
+  filenames, so a newly promoted model naturally busts the cache — no manual
+  invalidation needed) plus, for local `.pkl` paths, the file's mtime as a
+  safety net against a pinned `MODEL_URI` being overwritten in place. Added
+  because `/recommend_bid` sits in the real-time bid path, where
+  re-unpickling from disk on every request is latency worth avoiding. New
+  `predict.clear_model_cache()` for manual invalidation/tests.
+- TLS is not set up yet — `nginx` proxies plain HTTP; noted as a follow-up in
+  both the nginx config and the README once this needs to be reachable
+  outside a trusted network.
+- **Gap closed later the same day** (see "Cold-start/exploration bidding
+  policy implemented" below): at this point in the day, `predict.decide_bid`
+  didn't exist yet and `/explain_bid` wasn't a registered route — that's
+  fixed further down this same changelog date.
+
+### Serving API moved to its own package (`smarthub.server`); eager model loading + `/health` cache status
+- `predict.py` moved from `train_and_predict/` to a new top-level
+  `smarthub/server/` package (`smarthub/server/predict.py` +
+  `smarthub/server/__init__.py`) — the serving surface's dependency footprint
+  and deployment lifecycle are independent of the training/orchestration
+  pipeline, and it now lives at its own import path
+  (`smarthub.server.predict:app`) rather than under `train_and_predict`.
+  Updated every reference: `explain.py`'s import, `docker/Dockerfile.serve`'s
+  `CMD`, `docker-compose.prefect.yml`'s comment, the top-level README (project
+  layout tree, uvicorn command, model-caching note), `train_and_predict/README.md`,
+  `docs/MANUAL.md`, `config/smarthub.yaml`'s comment, the `ml` extra's comment
+  in `pyproject.toml`, and the imports in `tests/test_train_and_predict.py` /
+  `tests/test_explain.py`. No behavior changed by the move itself.
+- `predict.py` now **eager-loads** every configured lead type's model
+  (`fe.LEAD_TYPES`) into the in-memory cache on startup, via a FastAPI
+  `lifespan` context manager (`_eager_load_models`) — so the first real
+  `/recommend_bid` after a deploy/restart doesn't pay the disk-unpickle cost.
+  A lead type with no promoted model yet (cold start) or any other load
+  failure just logs a warning and is picked up lazily on its first request,
+  same as before this existed — startup itself never fails because of it.
+- New `predict.is_model_cached(lead_type_id)` — resolves the model URI and
+  checks the cache dict only (no load). `GET /health` now returns
+  `model_loaded: true/false` using it, alongside the existing `model_uri`.
+
+### Cold-start/exploration bidding policy implemented; `/explain_bid` wired up as a real route
+- This closes the gap noted earlier in this same changelog date: the
+  README/`explain.py` referenced `predict.decide_bid`,
+  `predict.load_model_and_manifest`, and `predict.bid_curve_around` as if
+  they existed — they didn't. All three are now implemented in
+  `smarthub/server/predict.py`, matching the policy already documented in
+  the README's "Cold-start + exploration bidding policy" section and
+  `docs/CONTEXT.md §7`.
+- **`load_model_and_manifest(lead_type_id)`** — same tiered resolution as
+  `resolve_model_uri` (env override -> pinned version -> currently-serving),
+  but returns `(None, None)` on cold start instead of raising, so callers
+  can branch on "no model yet" instead of catching an exception.
+- **`exploration_slot(created_dayofweek, created_hour, variance_pct=None)`**
+  — buckets a lead into one of 168 hour-of-week slots and deterministically
+  flags 1-in-`N` of them (`N = round(1 / exploration_variance_pct)`) as a
+  scheduled explore slot, alternating perturbation direction each time a
+  bucket fires. Same inputs always give the same explore/exploit decision —
+  reproducible and auditable, not a per-request coin flip.
+- **`decide_bid(row, model, manifest, expected_revenue, target_cm, min_bid,
+  bid_step, created_dayofweek=None, created_hour=None)`** — the one bidding
+  decision, returning `decision_path` (`"cold_start_fallback" |
+  "exploration" | "model"`) + a plain-English `decision_reason`:
+  `cold_start_fallback` when there's no model yet (bids
+  `cold_start_fallback_bid_pct` of the way from floor to the CM-respecting
+  ceiling); `exploration` on a scheduled explore slot (perturbs the
+  profit-maximizing bid by `exploration_variance_pct` and rescores at the
+  new bid); `model` otherwise (the raw `optimizer.optimize_bid_for_row`
+  result), flagging `model_data_age_days` when the model is older than
+  `recency_window_days`.
+- **`/recommend_bid`** now calls `load_model_and_manifest` + `decide_bid`
+  instead of calling `optimizer.optimize_bid_for_row` directly, so live
+  serving gets the same cold-start/exploration handling as `/explain_bid`.
+- **`POST /explain_bid`** is now a real registered FastAPI route (it was a
+  plain callable in `explain.py` before, never exposed on `app`). Lazily
+  imports `explain` inside the route body (not at module level) to avoid a
+  circular import with `explain.py`'s own `from smarthub.server import
+  predict`, and to keep `shap`/Ollama out of every `/recommend_bid` request.
+- **Tests**: new `tests/test_predict.py` covering `exploration_slot`'s
+  determinism/bucketing/direction-alternation, `decide_bid`'s three paths
+  (including an exploration case that asserts the win-rate/profit are
+  recomputed at the perturbed bid, not reused from the original), and all
+  four `load_model_and_manifest` resolution tiers. Full suite: 184 passed,
+  6 skipped.
+
+
 ## 2026-07-21
 
 ### CI/CD: Slack notification on the deploy pipeline (success = image names, failure = stage + log)

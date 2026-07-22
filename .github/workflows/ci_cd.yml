@@ -402,6 +402,51 @@ jobs:
           echo "message=Docker build/push failed for the dashboard image. See this job's log for the full build output." >> "$GITHUB_OUTPUT"
           exit 1
 
+  build-serve:
+    name: build serve image
+    needs: build-ready
+
+    runs-on: ubuntu-latest
+
+    env:
+      REPO: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
+
+    # See build-worker's comment above -- no captured log text here, just a
+    # pointer to this job's log.
+    outputs:
+      error_message: ${{ steps.build_serve_failed.outputs.message }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push serve image
+        id: build_serve_image
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.serve
+          push: true
+          tags: |
+            ${{ env.REPO }}:serve-latest
+            ${{ env.REPO }}:serve-${{ github.sha }}
+          cache-from: type=gha,scope=serve
+          cache-to: type=gha,mode=max,scope=serve
+
+      - name: Fail the job if the build/push failed
+        id: build_serve_failed
+        if: steps.build_serve_image.outcome == 'failure'
+        run: |
+          echo "message=Docker build/push failed for the serve image. See this job's log for the full build output." >> "$GITHUB_OUTPUT"
+          exit 1
+
   notify:
     name: Notify Slack
     needs:
@@ -411,6 +456,7 @@ jobs:
       - pytest
       - build-worker
       - build-dashboard
+      - build-serve
     # Only for the actual deploy pipeline (the one case where images get
     # built) -- PRs and other branches stay quiet here; GitHub's own
     # per-check status already covers those. `if: always()` is required so
@@ -448,12 +494,14 @@ jobs:
           RESULT_PYTEST: ${{ needs.pytest.result }}
           RESULT_BUILD_WORKER: ${{ needs.build-worker.result }}
           RESULT_BUILD_DASHBOARD: ${{ needs.build-dashboard.result }}
+          RESULT_BUILD_SERVE: ${{ needs.build-serve.result }}
           MSG_ISORT: ${{ needs.isort.outputs.error_message }}
           MSG_BLACK: ${{ needs.black.outputs.error_message }}
           MSG_FLAKE8: ${{ needs.flake8.outputs.error_message }}
           MSG_PYTEST: ${{ needs.pytest.outputs.error_message }}
           MSG_BUILD_WORKER: ${{ needs.build-worker.outputs.error_message }}
           MSG_BUILD_DASHBOARD: ${{ needs.build-dashboard.outputs.error_message }}
+          MSG_BUILD_SERVE: ${{ needs.build-serve.outputs.error_message }}
           GITHUB_SHA_FULL: ${{ github.sha }}
           GITHUB_ACTOR_NAME: ${{ github.actor }}
           GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}

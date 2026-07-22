@@ -13,9 +13,12 @@ means and what Anton is solving), see [CONTEXT.md](./docs/CONTEXT.md).
 │   │                             #   notifications + persistence (storage, io) + transforms
 │   ├── data_pull/                # STEP 1: pull, models, cli, windowing, flow (Prefect)
 │   ├── feature_engineering/      # STEP 2: features + flow (Prefect)
+│   ├── train_and_predict/        # STEP 3: train, registry, optimizer, explain, flow (Prefect)
+│   ├── server/                   # FastAPI bid-recommendation API (predict.py) -- see docker/Dockerfile.serve
 │   └── monitoring/               # Streamlit multipage app (leads, monitoring, config)
 ├── config/                       # smarthub.yaml (task configs) + holidays.json (is_workday calendar)
-├── docker/                       # Dockerfile.app, Dockerfile.worker, worker-entrypoint.sh
+├── docker/                       # Dockerfile.app, Dockerfile.worker, Dockerfile.serve,
+│                                 #   worker-entrypoint.sh, nginx/nginx.conf
 ├── docs/                         # CONTEXT, MODELING, PLAN_July2026, CHANGELOG
 ├── tests/                        # pytest unit tests
 ├── data/                         # accumulated data (gitignored):
@@ -281,15 +284,16 @@ pre-commit run --all-files --hook-stage pre-push   # optional: run pytest now
   to the deploy branch (`smarthub.etl.pipeline`). Exists purely so
   `build-worker`/`build-dashboard` below can both depend on "tests passed AND
   this is the deploy branch" without repeating that condition twice.
-- **`build-worker` / `build-dashboard`** — both `needs: build-ready`, so they
-  run **in parallel** once it's clear the images should be built (never
-  before pytest passes, never on a PR). Both images share **one repo**
-  (`<account>/smarthub`) — the free tier's single private repo —
-  differentiated by a **tag prefix**:
+- **`build-worker` / `build-dashboard` / `build-serve`** — all three
+  `needs: build-ready`, so they run **in parallel** once it's clear the images
+  should be built (never before pytest passes, never on a PR). All three
+  images share **one repo** (`<account>/smarthub`) — the free tier's single
+  private repo — differentiated by a **tag prefix**:
 
 ```
 <account>/smarthub:worker-latest      <account>/smarthub:worker-<sha>
 <account>/smarthub:dashboard-latest   <account>/smarthub:dashboard-<sha>
+<account>/smarthub:serve-latest       <account>/smarthub:serve-<sha>
 ```
 
 - **`notify`** — `needs` all of the above, `if: always()` (so it still runs
@@ -298,21 +302,21 @@ pre-commit run --all-files --hook-stage pre-push   # optional: run pytest now
   per-check status already covers those). Posts one Slack message: a
   `🔹`-bulleted metadata list (branch/commit/actor/runner/time), then either
   a `🐳 Pull the latest images:` section with the `docker pull` command for
-  each image's `-<sha>` tag (pinned to this exact build), or — on
-  failure — which stage failed and a trimmed excerpt of its actual output
-  (the isort/black diff, the flake8 findings, or the pytest failure summary;
-  a `build-worker`/`build-dashboard` failure falls back to a pointer at that
-  job's log, since `docker/build-push-action` doesn't expose its build log
-  as a capturable value), then a `🔗 Workflow:` link. Goes through
-  `smarthub.core.notifications.notify_raw` — same webhook/best-effort
-  behavior as the Prefect flow alerts, just a custom layout. See
-  `.github/scripts/notify_ci.py`.
+  each image's `-<sha>` tag (pinned to this exact build — worker, dashboard,
+  and serve), or — on failure — which stage failed and a trimmed excerpt of
+  its actual output (the isort/black diff, the flake8 findings, or the pytest
+  failure summary; a `build-worker`/`build-dashboard`/`build-serve` failure
+  falls back to a pointer at that job's log, since `docker/build-push-action`
+  doesn't expose its build log as a capturable value), then a `🔗 Workflow:`
+  link. Goes through `smarthub.core.notifications.notify_raw` — same
+  webhook/best-effort behavior as the Prefect flow alerts, just a custom
+  layout. See `.github/scripts/notify_ci.py`.
 
 **No inbound access to the server is needed** — the server pulls the new images
 itself:
 
 ```
-push → isort/black/flake8 + pytest → build worker + dashboard (parallel) → push to <account>/smarthub
+push → isort/black/flake8 + pytest → build worker + dashboard + serve (parallel) → push to <account>/smarthub
      → Watchtower (on the server) pulls the -latest tags → recreates the containers
      → worker re-runs `prefect deploy --all` on boot
 ```
@@ -344,8 +348,8 @@ Set up once:
   `${DOCKERHUB_USERNAME}/smarthub`); `IMAGE_TAG=latest` for rolling deploys.
 - **Private repo:** `docker login` on the host so Watchtower can pull it.
 - The `watchtower` service in `docker-compose.prefect.yml` polls Docker Hub
-  (default 300s) and updates only the labelled containers (worker, dashboard);
-  Postgres and the Prefect server are left untouched.
+  (default 300s) and updates only the labelled containers (worker, dashboard,
+  serve); Postgres, the Prefect server, and nginx are left untouched.
 
 Rollback: set `IMAGE_TAG=<older sha>` on the server and `docker compose up -d`,
 or push a revert. Note pushing deploys straight to the environment — switch the
@@ -494,19 +498,53 @@ The bid-recommendation API (FastAPI) serves the trained model. With no
 `MODEL_URI` set it serves whichever version is currently promoted for the
 request's `lead_type_id`; set `MODEL_URI` to pin a specific `.pkl`/MLflow URI
 regardless of the registry (or pin per lead type via `config/smarthub.yaml
-[prediction] active_model_version`):
+[prediction] active_model_version`). It caches the loaded model in memory
+(see "Model caching" below), so repeated requests don't re-unpickle from disk.
+
+**Local/dev — run it directly:**
 
 ```bash
-uvicorn smarthub.train_and_predict.predict:app --port 8000
+uvicorn smarthub.server.predict:app --port 8000
 # POST /recommend_bid  ·  GET /health?lead_type_id=6
 ```
+
+**Production — `serve` + `nginx` (part of `docker-compose.prefect.yml`).**
+The API runs in its own container (`docker/Dockerfile.serve`, built/pushed by
+CI the same way as `worker`/`dashboard` — see CI/CD above), auto-updated by
+Watchtower like the other two. It has **no host `ports:` mapping** — it's only
+reachable on the internal Docker network (`serve:8000`). `nginx` (plain HTTP
+reverse proxy, `docker/nginx/nginx.conf`) is the only container with a
+published port and is the sole way to reach the API from outside:
+
+```bash
+docker compose -f docker-compose.prefect.yml up -d serve nginx   # brings both up
+curl http://localhost:8000/health?lead_type_id=6                 # via nginx, not the container directly
+```
+
+TLS isn't set up yet — nginx currently proxies plain HTTP. Add a `listen 443
+ssl` server block (plus a cert volume mount) to `docker/nginx/nginx.conf` if
+this ever needs to be reachable outside a trusted network.
+
+**Model caching.** `predict.load_model` keeps loaded models in an in-process
+cache keyed by the resolved model URI (and, for local `.pkl` paths, the
+file's mtime as a safety net against a pinned `MODEL_URI` being overwritten in
+place). Registry-resolved URIs are immutable versioned filenames
+(`v<N>_<timestamp>.pkl`), so promoting a new model naturally busts the cache —
+no manual invalidation needed in the normal (registry-driven) path.
+`predict.clear_model_cache()` clears it manually if ever needed. The app also
+**eager-loads** every configured lead type's model into this cache on
+startup (a FastAPI `lifespan` hook), so the first real request after a
+deploy/restart doesn't pay the load cost — a lead type with no promoted model
+yet just logs a warning and is picked up lazily once one exists.
+`GET /health?lead_type_id=<id>` reports `model_loaded: true/false` (a cheap
+cache check, not a forced load) alongside the existing `model_uri`.
 
 ### Cold-start + exploration bidding policy
 
 `/recommend_bid` doesn't just return the raw profit-maximizing optimizer bid —
 it runs every lead through `predict.decide_bid`, which picks one of three
 explicit, auditable paths (never emergent/random behavior — see
-docs/CONTEXT.md §3):
+docs/CONTEXT.md §7):
 
 - **`model`** — the normal case: the profit-maximizing bid from the
   currently-serving model. If that model's training data is older than

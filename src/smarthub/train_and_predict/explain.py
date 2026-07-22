@@ -26,8 +26,9 @@ import numpy as np
 import pandas as pd
 
 from smarthub.core import task_config
+from smarthub.server import predict
 
-from . import config, predict, preprocessing
+from . import config, preprocessing
 
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
