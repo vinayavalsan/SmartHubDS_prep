@@ -1,0 +1,344 @@
+"""Integration tests: /recommend_bid and /explain_bid actually write a
+prediction-log row (success and failure), per the 2026-07-22 DS meeting
+decision -- see docs/PREDICTION_LOG_SCHEMA.md.
+
+Uses `_ConstantWinRateModel` (no sklearn/lightgbm required) with
+`registry.save_version`/`promote`, same convention as test_predict.py's
+`load_model_and_manifest` tests -- only `fastapi` is needed here (for
+`TestClient`), gated via `pytest.importorskip`.
+"""
+
+from __future__ import annotations
+
+import tempfile
+
+import numpy as np
+import pandas as pd
+import pytest
+
+fastapi = pytest.importorskip("fastapi")  # noqa: F841 -- import-gate only
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from smarthub.feature_engineering import features as fe  # noqa: E402
+from smarthub.server import predict  # noqa: E402
+from smarthub.train_and_predict import config, registry  # noqa: E402
+from smarthub.train_and_predict.prediction_log_schema import (  # noqa: E402
+    PredictionLogStore,
+)
+
+
+class _ConstantWinRateModel:
+    """Same fake used in test_predict.py -- deterministic, no sklearn needed."""
+
+    def __init__(self, win_rate: float = 0.6):
+        self.win_rate = win_rate
+
+    def predict_proba(self, frame):
+        win = np.full(len(frame), self.win_rate)
+        return np.column_stack([1 - win, win])
+
+
+PAYLOAD = {
+    "expected_revenue": 25.0,
+    "target_cm": 0.25,
+    "min_bid": 0.25,
+    "bid_step": 0.25,
+    "campaign_id": 12345,
+    "account_id": 118,
+    "lead_type_id": fe.LEAD_TYPE_AUTO,
+    "created_hour": 14,
+    "created_dayofweek": 2,
+    "state": "TX",
+    "age": 34,
+}
+
+
+@pytest.fixture
+def log_store(tmp_path, monkeypatch):
+    """Point the API's prediction logger at a fresh temp SQLite file and
+    reset its lazily-constructed store so each test starts clean."""
+    url = f"sqlite:///{tempfile.mktemp(dir=tmp_path)}.db"
+    monkeypatch.setenv("SMARTHUB_PREDICTION_LOG_DB_URL", url)
+    predict._prediction_log_store_holder.clear()
+    return PredictionLogStore(url)
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch, log_store):
+    monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
+    monkeypatch.delenv("MODEL_URI", raising=False)
+    monkeypatch.setattr(config, "active_model_version", lambda: None)
+    predict.clear_model_cache()
+    with TestClient(predict.app, raise_server_exceptions=False) as c:
+        yield c
+
+
+def _promote_constant_model(win_rate=0.42):
+    manifest = registry.save_version(
+        _ConstantWinRateModel(win_rate=win_rate),
+        "auto",
+        feature_cols=["bid"],
+        metrics={"roc_auc": 0.7},
+        optimizer_summary={},
+        lineage={"model_type": "constant_test_model", "calibrated": False},
+        model_params={},
+        promotion_mode="manual",
+        promotion_eligible=None,
+        promotion_decision_reason="test",
+    )
+    registry.promote("auto", manifest["version"])
+    predict.clear_model_cache()
+    return manifest
+
+
+# --- /recommend_bid: success paths -------------------------------------------
+
+
+def test_recommend_bid_logs_success_row_with_model(client, log_store):
+    manifest = _promote_constant_model()
+
+    resp = client.post("/recommend_bid", json=PAYLOAD)
+    assert resp.status_code == 200
+
+    rows = log_store.recent(limit=10)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["endpoint"] == "recommend_bid"
+    assert row["status"] == "success"
+    assert row["error_message"] is None
+    assert row["decision_path"] == "model"
+    assert row["model_version"] == manifest["version"]
+    assert row["model_type"] == "constant_test_model"
+    assert row["lead_type_id"] == fe.LEAD_TYPE_AUTO
+    assert row["campaign_id"] == PAYLOAD["campaign_id"]
+    assert row["input_features"]["state"] == "TX"
+    assert row["model_input_features"] is not None
+    assert row["candidate_bid_generation"]["method"] == "equally_spaced"
+    assert row["serving_config"]["exploration_variance_pct"] is not None
+    assert float(row["recommended_bid"]) == resp.json()["recommended_bid"]
+    # prediction_id is returned as a receipt AND matches the actual log row --
+    # see docs/PREDICTION_LOG_SCHEMA.md §8.
+    assert resp.json()["prediction_id"] == row["prediction_id"]
+
+
+def test_recommend_bid_threads_lead_ping_id_through_to_log_row(client, log_store):
+    _promote_constant_model()
+
+    resp = client.post("/recommend_bid", json={**PAYLOAD, "lead_ping_id": 82931})
+    assert resp.status_code == 200
+    # Echoed back in the response, not just written to the log row.
+    assert resp.json()["lead_ping_id"] == 82931
+
+    row = log_store.recent(limit=10)[0]
+    assert row["lead_ping_id"] == 82931
+    assert resp.json()["prediction_id"] == row["prediction_id"]
+
+
+def test_recommend_bid_lead_ping_id_is_optional(client, log_store):
+    _promote_constant_model()
+
+    # PAYLOAD has no lead_ping_id at all -- must not be a validation error.
+    resp = client.post("/recommend_bid", json=PAYLOAD)
+    assert resp.status_code == 200
+    assert resp.json()["prediction_id"] is not None
+    assert resp.json()["lead_ping_id"] is None
+
+    row = log_store.recent(limit=10)[0]
+    assert row["lead_ping_id"] is None
+
+
+def test_recommend_bid_cold_start_logs_null_model_fields(client, log_store):
+    # No model ever saved/promoted -- true cold start.
+    resp = client.post("/recommend_bid", json=PAYLOAD)
+    assert resp.status_code == 200
+    assert resp.json()["decision_path"] == "cold_start_fallback"
+
+    row = log_store.recent(limit=10)[0]
+    assert row["status"] == "success"
+    assert row["decision_path"] == "cold_start_fallback"
+    assert row["model_version"] is None
+    assert row["model_uri"] is None
+
+
+# --- /recommend_bid: failure path --------------------------------------------
+
+
+def test_recommend_bid_error_logs_error_row_and_still_returns_500(
+    client, log_store, monkeypatch
+):
+    _promote_constant_model()
+    monkeypatch.setenv("MODEL_URI", "/nonexistent/path/model.pkl")
+    predict.clear_model_cache()
+
+    resp = client.post("/recommend_bid", json=PAYLOAD)
+    assert resp.status_code == 500  # logging must not swallow the real error
+
+    row = log_store.recent(limit=10)[0]
+    assert row["status"] == "error"
+    assert row["error_message"]
+    assert row["recommended_bid"] is None
+    assert row["decision_path"] is None
+    # Request context is still captured even though scoring never ran.
+    assert row["input_features"]["state"] == "TX"
+
+
+# --- /explain_bid: success path (cold start -- no SHAP/lightgbm needed) -----
+
+
+def test_explain_bid_cold_start_logs_success_row_with_prediction_id(client, log_store):
+    # Cold start returns early before SHAP ever runs (see explain.explain_bid),
+    # so this exercises a real /explain_bid success path with no lightgbm/shap
+    # installed.
+    resp = client.post("/explain_bid", json={**PAYLOAD, "lead_ping_id": 555})
+    assert resp.status_code == 200
+    assert resp.json()["decision_path"] == "cold_start_fallback"
+    assert resp.json()["prediction_id"] is not None
+    assert resp.json()["lead_ping_id"] == 555
+
+    row = log_store.recent(limit=10)[0]
+    assert row["endpoint"] == "explain_bid"
+    assert row["status"] == "success"
+    assert row["lead_ping_id"] == 555
+    assert row["prediction_id"] == resp.json()["prediction_id"]
+
+
+# --- /explain_bid: failure path (non-LGBM model) -----------------------------
+
+
+def test_explain_bid_error_on_non_lgbm_model_logs_error_row(client, log_store):
+    # _ConstantWinRateModel isn't a Pipeline wrapping a LightGBM classifier --
+    # explain.py's SHAP path rejects it (it expects `.named_steps`), a real
+    # error, without needing lightgbm/shap installed to exercise the
+    # error-logging path.
+    _promote_constant_model()
+
+    resp = client.post("/explain_bid", json=PAYLOAD)
+    assert resp.status_code == 500
+
+    row = log_store.recent(limit=10)[0]
+    assert row["endpoint"] == "explain_bid"
+    assert row["status"] == "error"
+    assert row["error_message"]  # non-empty -- the real exception text
+    assert row["recommended_bid"] is None
+
+
+# --- /recommend_bid: background SHAP enrichment ------------------------------
+#
+# /recommend_bid never computes SHAP on its own response path (that stays
+# /explain_bid's job) -- but per the 2026-07-23 follow-up, a real model's
+# prediction is enriched with top_factors/base_win_rate in a BackgroundTask
+# that runs AFTER the response is sent, updating the same prediction_id's log
+# row via PredictionLogStore.update_shap_explanation. Starlette's
+# BackgroundTasks run synchronously as part of finishing the response cycle,
+# and FastAPI's TestClient waits for that to complete before returning from
+# client.post(...) -- so these tests can check the DB row immediately, no
+# polling/sleep needed.
+
+NUMERIC = ["bid", "age"]
+CATEGORICAL = ["state"]
+
+
+@pytest.fixture
+def small_feature_columns(monkeypatch):
+    """Point config.feature_columns at a tiny NUMERIC/CATEGORICAL set so a
+    real (tiny) LightGBM pipeline can be fit and SHAP-explained quickly --
+    same convention as test_explain.py's fixture of the same name."""
+    monkeypatch.setattr(
+        config, "feature_columns", lambda lead_type_id: (NUMERIC, CATEGORICAL)
+    )
+
+
+def _promote_tiny_lightgbm_model():
+    """Fit + promote a real (tiny) LightGBM pipeline. Needed here (unlike the
+    rest of this file's _ConstantWinRateModel fake) because the background
+    SHAP task calls explain.explain_row, which only supports
+    model_type='lightgbm' (see explain._fitted_lgbm_estimators)."""
+    pytest.importorskip("lightgbm")
+    pytest.importorskip("shap")
+    from smarthub.train_and_predict import models
+
+    n = 40
+    frame = pd.DataFrame(
+        {
+            "bid": [float(i % 10) for i in range(n)],
+            "age": [20 + (i % 40) for i in range(n)],
+            "state": ["TX", "CA"] * (n // 2),
+        }
+    )
+    y = [1 if (i % 10) >= 5 else 0 for i in range(n)]
+
+    model = models.build_model(
+        "lightgbm",
+        NUMERIC,
+        CATEGORICAL,
+        model_params={"n_estimators": 5, "min_child_samples": 1, "num_leaves": 7},
+        calibrate=False,
+    )
+    model.fit(frame, y)
+
+    manifest = registry.save_version(
+        model,
+        "auto",
+        feature_cols=NUMERIC + CATEGORICAL,
+        metrics={"roc_auc": 0.7},
+        optimizer_summary={},
+        lineage={"model_type": "lightgbm", "calibrated": False},
+        model_params={},
+        promotion_mode="manual",
+        promotion_eligible=None,
+        promotion_decision_reason="test",
+    )
+    registry.promote("auto", manifest["version"])
+    predict.clear_model_cache()
+    return manifest
+
+
+def test_recommend_bid_background_task_attaches_shap_explanation(
+    client, log_store, small_feature_columns
+):
+    """A real LightGBM model triggers a background task that attaches
+    top_factors/base_win_rate to the already-logged row -- without the LLM
+    'explanation'/'bid_curve' fields /explain_bid's shap_explanation carries,
+    since those stay off the /recommend_bid path entirely (see
+    _log_shap_background's docstring)."""
+    _promote_tiny_lightgbm_model()
+
+    resp = client.post("/recommend_bid", json=PAYLOAD)
+    assert resp.status_code == 200
+    prediction_id = resp.json()["prediction_id"]
+    assert prediction_id is not None
+
+    row = log_store.get(prediction_id)
+    shap = row["shap_explanation"]
+    assert shap is not None
+    assert "top_factors" in shap and shap["top_factors"]
+    assert 0.0 <= shap["base_win_rate"] <= 1.0
+    assert "explanation" not in shap  # no LLM narrative on this path
+    assert "bid_curve" not in shap
+
+
+def test_recommend_bid_cold_start_never_schedules_shap_task(client, log_store):
+    """No model at all (true cold start) -> no background SHAP task --
+    nothing to explain, and load_model_and_manifest returned model=None."""
+    resp = client.post("/recommend_bid", json=PAYLOAD)
+    assert resp.status_code == 200
+    assert resp.json()["decision_path"] == "cold_start_fallback"
+
+    row = log_store.get(resp.json()["prediction_id"])
+    assert row["shap_explanation"] is None
+
+
+def test_recommend_bid_non_lgbm_model_leaves_shap_explanation_null(client, log_store):
+    """A non-LightGBM model (_ConstantWinRateModel) makes the background SHAP
+    task fail internally (explain_row only supports lightgbm) -- caught and
+    swallowed by _log_shap_background, leaving shap_explanation null. Must
+    never surface as an error to the caller (response is still 200) or break
+    anything else already logged on the row."""
+    _promote_constant_model()
+
+    resp = client.post("/recommend_bid", json=PAYLOAD)
+    assert resp.status_code == 200
+
+    row = log_store.get(resp.json()["prediction_id"])
+    assert row["shap_explanation"] is None

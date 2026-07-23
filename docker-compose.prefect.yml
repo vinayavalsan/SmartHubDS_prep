@@ -97,6 +97,25 @@ services:
     volumes:
       - ./data:/app/data
 
+  # Local LLM for /explain_bid's plain-English narrative (and, since
+  # 2026-07-23, nothing else -- /recommend_bid's background SHAP enrichment
+  # deliberately skips the LLM call, see docs/CHANGELOG.md). No `ports:` --
+  # reachable only inside the Docker network (`serve` talks to it at
+  # `ollama:11434`, see SMARTHUB_OLLAMA_HOST below); same no-direct-host-
+  # access principle as `serve` itself. `ollama-data` persists pulled models
+  # across restarts so they aren't re-downloaded every time this container
+  # recreates. Model availability is checked, and the configured model
+  # pulled if missing, lazily by `serve` at its own startup -- in a
+  # background thread that never blocks either container's startup or any
+  # in-flight request (see explain.ensure_model_pulled_async) -- so there's
+  # nothing to orchestrate here beyond starting the container itself.
+  ollama:
+    container_name: smarthub-ollama
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+
   # Bid-recommendation API (FastAPI, smarthub/server/predict.py). No `ports:`
   # here on purpose -- this container is reachable ONLY on the internal Docker
   # network (by service name, `serve:8000`). `nginx` below is the sole
@@ -107,6 +126,8 @@ services:
     image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      - ollama
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
@@ -114,6 +135,14 @@ services:
       # version_path) are plain filesystem reads under data/models/, written
       # by the training flow's promote() -- no database involved, hence just
       # the shared `data` volume, not a DB URL.
+      # uvicorn worker-process count (Dockerfile.serve's CMD reads this, default
+      # 4 if unset). Bump for more throughput/concurrency headroom; each worker
+      # is a separate process with its own copy of the in-memory model cache.
+      SERVE_WORKERS: ${SERVE_WORKERS:-4}
+      # Overrides config/smarthub.yaml's `[explain] ollama_host` (which
+      # defaults to localhost, for non-Docker/local-dev use) to the `ollama`
+      # service's Docker-network hostname -- see explain.py's OLLAMA_HOST.
+      SMARTHUB_OLLAMA_HOST: http://ollama:11434
     volumes:
       - ./data:/app/data
 
@@ -152,3 +181,4 @@ services:
 
 volumes:
   postgres-data:
+  ollama-data:

@@ -1,7 +1,309 @@
 # Changelog
 
 
+## 2026-07-23
+
+### nginx: relaxed timeouts for non-bid routes, kept `/recommend_bid` tight
+- With the 504 on `/docs` still not fully resolved, bumped nginx's proxy
+  timeouts to give more headroom -- but scoped, not blanket: the 3s/5s/5s
+  budget was a deliberate fail-fast choice specifically for `/recommend_bid`
+  (the real-time bid path with the 2s TAT requirement, see docs/CHANGELOG.md
+  2026-07-22); loosening it there would let a slow/stuck request tie up a
+  bidding slot for a full minute instead of failing fast.
+- Split `nginx.conf`: `proxy_connect/send/read_timeout` moved up to
+  `server`-level as the default (now `10s`/`60s`/`60s`) -- covers `/docs`,
+  `/openapi.json`, `/explain_bid` (already documented as offline/on-demand,
+  not latency-sensitive), and `/health`. A new `location = /recommend_bid`
+  exact-match block explicitly pins that one route back down to `3s`/`5s`/
+  `5s` -- an exact-match `location` always wins over the `location /` prefix
+  match regardless of file order, so this can't be accidentally loosened by
+  a future edit to the default. `proxy_set_header` lines moved to
+  `server`-level too (unchanged values), since a location that sets its own
+  `proxy_pass` target with an appended path still needs them and nginx's
+  header-inheritance rules are all-or-nothing per location.
+- Still investigating the root cause of the 504 itself (undiagnosed as of
+  this entry) -- this change only widens the failure window, it doesn't fix
+  whatever is making `serve` slow to respond in the first place.
+
+### Fix: all 4 `SERVE_WORKERS` were pulling the Ollama model at once (504s)
+- After fixing the nginx stale-IP 502 (below), the user hit a new `504
+  Gateway Time-out` on `/docs`. `docker logs smarthub-serve` showed the
+  "Ollama model ... not found ... pulling now..." log line **four times**
+  at the same startup timestamp -- one per uvicorn worker process.
+- Root cause: `SERVE_WORKERS=4` (`docker/Dockerfile.serve`'s `uvicorn
+  --workers 4`) forks 4 worker *processes* inside one container, and
+  `predict._lifespan` runs independently in each one -- so all 4 called
+  `explain.ensure_model_pulled_async()` at their own startup, and all 4
+  fired a simultaneous `POST /api/pull` for the identical model. That's 4x
+  the bandwidth/disk I/O for the exact same bytes, and enough CPU/network
+  contention in the shared Docker Desktop VM to make `/docs` and `/health`
+  themselves time out under nginx's 5s `proxy_read_timeout` -- the pull
+  itself was never blocking any individual request; the contention it
+  created was the real problem, exactly the risk flagged (and apparently
+  not fully closed) in the original design.
+- Fix: `explain.py` gained `_ensure_model_pulled_locked()` -- wraps
+  `_ensure_model_pulled_sync()` in a non-blocking `flock` on
+  `/tmp/smarthub_ollama_pull.lock`. Since uvicorn's worker *processes* share
+  one container filesystem (they're forked, not separate containers), a
+  plain advisory file lock is enough: whichever worker's background thread
+  gets there first does the check/pull; the rest see the lock held and
+  return immediately -- no waiting, no retry needed, since the winning
+  worker pulling the model benefits every worker's future `/explain_bid` (or
+  `/recommend_bid` background SHAP) call regardless of which one did it.
+  `ensure_model_pulled_async()` now spawns this locked wrapper instead of
+  calling `_ensure_model_pulled_sync()` directly.
+- **Tests**: `tests/test_explain.py::test_ensure_model_pulled_locked_dedupes_concurrent_workers`
+  -- two threads (standing in for two worker processes) race for the lock;
+  asserts the underlying pull logic runs exactly once, and the second
+  "worker" returns immediately rather than blocking. Full suite: 223 passed
+  (up from 222), isort/black/flake8 clean.
+
+### Fix: nginx kept proxying to a stale `serve` IP after every rebuild (502s)
+- Live-debugged after the user reported `http://localhost:8000/docs`
+  returning `502 Bad Gateway`. `docker compose ps` showed `smarthub-nginx`
+  up for 3 hours (never restarted) while `smarthub-serve` had just been
+  recreated 9 minutes earlier by a rebuild; `docker logs smarthub-nginx`
+  confirmed it: `connect() failed (111: Connection refused) ... upstream:
+  "http://172.20.0.2:8000/..."` -- nginx was still trying the container's
+  *old* Docker-assigned IP.
+- Root cause: `docker/nginx/nginx.conf`'s `upstream { server serve:8000; }`
+  block resolves the `serve` hostname to an IP exactly once, at nginx's own
+  process startup -- never again. Every `docker compose up --build serve`
+  (a routine, frequent part of this dev loop) gives the recreated container
+  a new internal IP; nginx has no way to notice until it's itself restarted.
+- Fix: replaced the static `upstream` block with `resolver 127.0.0.11
+  valid=10s;` (127.0.0.11 is Docker's embedded DNS server) plus a
+  variable-based `proxy_pass $smarthub_serve` (`set $smarthub_serve
+  http://serve:8000;`) -- forces nginx to re-resolve the hostname on that
+  10s TTL instead of caching it for the container's entire lifetime, so it
+  self-heals within ~10s of `serve` being recreated. No more manual `docker
+  restart smarthub-nginx` needed after every `serve` rebuild.
+- **Immediate unblock** (before the config fix takes effect): `docker
+  restart smarthub-nginx` forces a fresh DNS resolution right away.
+- Not caught by the automated test suite -- this is Docker/nginx runtime
+  behavior, no Python involved. Verification is `docker exec smarthub-nginx
+  nginx -t` (config syntax) plus a live `curl -I http://localhost:8000/docs`
+  after restarting nginx.
+
+### Ollama runs as its own Docker service, with a non-blocking auto-pull
+- Added an `ollama` service to `docker-compose.prefect.yml` (`ollama/ollama`
+  image, no host ports -- internal-only like `serve`, persistent
+  `ollama-data` volume so pulled models survive container recreation).
+- `explain.py` gained `is_model_pulled()` (`GET /api/tags`), `pull_model()`
+  (`POST /api/pull`), `_ensure_model_pulled_sync()` (waits briefly for
+  Ollama to become reachable, then checks-then-pulls), and
+  `ensure_model_pulled_async()` (spawns `_ensure_model_pulled_sync` in a
+  daemon thread and returns immediately).
+- Wired `ensure_model_pulled_async()` into `predict.py`'s `_lifespan`
+  startup hook: `serve` now checks whether `[explain] llm_model` is already
+  pulled into the `ollama` service every time it starts, and pulls it if
+  missing -- entirely off the main thread, so a multi-minute first-time pull
+  never blocks `serve`'s own startup or any in-flight `/recommend_bid` /
+  `/explain_bid` request (the exact concern raised: "while pulling do not
+  hold other operation").
+- Added `$SMARTHUB_OLLAMA_HOST` as an env-var override for
+  `explain.OLLAMA_HOST` (same env-wins-over-file convention as
+  `SMARTHUB_PREDICTION_LOG_DB_URL`/`SMARTHUB_CONFIG_DB_URL`) -- Docker sets
+  it to `http://ollama:11434`; `config/smarthub.yaml`'s `ollama_host` stays
+  `localhost` as the default for non-Docker/local-dev use, unchanged.
+- `docker/Dockerfile.serve`'s `.[ml,explain]` install (today's earlier fix)
+  is what makes `explain.py`'s `import requests`/`import shap` actually
+  resolve in this container -- without it, this whole feature would fail
+  the same silent way `shap` did.
+- **Tests**: `tests/test_explain.py` -- `is_model_pulled`/`pull_model`
+  against mocked Ollama responses (present/absent/unreachable, success/
+  failure), `_ensure_model_pulled_sync`'s three branches (already pulled,
+  missing, host never reachable within budget), and a threading test
+  proving `ensure_model_pulled_async` returns in well under a second even
+  when the underlying sync check would otherwise block for 5s. Full suite:
+  222 passed (up from 213), isort/black/flake8 clean.
+- Docs: `README.md`'s `/explain_bid` section and `config/smarthub.yaml`'s
+  `[explain]` comments updated to describe the `ollama` service, the
+  `SMARTHUB_OLLAMA_HOST` override, and the non-blocking pull.
+
+### Fix: `serve` image was missing the `shap` dependency entirely
+- Found while verifying the new `/recommend_bid` background SHAP task
+  against the user's live Docker deployment: `docs/PREDICTION_LOG_SCHEMA.md`'s
+  worked example row showed `decision_path: "model"` (a real, LightGBM
+  model-served prediction) but `shap_explanation` stayed `null` even minutes
+  after the response returned.
+- Root cause: `pyproject.toml` puts `shap` in a separate `explain` extra,
+  not `ml`. `docker/Dockerfile.serve` only ever ran
+  `pip install -e ".[ml]"` -- so `shap` was never installed in the `serve`
+  image at all. `explain.py`'s `import shap` then raises
+  `ModuleNotFoundError` on any real SHAP attempt.
+- This wasn't a regression from today's background-task work -- `/explain_bid`
+  (already in production, already calling the exact same `explain.py` code)
+  has almost certainly had this same silent gap the whole time. Both routes'
+  failure-isolation design (catch-and-log-a-warning, never raise into the
+  caller) is exactly why nobody saw an error: `/explain_bid` still returns
+  200 with a `top_factors: []`/generic response, and `/recommend_bid`'s new
+  background task just leaves `shap_explanation: null`, both silently.
+- Fix: `docker/Dockerfile.serve` now installs `pip install -e ".[ml,explain]"`.
+  No code changes needed -- this was purely a missing dependency in the
+  image build.
+- **Action needed**: rebuild the `serve` image
+  (`docker compose -f docker-compose.prefect.yml -f docker-compose.local.yml
+  up -d --build serve`) for this fix to take effect; re-test `/recommend_bid`
+  against a real LightGBM model and confirm `shap_explanation` populates.
+- Docs: README's `/explain_bid` section now calls out that `Dockerfile.serve`
+  bakes in both `ml` and `explain` extras, and why a plain `.[ml]` build
+  silently breaks both SHAP paths instead of erroring loudly.
+
+### `/recommend_bid` now backfills `shap_explanation` (background task)
+- Every `/explain_bid` call already computed SHAP factors, but
+  `/recommend_bid` rows always logged `shap_explanation: null` -- SHAP is
+  deliberately kept off `/recommend_bid`'s response path (that's the whole
+  reason `/explain_bid` exists separately), so there was no cheap way to
+  audit/calibrate a live bid's own SHAP factors after the fact.
+- Added `PredictionLogStore.update_shap_explanation(prediction_id, dict)` to
+  `prediction_log_schema.py` -- a plain `UPDATE ... WHERE prediction_id = ...`
+  against the existing single-table schema (no new columns/tables needed).
+- `/recommend_bid` now schedules a `fastapi.BackgroundTasks` job
+  (`_log_shap_background` in `predict.py`) right before returning: computes
+  `top_factors`/`base_win_rate` via `explain.explain_row` and writes them to
+  the row it already logged. Runs *after* the response is sent (Starlette
+  semantics), so it adds zero latency to the bid decision itself. Skipped
+  entirely on cold start (`model is None`) or a non-viable bid (`NaN`
+  `recommended_bid`) -- nothing to explain either way.
+- Deliberately excludes the LLM narrative (`explanation`) and `bid_curve`
+  that `/explain_bid`'s `shap_explanation` also carries -- those require an
+  Ollama call, and running one per bid (even off the response path) risks
+  piling up load on Ollama under concurrency, the same scaling concern from
+  the earlier TAT work this week. Confirmed with the user before
+  implementing (background-SHAP vs. inline vs. leave-as-is), and again on
+  scope (SHAP-only vs. full bundle) -- both resolved in favor of the
+  lowest-latency, lowest-load option.
+- Any failure in the background task (non-LightGBM model, logging DB
+  unreachable for the update) is caught and logged as a warning only --
+  never surfaces to the caller, never touches the 200 response already sent.
+- **Tests**: `tests/test_predict_logging.py` -- a real (tiny) LightGBM
+  pipeline's prediction gets `shap_explanation` populated with
+  `top_factors`/`base_win_rate` (and confirmed to exclude `bid_curve`/
+  `explanation`) by the time `TestClient.post(...)` returns; cold start
+  schedules no task at all; a non-LightGBM model (`_ConstantWinRateModel`)
+  leaves `shap_explanation` null without breaking the 200 response. Full
+  suite: 213 passed (up from 210), isort/black/flake8 clean.
+- Docs: `docs/PREDICTION_LOG_SCHEMA.md` §2/§4/§7/§12 and `README.md`'s
+  "Prediction logging" section updated to describe the two different
+  `shap_explanation` shapes (full for `/explain_bid`, SHAP-only for
+  `/recommend_bid`) and the background-write timing.
+- **Debugging note (same day, live deployment)**: while verifying this in
+  the user's local Docker stack, traced a "why is `lead_ping_id`/
+  `prediction_id` still null" report through several layers -- a stray local
+  Python process holding `localhost:8000` outside Docker (killed), then a
+  `psycopg2.OperationalError: could not translate host name "postgres"`
+  once requests were actually reaching `serve`, traced to the `postgres`
+  container simply not being up (`docker compose ... ps` showed only
+  `nginx`+`serve` running). Brought `postgres` up alongside the rest of the
+  stack; prediction logging then wrote/read rows correctly, confirmed via a
+  live `psql` query against `smarthub_prediction_log`.
+
+### Fix: prediction log wasn't reliably joinable back to a lead or a caller
+- Closed both gaps flagged in `docs/PREDICTION_LOG_SCHEMA.md` §8 right after
+  writing it: `BidRequest` had no `lead_ping_id` field (so nothing could be
+  sent even if a caller wanted to), and neither `/recommend_bid` nor
+  `/explain_bid` returned `prediction_id` in the response (so a caller had no
+  receipt to reference later either). Together, that meant a logged
+  prediction couldn't be reliably tied back to "which lead/request was
+  this" - the log's whole reason for existing.
+- Added optional `lead_ping_id: int | None` to `BidRequest` (never used in
+  the bid decision itself, purely a correlation key), threaded through to
+  `log_prediction(...)` on both the success and error paths in both routes.
+- `_log_prediction_safe` now returns the store's generated `prediction_id`
+  (`None` only if the write itself failed), and both routes attach it to
+  their response body as `result["prediction_id"]` -- a caller either
+  supplies `lead_ping_id` up front or gets `prediction_id` back to correlate
+  after the fact; the log is joinable either way now.
+- **Tests**: `tests/test_predict_logging.py` -- response `prediction_id`
+  matches the actual log row for both endpoints, `lead_ping_id` threads
+  through correctly, and it's confirmed optional (omitting it is not a
+  validation error). Full suite: 210 passed (up from 207), isort/black/
+  flake8 clean.
+- **Follow-up same day**: `lead_ping_id` was being logged and echoed via
+  `prediction_id`, but not echoed back itself -- a caller who sent one had
+  no way to see it round-trip in the response. Both routes now also set
+  `result["lead_ping_id"] = request.lead_ping_id` (`None` when the caller
+  didn't supply one). Tests extended to assert the echo; still 210 passed,
+  isort/black/flake8 clean.
+
+### Prediction logging implemented: single table, per the DS weekly decision
+- Per the 2026-07-22 DS weekly (Vinaya + Nimesh): don't log the optimizer's
+  full candidate-bid sweep or split SHAP into its own table -- one row per
+  `/recommend_bid`/`/explain_bid` call, success or failure, everything else
+  folded into JSON columns. Rewrote `docs/PREDICTION_LOG_SCHEMA.md` from the
+  original 3-table design (parent + `smarthub_optimizer_bid_evaluations` +
+  `smarthub_shap_explanations`, never wired into a live endpoint) to a
+  single `smarthub_prediction_log` table -- see the doc's §11 for the full
+  before/after mapping.
+- New `src/smarthub/train_and_predict/prediction_log_schema.py` --
+  `PredictionLogStore` (plain SQLAlchemy Core, same conventions as
+  `smarthub.core.config_store`: portable Text/Numeric columns, JSON stored
+  as serialized text, `$SMARTHUB_PREDICTION_LOG_DB_URL` env override
+  defaulting to the shared Postgres). `candidate_bid_generation` and
+  `shap_explanation` are JSON columns replacing the old child tables;
+  `status`/`error_message` make failed requests first-class; new
+  `serving_config` snapshots the exploration/recency/cold-start policy
+  values in effect for that specific prediction (Vinaya's reproducibility
+  ask, same meeting).
+- Wired into `smarthub/server/predict.py`: both routes log exactly once
+  after computing their response (success) or in an `except` block before
+  re-raising (failure) -- logging never delays or replaces the real
+  response, and a logging-DB outage only ever logs a warning, never breaks
+  live bidding (same principle as SHAP not delaying `/recommend_bid`). The
+  store itself is constructed lazily on first use, not at import/startup,
+  so a missing logging DB can't block the API from starting.
+- **Tests**: `tests/test_prediction_log_schema.py` (store unit tests --
+  round-tripping JSON columns, success/error rows, validation, `recent()`
+  filtering) and `tests/test_predict_logging.py` (route-level integration
+  via `TestClient`, using the existing `_ConstantWinRateModel` fake so no
+  sklearn/lightgbm is required -- success, cold-start, and two distinct
+  real-error paths all asserted to produce a correctly-shaped log row).
+  Full suite: 207 passed (up from 192), isort/black/flake8 clean.
+- **Found, not fixed (out of scope of this change)**: a synthetic LightGBM
+  smoke test surfaced a pre-existing bug -- `/explain_bid` can 500 with
+  `ValueError: Out of range float values are not JSON compliant` when a
+  `top_factors[].value` is `NaN` (an optional numeric feature the caller
+  didn't supply). Root cause is in `explain.py`'s `_to_native()` /
+  `explain_row`, not in this session's logging work -- confirmed the
+  prediction-log row itself still gets written correctly (`status:
+  "success"`) before FastAPI's own response serialization fails downstream.
+  Worth a follow-up ticket.
+
+
 ## 2026-07-22
+
+### Fix: `/recommend_bid`'s 2s TAT traced to redundant, uncached registry I/O
+- Investigated a live report that `/recommend_bid` (the real-time bid path)
+  had a ~2s turnaround per request — far higher than a vectorized
+  `predict_proba` call over a small candidate-bid grid should cost. Traced it
+  to `load_model_and_manifest`'s "currently serving" tier: it called three
+  separate `registry` helpers (`currently_serving_version`,
+  `currently_serving_manifest`, `currently_serving_model_path`) that each
+  independently re-read `current.json` from disk to re-derive the *same*
+  version string, plus an uncached `load_manifest` read — every request,
+  never cached, unlike the model binary itself (which already had a proper
+  in-memory cache). On a bind-mounted Docker volume (`./data:/app/data`),
+  repeated small-file reads across the host/container boundary are a
+  plausible source of exactly this kind of latency.
+- **Fix**: resolve the version exactly once per call (down from 3x), and
+  added `_MANIFEST_CACHE` keyed by `(lead_type_name, version)` — manifests
+  are immutable once `save_version` writes them, so this cache needs no
+  invalidation logic; a version's manifest can never go stale. Still reads
+  `current.json` once per request (the actual promotion-detection check —
+  same role as the model cache's mtime check), but the manifest itself is
+  now read from disk only once total, ever, per version, instead of on
+  every single request. Wired into `clear_model_cache()` so tests/manual
+  invalidation clear both caches together.
+- **Verified**: instrumented a live call count across 5 requests —
+  `currently_serving_version` went from 3 calls/request to 1, and
+  `load_manifest` went from 1 uncached call/request to 1 call total across
+  all 5. Full suite still 192 passed, isort/black/flake8 clean.
+- This was root-caused deliberately *before* reaching for more
+  infrastructure (more `uvicorn` workers, more `serve` replicas) — those
+  would have scaled around the bug (more processes each still paying the
+  same artificial 2s tax) rather than fixing why a single request cost 2s
+  in the first place.
 
 ### Model serving: dedicated `serve` container behind `nginx`, plus in-memory model caching
 - New `docker/Dockerfile.serve` — runs the existing FastAPI bid-recommendation
@@ -104,6 +406,21 @@
   recomputed at the perturbed bid, not reused from the original), and all
   four `load_model_and_manifest` resolution tiers. Full suite: 184 passed,
   6 skipped.
+
+### `serve` scaling: configurable uvicorn worker processes
+- `docker/Dockerfile.serve`'s `CMD` switched to shell form so `--workers
+  ${SERVE_WORKERS:-4}` actually expands; default 4, overridable per
+  deployment via `SERVE_WORKERS` in `docker-compose.prefect.yml`'s `serve`
+  environment (reads from `.env`, same pattern as the other env-driven
+  settings). Was previously hardcoded to uvicorn's implicit single process.
+- Each worker process gets its own copy of the in-memory model cache and
+  runs its own startup eager-load — not a problem, since models are small
+  and read-only, so there's no cache-coherency concern across workers. All
+  workers share the container's one port, so `nginx.conf`'s `upstream
+  smarthub_serve { server serve:8000; }` didn't need to change.
+- Documented in the README's "Production — serve + nginx" section, including
+  the next step if one container's workers aren't enough (scale the
+  container itself and list all replicas in the nginx upstream).
 
 
 ## 2026-07-21

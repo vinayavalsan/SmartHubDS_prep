@@ -96,10 +96,19 @@ prediction:
 explain:
   # Offline/on-demand "why did Anton bid $X" explanations (SHAP factor
   # breakdown + a local LLM via Ollama — see train_and_predict/explain.py).
-  # Only used by POST /explain_bid; never on the live /recommend_bid path.
-  # Requires: pip install '.[explain,ml]' and a running local Ollama server
-  # (https://ollama.com) with this model pulled.
+  # Used by POST /explain_bid (always) and, since 2026-07-23, by
+  # /recommend_bid's background SHAP enrichment (top_factors/base_win_rate
+  # only — no LLM call there, see docs/CHANGELOG.md). Requires:
+  # pip install '.[explain,ml]'.
   llm_model: qwen2.5:1.5b-instruct
+  # ollama_host below is for non-Docker/local-dev use (a natively-running
+  # Ollama on this machine). $SMARTHUB_OLLAMA_HOST overrides this when set —
+  # docker-compose.prefect.yml sets it to http://ollama:11434 for the `serve`
+  # container, since a Docker-internal service must be reached by its
+  # service name, not localhost. `serve` also auto-pulls this model into
+  # that `ollama` service at startup if it isn't already present, in a
+  # background thread that never blocks startup or live requests (see
+  # explain.ensure_model_pulled_async).
   ollama_host: http://localhost:11434
   top_n_factors: 5
   timeout_seconds: 30

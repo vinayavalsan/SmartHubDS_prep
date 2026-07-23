@@ -22,6 +22,11 @@ same pattern as `predict.py`'s lazy joblib/mlflow/fastapi imports.
 
 from __future__ import annotations
 
+import fcntl
+import logging
+import os
+import threading
+
 import numpy as np
 import pandas as pd
 
@@ -30,14 +35,32 @@ from smarthub.server import predict
 
 from . import config, preprocessing
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
 # Task config: smarthub.yaml `explain` section — used only by this module, not live
 # bidding path, so it's kept local rather than in train_and_predict/config.py.
 LLM_MODEL = task_config.get("explain", "llm_model", "qwen2.5:1.5b-instruct")
-OLLAMA_HOST = task_config.get("explain", "ollama_host", DEFAULT_OLLAMA_HOST)
+# $SMARTHUB_OLLAMA_HOST wins over the file config when set -- same
+# env-wins-over-file convention as SMARTHUB_PREDICTION_LOG_DB_URL/
+# SMARTHUB_CONFIG_DB_URL. Lets docker-compose point this at the `ollama`
+# service's Docker-network hostname (see docker-compose.prefect.yml) without
+# changing config/smarthub.yaml's own default, which stays `localhost` for
+# non-Docker/local-dev use (a natively-running Ollama).
+OLLAMA_HOST = os.getenv("SMARTHUB_OLLAMA_HOST") or task_config.get(
+    "explain", "ollama_host", DEFAULT_OLLAMA_HOST
+)
 TOP_N_FACTORS = task_config.get_int("explain", "top_n_factors", 5)
 LLM_TIMEOUT_SECONDS = task_config.get_float("explain", "timeout_seconds", 30.0)
+
+# Dedupes the startup model-pull check across uvicorn's SERVE_WORKERS worker
+# PROCESSES (`--workers N` forks child processes within the same container --
+# see docker/Dockerfile.serve -- not separate containers, so they all share
+# this path). Deliberately under /tmp, not the `data` volume: container-
+# local and ephemeral is exactly right for a lock whose only job is "don't
+# let two workers of the same container race the same pull at once".
+_OLLAMA_PULL_LOCK_PATH = "/tmp/smarthub_ollama_pull.lock"
 
 
 def _fitted_lgbm_estimators(model):
@@ -270,6 +293,174 @@ def call_ollama(prompt, model=None, host=None, timeout=None):
             "(Explanation unavailable: could not reach the local LLM at "
             f"{host} — {exc}. The numeric factors above are still accurate.)"
         )
+
+
+def is_model_pulled(model=None, host=None, timeout=None) -> bool:
+    """Return whether ``model`` is already pulled (available) in the local
+    Ollama instance's model list.
+
+    Best-effort: any failure reaching Ollama (not running yet, network blip)
+    is treated as "not pulled" rather than raised -- the only caller
+    (``_ensure_model_pulled_sync``) reacts to either case by attempting a
+    pull, which is the safe default either way, so there's no need to
+    distinguish "definitely absent" from "couldn't check" here.
+    """
+    import requests
+
+    model = model or LLM_MODEL
+    host = host or OLLAMA_HOST
+    timeout = timeout or LLM_TIMEOUT_SECONDS
+    try:
+        resp = requests.get(f"{host}/api/tags", timeout=timeout)
+        resp.raise_for_status()
+        names = {m.get("name") for m in resp.json().get("models", [])}
+    except Exception:  # noqa: BLE001 -- best-effort, see docstring
+        return False
+    return model in names
+
+
+def pull_model(model=None, host=None) -> bool:
+    """Pull ``model`` into the local Ollama instance.
+
+    Blocking -- a real pull can take minutes for a multi-GB model, with no
+    fixed time budget, so this deliberately sets no request timeout. Callers
+    that must not block (e.g. FastAPI startup) should run this off the main
+    thread -- see ``ensure_model_pulled_async``.
+
+    Returns
+    -------
+    bool
+        Whether the pull request completed successfully.
+    """
+    import requests
+
+    model = model or LLM_MODEL
+    host = host or OLLAMA_HOST
+    try:
+        resp = requests.post(
+            f"{host}/api/pull",
+            json={"name": model, "stream": False},
+            timeout=None,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001 -- best-effort; caller only logs a warning
+        logger.warning(
+            "Failed to pull Ollama model %r from %s", model, host, exc_info=True
+        )
+        return False
+
+
+def _ensure_model_pulled_sync(
+    model=None,
+    host=None,
+    wait_for_host_seconds=60,
+    poll_interval_seconds=2,
+) -> None:
+    """Check-then-pull ``model``, after waiting briefly for Ollama itself to
+    become reachable (it may still be starting -- e.g. right after `docker
+    compose up`, `serve` and `ollama` start around the same time).
+
+    Synchronous/blocking by design -- kept separate from
+    ``ensure_model_pulled_async`` purely so the actual logic is directly
+    unit-testable without touching real threads; the async wrapper is the
+    only thing that needs a background thread.
+    """
+    import time
+
+    import requests
+
+    model = model or LLM_MODEL
+    host = host or OLLAMA_HOST
+
+    deadline = time.monotonic() + wait_for_host_seconds
+    reachable = False
+    while time.monotonic() < deadline:
+        try:
+            requests.get(f"{host}/api/tags", timeout=5).raise_for_status()
+            reachable = True
+            break
+        except Exception:  # noqa: BLE001 -- still starting up, keep polling
+            time.sleep(poll_interval_seconds)
+
+    if not reachable:
+        logger.warning(
+            "Ollama at %s was not reachable within %ss -- skipping the "
+            "model-pull check for now (retried automatically on next "
+            "startup).",
+            host,
+            wait_for_host_seconds,
+        )
+        return
+
+    if is_model_pulled(model, host):
+        logger.info("Ollama model %r already pulled at %s.", model, host)
+        return
+
+    logger.info("Ollama model %r not found at %s -- pulling now...", model, host)
+    if pull_model(model, host):
+        logger.info("Finished pulling Ollama model %r.", model)
+
+
+def _ensure_model_pulled_locked(model=None, host=None) -> None:
+    """Run ``_ensure_model_pulled_sync`` behind a non-blocking file lock, so
+    only one of uvicorn's `SERVE_WORKERS` worker PROCESSES (they fork inside
+    one container -- see docker/Dockerfile.serve -- and so share one
+    filesystem) actually performs the check/pull; the rest see the lock
+    already held and return immediately.
+
+    Without this, every worker independently calls this at its own startup
+    and all of them fire a simultaneous `POST /api/pull` for the identical
+    model -- quadrupling (at `SERVE_WORKERS=4`) bandwidth and disk I/O for
+    the exact same bytes, and contending for CPU badly enough to make the
+    API itself sluggish. Observed live: with 4 workers, `/docs` and
+    `/health` started timing out under nginx's 5s `proxy_read_timeout` while
+    all 4 workers pulled at once (see docs/CHANGELOG.md).
+
+    A plain advisory `flock` (non-blocking) is enough -- no need to wait or
+    retry if another worker already holds it, since whichever worker wins
+    pulls the model into the shared `ollama` service, which benefits every
+    worker's future `/explain_bid` (or /recommend_bid background SHAP) call
+    either way.
+    """
+    try:
+        lock_fd = os.open(_OLLAMA_PULL_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError:
+        # Can't even open the lock file -- better to just run the check than
+        # silently never attempt a pull at all.
+        _ensure_model_pulled_sync(model, host)
+        return
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # Another worker already holds the lock -- it's handling this.
+        os.close(lock_fd)
+        return
+
+    try:
+        _ensure_model_pulled_sync(model, host)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def ensure_model_pulled_async(model=None, host=None) -> None:
+    """Kick off the (lock-deduped) check/pull in a background daemon thread.
+
+    Returns immediately -- never blocks the caller (FastAPI startup, in this
+    codebase's only caller today, see ``predict._lifespan``). A real model
+    pull can take minutes for a multi-GB model, and neither startup nor any
+    in-flight `/recommend_bid` / `/explain_bid` request should ever wait on
+    it -- same "never hold up live serving" principle as SHAP/logging
+    elsewhere in this codebase. Daemon so it can't prevent process exit.
+    """
+    threading.Thread(
+        target=_ensure_model_pulled_locked,
+        args=(model, host),
+        daemon=True,
+        name="ollama-model-pull",
+    ).start()
 
 
 def explain_bid(

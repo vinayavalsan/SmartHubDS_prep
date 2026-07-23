@@ -86,8 +86,52 @@ def _model_cache_key(uri: str) -> tuple[str, float | None]:
 
 
 def clear_model_cache() -> None:
-    """Drop all cached in-memory models (mainly for tests/manual invalidation)."""
+    """Drop all cached in-memory models and manifests (tests/manual invalidation)."""
     _MODEL_CACHE.clear()
+    _MANIFEST_CACHE.clear()
+
+
+# Manifest cache -- keyed by (lead_type_name, version), NOT by mtime like
+# _MODEL_CACHE, because a version's manifest never changes after it's written
+# (registry.save_version() writes manifest_path() once, at creation, and
+# nothing ever rewrites it in place -- see registry.py). So unlike the model
+# cache, this one needs no invalidation logic at all: a given key's value can
+# never go stale.
+#
+# Added because `load_model_and_manifest`'s "currently serving" tier used to
+# call three separate registry helpers that each independently re-read
+# current.json to re-derive the same version string -- i.e. redundant disk
+# I/O on every single /recommend_bid request, on top of being uncached across
+# requests. That's latency worth avoiding in the real-time bid path, same
+# reasoning as _MODEL_CACHE above.
+_MANIFEST_CACHE: dict[tuple[str, str], dict] = {}
+
+
+def _cached_manifest(lead_type_name: str, version: str) -> dict | None:
+    """Return a model version's manifest, from cache when possible.
+
+    Inputs
+    ------
+    lead_type_name : str
+        Human-readable lead type name.
+    version : str
+        Model version identifier.
+
+    Returns
+    -------
+    dict | None
+        The manifest, or None if this version has no manifest on disk.
+    """
+    key = (lead_type_name, version)
+    cached = _MANIFEST_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        manifest = registry.load_manifest(lead_type_name, version)
+    except FileNotFoundError:
+        return None
+    _MANIFEST_CACHE[key] = manifest
+    return manifest
 
 
 def is_model_cached(lead_type_id: int = 6) -> bool:
@@ -157,10 +201,22 @@ def load_model_and_manifest(lead_type_id: int = 6):
     -------
     tuple[Any | None, dict | None]
         Loaded model (via the shared cache in `load_model`) and its
-        manifest, or `(None, None)` if nothing resolves. The `MODEL_URI`
-        env-override tier has no registry manifest to pair with an arbitrary
-        pinned URI, so it always returns `(model, None)` -- `decide_bid`
-        treats a `None` manifest as "age unknown", not stale.
+        manifest (via `_cached_manifest`), or `(None, None)` if nothing
+        resolves. The `MODEL_URI` env-override tier has no registry manifest
+        to pair with an arbitrary pinned URI, so it always returns `(model,
+        None)` -- `decide_bid` treats a `None` manifest as "age unknown",
+        not stale.
+
+    Notes
+    -----
+    The "currently serving" tier reads `current.json` exactly once per call
+    -- that single read IS the cache-busting check (same role as the model
+    cache's own mtime check): it's how a new promotion gets picked up
+    without a restart. Everything after that is resolved from the already-
+    known `version` and cached, since a version's manifest/model path never
+    change once written. This used to call three separate registry helpers
+    that each independently re-derived the same version by re-reading
+    current.json -- redundant disk I/O on every request; fixed here.
     """
     env_override = os.getenv("MODEL_URI")
     if env_override:
@@ -169,22 +225,15 @@ def load_model_and_manifest(lead_type_id: int = 6):
     lead_type_name = config.lead_type_name(lead_type_id)
 
     pinned_version = config.active_model_version()
-    if pinned_version:
-        try:
-            manifest = registry.load_manifest(lead_type_name, pinned_version)
-        except FileNotFoundError:
-            return None, None
-        model_path = registry.version_path(lead_type_name, pinned_version)
-        if not model_path.exists():
-            return None, None
-        return load_model(model_uri=str(model_path)), manifest
-
-    version = registry.currently_serving_version(lead_type_name)
+    version = pinned_version or registry.currently_serving_version(lead_type_name)
     if version is None:
         return None, None
-    manifest = registry.currently_serving_manifest(lead_type_name)
-    model_path = registry.currently_serving_model_path(lead_type_name)
-    if manifest is None or model_path is None:
+
+    manifest = _cached_manifest(lead_type_name, version)
+    if manifest is None:
+        return None, None
+    model_path = registry.version_path(lead_type_name, version)
+    if not model_path.exists():
         return None, None
     return load_model(model_uri=str(model_path)), manifest
 
@@ -516,7 +565,7 @@ def bid_curve_around(
 
 
 try:
-    from fastapi import FastAPI
+    from fastapi import BackgroundTasks, FastAPI
     from pydantic import BaseModel, Field
 
     _FASTAPI_AVAILABLE = True
@@ -537,6 +586,12 @@ if _FASTAPI_AVAILABLE:
         campaign_id: int
         account_id: int | None = None
         source_type_id: int | None = None
+        # Optional: threads through to the prediction log (§8 of
+        # docs/PREDICTION_LOG_SCHEMA.md) so a prediction can be joined back
+        # to a specific lead later -- e.g. against `public.lead_pings.won`
+        # for realized win-rate calibration. Never used in the bid decision
+        # itself, purely a correlation key for logging.
+        lead_ping_id: int | None = None
         lead_type_id: int = 6
         created_hour: int = Field(..., ge=0, le=23)
         created_dayofweek: int = Field(..., ge=0, le=6)
@@ -559,8 +614,20 @@ if _FASTAPI_AVAILABLE:
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
-        """Warm the model cache once at startup (see _eager_load_models)."""
+        """Warm the model cache once at startup (see _eager_load_models),
+        and kick off a background Ollama model-pull check.
+
+        Local import (not top-level): `explain.py` imports `smarthub.server`
+        (this module), so importing it here at call time avoids a circular
+        import -- same reason `/explain_bid` imports it lazily. Both this
+        check and the pull it may trigger run in a background thread (see
+        `explain.ensure_model_pulled_async`) -- neither blocks startup from
+        completing, nor blocks any request while a multi-minute pull runs.
+        """
         _eager_load_models()
+        from smarthub.train_and_predict import explain
+
+        explain.ensure_model_pulled_async()
         yield
 
     app = FastAPI(title="Anton Bid Prediction API", lifespan=_lifespan)
@@ -611,8 +678,128 @@ if _FASTAPI_AVAILABLE:
         )
         return record, frame.iloc[0]
 
+    # --- Prediction logging (docs/PREDICTION_LOG_SCHEMA.md) -----------------
+    # One row per /recommend_bid or /explain_bid call, success or failure --
+    # per the 2026-07-22 DS meeting decision. Constructed lazily (not at
+    # import/startup time) so a missing/unreachable logging DB can't prevent
+    # the API from starting or serving bids, and every call site wraps this
+    # in a try/except that only ever logs a warning -- a logging outage must
+    # never take down live bidding, same principle as SHAP not delaying a
+    # prediction.
+    _prediction_log_store_holder: dict = {}
+
+    def _prediction_log_store():
+        """Lazily construct and cache the shared PredictionLogStore."""
+        if "store" not in _prediction_log_store_holder:
+            from smarthub.train_and_predict.prediction_log_schema import (
+                PredictionLogStore,
+            )
+
+            _prediction_log_store_holder["store"] = PredictionLogStore()
+        return _prediction_log_store_holder["store"]
+
+    def _manifest_log_fields(manifest: dict | None) -> dict:
+        """Manifest-derived fields the prediction log wants, or all-None."""
+        if not manifest:
+            return {
+                "model_version": None,
+                "model_uri": None,
+                "model_type": None,
+                "model_calibrated": None,
+                "training_table_version": None,
+                "model_data_min_created_at": None,
+                "model_data_max_created_at": None,
+            }
+        lineage = manifest.get("lineage") or {}
+        return {
+            "model_version": manifest.get("version"),
+            "model_uri": manifest.get("model_path"),
+            "model_type": lineage.get("model_type"),
+            "model_calibrated": lineage.get("calibrated"),
+            "training_table_version": lineage.get("training_table_version"),
+            "model_data_min_created_at": lineage.get("data_min_created_at"),
+            "model_data_max_created_at": lineage.get("data_max_created_at"),
+        }
+
+    def _serving_config_snapshot() -> dict:
+        """Snapshot of the serving-policy config in effect right now, for
+        reproducibility (Vinaya's config-versioning ask, same meeting)."""
+        return {
+            "exploration_variance_pct": config.exploration_variance_pct(),
+            "recency_window_days": config.recency_window_days(),
+            "cold_start_fallback_bid_pct": config.cold_start_fallback_bid_pct(),
+        }
+
+    def _log_prediction_safe(**kwargs) -> str | None:
+        """Best-effort prediction logging -- never raises into the caller.
+
+        Returns
+        -------
+        str | None
+            The logged row's `prediction_id` (so the route can hand it back
+            to the caller as a receipt -- see docs/PREDICTION_LOG_SCHEMA.md
+            §8), or `None` if the write itself failed.
+        """
+        try:
+            return _prediction_log_store().log_prediction(**kwargs)
+        except Exception:  # noqa: BLE001 -- logging must never break serving
+            logger.warning("Failed to write prediction log row", exc_info=True)
+            return None
+
+    def _log_shap_background(
+        prediction_id: str | None,
+        model,
+        record: dict,
+        lead_type_id: int,
+        recommended_bid: float,
+    ) -> None:
+        """Best-effort: compute SHAP factors for a /recommend_bid prediction
+        and attach them to its already-written log row.
+
+        Runs as a `BackgroundTasks` job -- scheduled by the route, but not
+        actually executed until *after* the response has been sent (Starlette
+        semantics) -- so this never adds latency to the bid decision itself.
+        Same principle as `/explain_bid` keeping SHAP off `/recommend_bid`'s
+        response path, just applied per-request instead of skipped entirely.
+
+        Deliberately excludes the LLM narrative `explain.explain_bid()` also
+        produces (`explanation`) -- that's a much heavier Ollama call, and
+        running it for every single bid, even off the response path, risks
+        piling up load on Ollama under concurrency. That field stays
+        /explain_bid-only.
+
+        Silently gives up (logs a warning) on any failure -- e.g. a
+        non-LightGBM model (`explain.explain_row` only supports
+        `model_type='lightgbm'`, see `_fitted_lgbm_estimators`), or the
+        logging DB being unreachable for the update -- since this is pure
+        enrichment after the fact and must never surface anywhere a caller
+        would see it.
+        """
+        if prediction_id is None or model is None:
+            return
+        try:
+            from smarthub.train_and_predict import explain
+
+            explained_record = dict(record)
+            explained_record["bid"] = recommended_bid
+            factors = explain.explain_row(model, explained_record, lead_type_id)
+            _prediction_log_store().update_shap_explanation(
+                prediction_id,
+                {
+                    "top_factors": factors["top_factors"],
+                    "base_win_rate": factors["base_win_rate"],
+                },
+            )
+        except Exception:  # noqa: BLE001 -- best-effort enrichment only
+            logger.warning(
+                "Failed to compute/attach background SHAP explanation for "
+                "prediction_id=%s",
+                prediction_id,
+                exc_info=True,
+            )
+
     @app.post("/recommend_bid")
-    def recommend_bid(request: BidRequest):
+    def recommend_bid(request: BidRequest, background_tasks: BackgroundTasks):
         """Return the expected-profit-maximizing bid for one request.
 
         Runs every lead through `decide_bid` -- the same cold-start
@@ -628,22 +815,106 @@ if _FASTAPI_AVAILABLE:
         Returns
         -------
         dict
-            Recommended bid, `decision_path`/`decision_reason`, and
-            supporting metrics.
+            Recommended bid, `decision_path`/`decision_reason`, supporting
+            metrics, `prediction_id` -- a receipt correlating this response
+            to its prediction-log row (`None` if the logging write itself
+            failed; never blocks or changes the bid decision) -- and
+            `lead_ping_id`, echoed back exactly as sent (`None` if the
+            caller didn't supply one).
+
+        Notes
+        -----
+        When a real model served this prediction (not cold start, and a
+        viable bid exists), SHAP factors (`top_factors`/`base_win_rate`,
+        no LLM narrative) are computed in a background task *after* this
+        response is sent and attached to the same `prediction_id`'s log row
+        -- never part of this response, never adds latency here. See
+        `_log_shap_background`.
         """
-        model, manifest = load_model_and_manifest(request.lead_type_id)
-        _record, row = _record_and_row(request)
-        return decide_bid(
-            row=row,
-            model=model,
-            manifest=manifest,
+        lead_type_name = config.lead_type_name(request.lead_type_id)
+        record = None
+        try:
+            model, manifest = load_model_and_manifest(request.lead_type_id)
+            record, row = _record_and_row(request)
+            result = decide_bid(
+                row=row,
+                model=model,
+                manifest=manifest,
+                expected_revenue=request.expected_revenue,
+                target_cm=request.target_cm,
+                min_bid=request.min_bid,
+                bid_step=request.bid_step,
+                created_dayofweek=request.created_dayofweek,
+                created_hour=request.created_hour,
+            )
+        except Exception as exc:
+            _log_prediction_safe(
+                endpoint="recommend_bid",
+                status="error",
+                error_message=str(exc),
+                lead_type_id=request.lead_type_id,
+                lead_type_name=lead_type_name,
+                campaign_id=request.campaign_id,
+                account_id=request.account_id,
+                source_type_id=request.source_type_id,
+                lead_ping_id=request.lead_ping_id,
+                input_features=record or request.model_dump(),
+                expected_revenue=request.expected_revenue,
+                target_cm=request.target_cm,
+                min_bid=request.min_bid,
+                bid_step=request.bid_step,
+            )
+            raise
+
+        prediction_id = _log_prediction_safe(
+            endpoint="recommend_bid",
+            lead_type_id=request.lead_type_id,
+            lead_type_name=lead_type_name,
+            campaign_id=request.campaign_id,
+            account_id=request.account_id,
+            source_type_id=request.source_type_id,
+            lead_ping_id=request.lead_ping_id,
+            input_features=record,
+            model_input_features=row.to_dict(),
+            feature_cols=manifest.get("feature_cols") if manifest else None,
             expected_revenue=request.expected_revenue,
             target_cm=request.target_cm,
             min_bid=request.min_bid,
             bid_step=request.bid_step,
-            created_dayofweek=request.created_dayofweek,
-            created_hour=request.created_hour,
+            candidate_bid_generation={
+                "method": "equally_spaced",
+                "min_bid": request.min_bid,
+                "max_bid": result.get("max_bid"),
+                "bid_step": request.bid_step,
+                "n_candidates": result.get("n_candidate_bids"),
+            },
+            **_manifest_log_fields(manifest),
+            model_data_age_days=result.get("model_data_age_days"),
+            decision_path=result.get("decision_path"),
+            decision_reason=result.get("decision_reason"),
+            recommended_bid=result.get("recommended_bid"),
+            recommended_bid_predicted_win_rate=result.get(
+                "recommended_bid_predicted_win_rate"
+            ),
+            recommended_bid_expected_profit=result.get(
+                "recommended_bid_expected_profit"
+            ),
+            serving_config=_serving_config_snapshot(),
         )
+        result["prediction_id"] = prediction_id
+        result["lead_ping_id"] = request.lead_ping_id
+
+        if model is not None and not pd.isna(result.get("recommended_bid")):
+            background_tasks.add_task(
+                _log_shap_background,
+                prediction_id,
+                model,
+                record,
+                request.lead_type_id,
+                result.get("recommended_bid"),
+            )
+
+        return result
 
     @app.post("/explain_bid")
     def explain_bid_route(request: BidRequest):
@@ -663,8 +934,12 @@ if _FASTAPI_AVAILABLE:
         -------
         dict
             Everything from `decide_bid` plus `base_win_rate`,
-            `top_factors` (SHAP), `bid_curve`, and `explanation` -- see
-            `train_and_predict.explain.explain_bid`.
+            `top_factors` (SHAP), `bid_curve`, `explanation` -- see
+            `train_and_predict.explain.explain_bid` -- `prediction_id`, a
+            receipt correlating this response to its prediction-log row
+            (`None` if the logging write itself failed), and `lead_ping_id`,
+            echoed back exactly as sent (`None` if the caller didn't supply
+            one).
         """
         # Local import: explain.py imports this module (`smarthub.server`),
         # so importing it at module load time here would be circular.
@@ -672,17 +947,83 @@ if _FASTAPI_AVAILABLE:
         # /recommend_bid request.
         from smarthub.train_and_predict import explain
 
-        model, manifest = load_model_and_manifest(request.lead_type_id)
-        record, _row = _record_and_row(request)
-        return explain.explain_bid(
-            model=model,
-            record=record,
+        lead_type_name = config.lead_type_name(request.lead_type_id)
+        record = None
+        try:
+            model, manifest = load_model_and_manifest(request.lead_type_id)
+            record, row = _record_and_row(request)
+            result = explain.explain_bid(
+                model=model,
+                record=record,
+                lead_type_id=request.lead_type_id,
+                expected_revenue=request.expected_revenue,
+                manifest=manifest,
+                target_cm=request.target_cm,
+                min_bid=request.min_bid,
+                bid_step=request.bid_step,
+                created_dayofweek=request.created_dayofweek,
+                created_hour=request.created_hour,
+            )
+        except Exception as exc:
+            _log_prediction_safe(
+                endpoint="explain_bid",
+                status="error",
+                error_message=str(exc),
+                lead_type_id=request.lead_type_id,
+                lead_type_name=lead_type_name,
+                campaign_id=request.campaign_id,
+                account_id=request.account_id,
+                source_type_id=request.source_type_id,
+                lead_ping_id=request.lead_ping_id,
+                input_features=record or request.model_dump(),
+                expected_revenue=request.expected_revenue,
+                target_cm=request.target_cm,
+                min_bid=request.min_bid,
+                bid_step=request.bid_step,
+            )
+            raise
+
+        prediction_id = _log_prediction_safe(
+            endpoint="explain_bid",
             lead_type_id=request.lead_type_id,
+            lead_type_name=lead_type_name,
+            campaign_id=request.campaign_id,
+            account_id=request.account_id,
+            source_type_id=request.source_type_id,
+            lead_ping_id=request.lead_ping_id,
+            input_features=record,
+            model_input_features=row.to_dict(),
+            feature_cols=manifest.get("feature_cols") if manifest else None,
             expected_revenue=request.expected_revenue,
-            manifest=manifest,
             target_cm=request.target_cm,
             min_bid=request.min_bid,
             bid_step=request.bid_step,
-            created_dayofweek=request.created_dayofweek,
-            created_hour=request.created_hour,
+            candidate_bid_generation={
+                "method": "equally_spaced",
+                "min_bid": request.min_bid,
+                "max_bid": result.get("max_bid"),
+                "bid_step": request.bid_step,
+                "n_candidates": result.get("n_candidate_bids"),
+            },
+            **_manifest_log_fields(manifest),
+            model_data_age_days=result.get("model_data_age_days"),
+            decision_path=result.get("decision_path"),
+            decision_reason=result.get("decision_reason"),
+            recommended_bid=result.get("recommended_bid"),
+            recommended_bid_predicted_win_rate=result.get(
+                "recommended_bid_predicted_win_rate"
+            ),
+            recommended_bid_expected_profit=result.get(
+                "recommended_bid_expected_profit"
+            ),
+            shap_explanation={
+                "top_factors": result.get("top_factors"),
+                "base_win_rate": result.get("base_win_rate"),
+                "bid_curve": result.get("bid_curve"),
+                "explanation": result.get("explanation"),
+            },
+            serving_config=_serving_config_snapshot(),
         )
+        result["prediction_id"] = prediction_id
+        result["lead_ping_id"] = request.lead_ping_id
+        return result

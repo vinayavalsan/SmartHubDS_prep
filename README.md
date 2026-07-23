@@ -525,6 +525,19 @@ TLS isn't set up yet — nginx currently proxies plain HTTP. Add a `listen 443
 ssl` server block (plus a cert volume mount) to `docker/nginx/nginx.conf` if
 this ever needs to be reachable outside a trusted network.
 
+**Scaling.** `serve` runs multiple `uvicorn` worker processes
+(`SERVE_WORKERS`, default 4 — set it in `.env` to change), each with its own
+copy of the in-memory model cache; that's fine, since models are small,
+read-only, and each worker eager-loads its own copy at startup, so there's no
+shared state to coordinate. For more headroom than one container's workers
+can give, scale the container itself (`docker compose ... up -d --scale
+serve=N`) and point `nginx.conf`'s `upstream smarthub_serve` at all the
+replicas (Docker's service-name DNS round-robins across them). `nginx`
+itself is unlikely to be the bottleneck before `serve`'s model-inference
+code is — its tight timeouts (`proxy_connect_timeout 3s`, `proxy_read_timeout
+5s`) already fail fast under overload rather than queuing, which suits a
+real-time bid path where a slow bid is often worse than a dropped one.
+
 **Model caching.** `predict.load_model` keeps loaded models in an in-process
 cache keyed by the resolved model URI (and, for local `.pkl` paths, the
 file's mtime as a safety net against a pinned `MODEL_URI` being overwritten in
@@ -538,6 +551,16 @@ deploy/restart doesn't pay the load cost — a lead type with no promoted model
 yet just logs a warning and is picked up lazily once one exists.
 `GET /health?lead_type_id=<id>` reports `model_loaded: true/false` (a cheap
 cache check, not a forced load) alongside the existing `model_uri`.
+
+`load_model_and_manifest` (used by `/recommend_bid`/`/explain_bid`) also
+caches the resolved **manifest** by `(lead_type_name, version)` — manifests
+are immutable once written, so this needs no invalidation logic at all. It
+still reads `current.json` exactly once per request (that's the
+promotion-detection check, same role as the model cache's mtime check), but
+no longer re-derives that same version 3 separate times or re-parses the
+manifest JSON on every call — found and fixed after a live TAT investigation
+traced an unexpectedly high `/recommend_bid` latency to this redundant,
+uncached registry I/O rather than the actual model-scoring cost.
 
 ### Cold-start + exploration bidding policy
 
@@ -587,7 +610,24 @@ own (fully deterministic) explanation. Same request body as `/recommend_bid`
 (`lead_type_id` + lead attributes + `expected_revenue`).
 
 Requires the `explain` extra (SHAP; only supports `model_type=lightgbm`) plus
-`ml`, and a running local Ollama server with the configured model pulled:
+`ml`, and a running local Ollama server with the configured model pulled.
+`docker/Dockerfile.serve` installs both extras (`pip install -e ".[ml,explain]"`)
+since the same container serves this route and /recommend_bid's background
+SHAP enrichment (see below) — a plain `.[ml]` build silently breaks both
+(caught and logged as a warning, never a crash).
+
+**Docker:** `docker-compose.prefect.yml` runs a dedicated `ollama` service
+(no host ports — internal only, like `serve`) with a persistent volume for
+pulled models. `serve` checks whether the configured model
+(`[explain] llm_model`) is already pulled there at its own startup, and
+pulls it if not — entirely in a background thread (`explain
+.ensure_model_pulled_async`), so neither container startup nor any
+in-flight `/recommend_bid`/`/explain_bid` request ever waits on a pull
+(a multi-GB model can take minutes the first time). `SMARTHUB_OLLAMA_HOST`
+points `serve` at `http://ollama:11434`; `config/smarthub.yaml`'s
+`ollama_host` stays `localhost` as the default for non-Docker/local-dev use.
+
+**Local/dev (no Docker):**
 
 ```bash
 pip install -e ".[explain,ml]"
@@ -611,6 +651,38 @@ LLM as real numbers and states the model's monotonic bid constraint
 explicitly, so it can't reason backwards about whether a different bid would
 have won more or less often. Configurable in `config/smarthub.yaml (explain section)`:
 `llm_model`, `ollama_host`, `top_n_factors`, `timeout_seconds`.
+
+### Prediction logging
+
+Every `/recommend_bid` and `/explain_bid` call — success or failure — is
+logged as one row in `smarthub_prediction_log`
+(`smarthub/train_and_predict/prediction_log_schema.py`), after the response
+is computed, never in the critical scoring path. Full design + worked
+example: `docs/PREDICTION_LOG_SCHEMA.md`. In short: no per-candidate-bid
+table and no separate SHAP table — the candidate-bid sweep is summarized as
+JSON (`candidate_bid_generation`: method/bounds/count) and SHAP folds into a
+single JSON column (`shap_explanation`), rather than one row per candidate or
+a 1:1 child table. Failed requests log too (`status: "error"`,
+`error_message`), and `serving_config` snapshots the exploration/recency/
+cold-start policy values in effect for that specific prediction, so it stays
+reproducible even if `config/smarthub.yaml` changes later. Points at the
+shared Postgres by default (`$SMARTHUB_PREDICTION_LOG_DB_URL` to override;
+defaults to SQLite in tests) — a logging-DB outage only ever logs a warning,
+never breaks live bidding.
+
+Both endpoints accept an optional `lead_ping_id` (never used in the bid
+decision itself, purely a correlation key) and echo it straight back in the
+response, alongside a `prediction_id` generated for every response —
+either one is enough to join a response back to its log row later; supply
+`lead_ping_id` up front if you have it, or just hang onto the returned
+`prediction_id` if you don't.
+
+`/recommend_bid` also backfills `shap_explanation` for every prediction a
+real model served (`top_factors`/`base_win_rate` only — no `bid_curve` or
+LLM narrative, those stay `/explain_bid`-only) via a background task that
+runs *after* the response is sent, so it never adds latency to a live bid.
+Expect a brief window where a freshly-logged `/recommend_bid` row still has
+`shap_explanation: null` before the background task fills it in.
 
 ## Slack notifications
 

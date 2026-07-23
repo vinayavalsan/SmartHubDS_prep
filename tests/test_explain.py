@@ -181,6 +181,234 @@ def test_call_ollama_uses_ini_defaults_when_unset(monkeypatch):
     assert captured["timeout"] == explain.LLM_TIMEOUT_SECONDS
 
 
+# --- is_model_pulled / pull_model / ensure_model_pulled_async ----------------
+#
+# Ollama model-availability check + non-blocking pull (2026-07-23) -- pure
+# HTTP calls against Ollama's own API (GET /api/tags, POST /api/pull), no
+# shap/lightgbm needed, so these run in the base env like the call_ollama
+# tests above.
+
+
+def test_is_model_pulled_true_when_present(monkeypatch):
+    """A model name present in /api/tags's response is reported as pulled."""
+    import requests
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"models": [{"name": "qwen2.5:1.5b-instruct"}, {"name": "llama3"}]}
+
+    monkeypatch.setattr(requests, "get", lambda url, timeout: _Resp())
+    assert explain.is_model_pulled("qwen2.5:1.5b-instruct", "http://ollama:11434")
+
+
+def test_is_model_pulled_false_when_absent(monkeypatch):
+    """A model name NOT in /api/tags's response is reported as not pulled."""
+    import requests
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"models": [{"name": "llama3"}]}
+
+    monkeypatch.setattr(requests, "get", lambda url, timeout: _Resp())
+    assert not explain.is_model_pulled("qwen2.5:1.5b-instruct", "http://ollama:11434")
+
+
+def test_is_model_pulled_false_when_ollama_unreachable(monkeypatch):
+    """Any failure reaching Ollama is treated as 'not pulled', not raised --
+    the caller reacts to either case the same way (attempt a pull)."""
+    import requests
+
+    def _boom(url, timeout):
+        raise requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "get", _boom)
+    assert not explain.is_model_pulled("qwen2.5:1.5b-instruct", "http://ollama:11434")
+
+
+def test_pull_model_posts_expected_payload(monkeypatch):
+    """pull_model hits POST /api/pull with the model name, no timeout (a
+    real pull has no fixed time budget)."""
+    import requests
+
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def _fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    assert explain.pull_model("qwen2.5:1.5b-instruct", "http://ollama:11434") is True
+    assert captured["url"] == "http://ollama:11434/api/pull"
+    assert captured["json"] == {"name": "qwen2.5:1.5b-instruct", "stream": False}
+    assert captured["timeout"] is None
+
+
+def test_pull_model_returns_false_on_failure_without_raising(monkeypatch):
+    """A failed pull (Ollama down mid-pull, network blip) returns False --
+    never raises into the caller (background thread)."""
+    import requests
+
+    def _boom(url, json, timeout):
+        raise requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "post", _boom)
+    assert explain.pull_model("qwen2.5:1.5b-instruct", "http://ollama:11434") is False
+
+
+def test_ensure_model_pulled_sync_skips_pull_when_already_present(monkeypatch):
+    """Already-pulled model -> no pull attempted at all."""
+    monkeypatch.setattr(explain, "is_model_pulled", lambda model, host: True)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("pull_model must not be called when already pulled")
+
+    monkeypatch.setattr(explain, "pull_model", _boom)
+
+    explain._ensure_model_pulled_sync(
+        "qwen2.5:1.5b-instruct",
+        "http://ollama:11434",
+        wait_for_host_seconds=1,
+        poll_interval_seconds=0.01,
+    )
+
+
+def test_ensure_model_pulled_sync_pulls_when_missing(monkeypatch):
+    """Missing model -> pull_model is called with the same model/host."""
+    import requests
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(requests, "get", lambda url, timeout: _Resp())
+    monkeypatch.setattr(explain, "is_model_pulled", lambda model, host: False)
+
+    called = {}
+
+    def _fake_pull(model, host):
+        called["model"] = model
+        called["host"] = host
+        return True
+
+    monkeypatch.setattr(explain, "pull_model", _fake_pull)
+
+    explain._ensure_model_pulled_sync(
+        "qwen2.5:1.5b-instruct",
+        "http://ollama:11434",
+        wait_for_host_seconds=1,
+        poll_interval_seconds=0.01,
+    )
+    assert called == {"model": "qwen2.5:1.5b-instruct", "host": "http://ollama:11434"}
+
+
+def test_ensure_model_pulled_sync_gives_up_quietly_if_host_never_reachable(
+    monkeypatch,
+):
+    """Ollama never becomes reachable within the wait budget -> no pull
+    attempted, no exception raised (retried automatically next startup)."""
+    import requests
+
+    def _boom(url, timeout):
+        raise requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "get", _boom)
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("pull_model must not run if Ollama is unreachable")
+
+    monkeypatch.setattr(explain, "pull_model", _fail)
+
+    # Small budget so the test itself stays fast.
+    explain._ensure_model_pulled_sync(
+        "qwen2.5:1.5b-instruct",
+        "http://ollama:11434",
+        wait_for_host_seconds=0.05,
+        poll_interval_seconds=0.01,
+    )
+
+
+def test_ensure_model_pulled_async_returns_immediately(monkeypatch, tmp_path):
+    """The public entry point spawns a background thread and returns right
+    away -- doesn't block on the (potentially slow) sync check/pull."""
+    import threading
+    import time
+
+    monkeypatch.setattr(explain, "_OLLAMA_PULL_LOCK_PATH", str(tmp_path / "lock"))
+
+    started = threading.Event()
+    finish = threading.Event()
+
+    def _slow_sync(model=None, host=None):
+        started.set()
+        finish.wait(timeout=5)  # would block the caller for up to 5s if not threaded
+
+    monkeypatch.setattr(explain, "_ensure_model_pulled_sync", _slow_sync)
+
+    t0 = time.monotonic()
+    explain.ensure_model_pulled_async()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.0  # returned immediately, did not wait for _slow_sync
+    assert started.wait(timeout=2)  # the background thread did start
+    finish.set()  # let the background thread exit cleanly
+
+
+def test_ensure_model_pulled_locked_dedupes_concurrent_workers(monkeypatch, tmp_path):
+    """Regression test for the live incident (2026-07-23): with
+    SERVE_WORKERS > 1, every uvicorn worker process independently called
+    ensure_model_pulled_async at its own startup, so all of them fired a
+    simultaneous POST /api/pull for the identical model -- enough
+    bandwidth/CPU contention that /docs and /health started timing out.
+
+    Simulates two "workers" (threads standing in for separate worker
+    PROCESSES -- the lock is filesystem-based, so it dedupes the same way
+    across real processes) racing for the same pull: only the first to grab
+    the lock should actually run the check/pull; the second must see it
+    held and return immediately, without duplicating the work."""
+    import threading
+
+    monkeypatch.setattr(explain, "_OLLAMA_PULL_LOCK_PATH", str(tmp_path / "lock"))
+
+    call_count = {"n": 0}
+    first_running = threading.Event()
+    release_first = threading.Event()
+
+    def _fake_sync(model=None, host=None):
+        call_count["n"] += 1
+        first_running.set()
+        release_first.wait(timeout=5)
+
+    monkeypatch.setattr(explain, "_ensure_model_pulled_sync", _fake_sync)
+
+    first = threading.Thread(target=explain._ensure_model_pulled_locked)
+    first.start()
+    assert first_running.wait(timeout=2)  # first worker is now holding the lock
+
+    # Second "worker" arrives while the first still holds the lock -- must
+    # not call _ensure_model_pulled_sync at all, and must not block/wait.
+    second = threading.Thread(target=explain._ensure_model_pulled_locked)
+    second.start()
+    second.join(timeout=2)
+    assert not second.is_alive()  # returned immediately, didn't wait for the lock
+
+    release_first.set()
+    first.join(timeout=2)
+
+    assert call_count["n"] == 1  # the pull logic ran exactly once, not twice
+
+
 # --- explain_bid: no-viable-bid short circuit (no shap/lightgbm needed) -------
 
 
