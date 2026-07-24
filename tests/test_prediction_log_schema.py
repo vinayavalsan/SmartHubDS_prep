@@ -69,7 +69,8 @@ def test_log_and_get_round_trips_json_columns(store):
             model_calibrated=True,
             recommended_bid=12.5,
             recommended_bid_predicted_win_rate=0.34,
-            recommended_bid_expected_profit=12.75,
+            recommended_bid_predicted_profit=12.75,
+            recommended_bid_predicted_cm=0.255,
             decision_path="model",
             decision_reason="Standard profit-maximizing bid.",
             lead_ping_id=82931,
@@ -88,6 +89,8 @@ def test_log_and_get_round_trips_json_columns(store):
     assert row["shap_explanation"]["top_factors"][0]["feature"] == "age"
     assert row["serving_config"] == {"exploration_variance_pct": 0.1}
     assert float(row["recommended_bid"]) == pytest.approx(12.5)
+    assert float(row["recommended_bid_predicted_profit"]) == pytest.approx(12.75)
+    assert float(row["recommended_bid_predicted_cm"]) == pytest.approx(0.255)
     assert row["decision_path"] == "model"
 
 

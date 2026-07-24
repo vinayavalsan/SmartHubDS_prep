@@ -124,7 +124,7 @@ def test_decide_bid_cold_start_fallback_bid_formula(monkeypatch):
     )
     assert result["decision_path"] == "cold_start_fallback"
     assert result["recommended_bid_predicted_win_rate"] is None
-    assert result["recommended_bid_expected_profit"] is None
+    assert result["recommended_bid_predicted_profit"] is None
     assert result["model_data_age_days"] is None
     # max_bid = 20 * (1 - 0.25) = 15.0; fallback bids 50% of the way from
     # min_bid (0.0) to that ceiling, so squarely in the middle.
@@ -155,7 +155,7 @@ def test_decide_bid_model_path_matches_raw_optimizer_when_not_exploring():
     # constant win-rate -> profit strictly decreasing in bid -> optimum = floor
     assert result["recommended_bid"] == pytest.approx(1.0)
     assert result["recommended_bid_predicted_win_rate"] == pytest.approx(0.6)
-    assert result["recommended_bid_expected_profit"] == pytest.approx(
+    assert result["recommended_bid_predicted_profit"] == pytest.approx(
         0.6 * (20.0 - 1.0)
     )
 
@@ -237,7 +237,7 @@ def test_decide_bid_exploration_perturbs_and_rescores_at_the_new_bid():
     assert result["recommended_bid_predicted_win_rate"] == pytest.approx(
         expected_win_rate
     )
-    assert result["recommended_bid_expected_profit"] == pytest.approx(expected_profit)
+    assert result["recommended_bid_predicted_profit"] == pytest.approx(expected_profit)
 
 
 # --- bid_curve_around ---------------------------------------------------------

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -414,7 +415,7 @@ def decide_bid(
     -------
     dict
         `recommended_bid`, `recommended_bid_predicted_win_rate`,
-        `recommended_bid_expected_profit`, `max_bid`, `n_candidate_bids`,
+        `recommended_bid_predicted_profit`, `max_bid`, `n_candidate_bids`,
         `decision_path`, `decision_reason`, `model_data_age_days`.
     """
     candidate_bids, max_bid = optimizer.candidate_bids_for_revenue(
@@ -427,6 +428,13 @@ def decide_bid(
         # which path we'd otherwise take, so report it plainly rather than
         # picking a path that doesn't apply.
         result = optimizer.empty_result(max_bid)
+        # optimizer.py's own internal naming convention
+        # (recommended_bid_expected_profit, shared with the training-time
+        # bulk evaluation module optimizer_evaluation.py) is intentionally
+        # NOT renamed -- only this public API/logging-facing name is.
+        result["recommended_bid_predicted_profit"] = result.pop(
+            "recommended_bid_expected_profit"
+        )
         result["decision_path"] = "cold_start_fallback" if model is None else "model"
         result["decision_reason"] = (
             "No viable bid: expected revenue is too low to bid anything at "
@@ -442,7 +450,7 @@ def decide_bid(
         return {
             "recommended_bid": snapped_bid,
             "recommended_bid_predicted_win_rate": None,
-            "recommended_bid_expected_profit": None,
+            "recommended_bid_predicted_profit": None,
             "max_bid": max_bid,
             "n_candidate_bids": int(len(candidate_bids)),
             "decision_path": "cold_start_fallback",
@@ -458,6 +466,10 @@ def decide_bid(
     result = optimizer.optimize_bid_for_row(
         row, model, expected_revenue, target_cm, min_bid, bid_step
     )
+    # See the empty_result() branch above -- same rename, same reason.
+    result["recommended_bid_predicted_profit"] = result.pop(
+        "recommended_bid_expected_profit"
+    )
 
     explore, direction = exploration_slot(created_dayofweek, created_hour)
     if explore and not pd.isna(result["recommended_bid"]):
@@ -467,7 +479,7 @@ def decide_bid(
         win_rate, profit = _score_bid(row, model, perturbed_bid, expected_revenue)
         result["recommended_bid"] = perturbed_bid
         result["recommended_bid_predicted_win_rate"] = win_rate
-        result["recommended_bid_expected_profit"] = profit
+        result["recommended_bid_predicted_profit"] = profit
         result["decision_path"] = "exploration"
         sign = "+" if direction > 0 else "-"
         result["decision_reason"] = (
@@ -730,15 +742,45 @@ if _FASTAPI_AVAILABLE:
             "cold_start_fallback_bid_pct": config.cold_start_fallback_bid_pct(),
         }
 
+    def _predicted_cm(
+        predicted_profit: float | None, expected_revenue: float
+    ) -> float | None:
+        """Predicted contribution margin at the recommended bid --
+        `recommended_bid_predicted_profit / expected_revenue`.
+
+        `None` whenever there's no predicted profit to divide (cold start,
+        "no viable bid", or an error before a bid was reached) -- never
+        raises on a zero/falsy `expected_revenue` either, even though
+        `BidRequest`'s own validation (`gt=0`) already rules that out for a
+        real request.
+        """
+        if predicted_profit is None or not expected_revenue:
+            return None
+        return predicted_profit / expected_revenue
+
     def _log_prediction_safe(**kwargs) -> str | None:
         """Best-effort prediction logging -- never raises into the caller.
+
+        Two different calling conventions, both routed through here:
+        `/explain_bid` calls this synchronously (SHAP already ran inline
+        there, so there's no separate latency budget to protect) and reads
+        the returned `prediction_id` straight into its response. `/recommend_bid`
+        instead generates its own `prediction_id` up front and schedules
+        this same function as a `BackgroundTasks` job (passing that id
+        explicitly via the `prediction_id` kwarg) -- so the insert this
+        performs happens strictly *after* the bid response is already sent,
+        never delaying it. Same failure isolation either way: any exception
+        is caught and logged as a warning, never raised.
 
         Returns
         -------
         str | None
-            The logged row's `prediction_id` (so the route can hand it back
-            to the caller as a receipt -- see docs/PREDICTION_LOG_SCHEMA.md
-            §8), or `None` if the write itself failed.
+            The logged row's `prediction_id` (so a synchronous caller --
+            `/explain_bid` -- can hand it back to the caller as a receipt --
+            see docs/PREDICTION_LOG_SCHEMA.md §8), or `None` if the write
+            itself failed. Ignored when this runs as a background task
+            (`/recommend_bid`'s `prediction_id` was already decided and
+            returned before this ever runs).
         """
         try:
             return _prediction_log_store().log_prediction(**kwargs)
@@ -816,20 +858,32 @@ if _FASTAPI_AVAILABLE:
         -------
         dict
             Recommended bid, `decision_path`/`decision_reason`, supporting
-            metrics, `prediction_id` -- a receipt correlating this response
-            to its prediction-log row (`None` if the logging write itself
-            failed; never blocks or changes the bid decision) -- and
-            `lead_ping_id`, echoed back exactly as sent (`None` if the
-            caller didn't supply one).
+            metrics, `prediction_id` -- a receipt for this prediction's log
+            row -- and `lead_ping_id`, echoed back exactly as sent (`None`
+            if the caller didn't supply one).
 
         Notes
         -----
+        Nothing about prediction logging is ever on this response's
+        critical path. `prediction_id` is generated here, in the request
+        handler, and returned immediately -- the actual log-row insert
+        (including every derived metric, e.g. `recommended_bid_predicted_cm`)
+        happens entirely in a `BackgroundTasks` job that Starlette runs only
+        *after* this response has been sent (see `_log_prediction_safe`).
+        One consequence: `prediction_id` here is a receipt for "this is the
+        id we intend to log under", not a guarantee the row exists yet -- if
+        the background insert itself fails (logging DB down), it's caught
+        and logged as a warning, same as any other logging failure in this
+        module, with no way for the caller to know except that a later
+        lookup by this id would come up empty. That's an intentional
+        trade-off: the alternative is waiting for the DB write before
+        responding, which is exactly the delay this design avoids.
+
         When a real model served this prediction (not cold start, and a
         viable bid exists), SHAP factors (`top_factors`/`base_win_rate`,
-        no LLM narrative) are computed in a background task *after* this
-        response is sent and attached to the same `prediction_id`'s log row
-        -- never part of this response, never adds latency here. See
-        `_log_shap_background`.
+        no LLM narrative) are computed in a second background task,
+        scheduled to run after the logging insert above, and attached to
+        the same `prediction_id`'s log row. See `_log_shap_background`.
         """
         lead_type_name = config.lead_type_name(request.lead_type_id)
         record = None
@@ -848,6 +902,9 @@ if _FASTAPI_AVAILABLE:
                 created_hour=request.created_hour,
             )
         except Exception as exc:
+            # Unlike the success path below, an error here means there's no
+            # bid response to protect from delay -- this stays a plain
+            # synchronous log call, same as before.
             _log_prediction_safe(
                 endpoint="recommend_bid",
                 status="error",
@@ -866,8 +923,17 @@ if _FASTAPI_AVAILABLE:
             )
             raise
 
-        prediction_id = _log_prediction_safe(
+        # Generated here (not by the store) so it can be returned to the
+        # caller right away, before the actual DB write ever happens -- see
+        # the docstring's Notes section for the resulting trade-off.
+        prediction_id = str(uuid.uuid4())
+        result["prediction_id"] = prediction_id
+        result["lead_ping_id"] = request.lead_ping_id
+
+        background_tasks.add_task(
+            _log_prediction_safe,
             endpoint="recommend_bid",
+            prediction_id=prediction_id,
             lead_type_id=request.lead_type_id,
             lead_type_name=lead_type_name,
             campaign_id=request.campaign_id,
@@ -896,15 +962,21 @@ if _FASTAPI_AVAILABLE:
             recommended_bid_predicted_win_rate=result.get(
                 "recommended_bid_predicted_win_rate"
             ),
-            recommended_bid_expected_profit=result.get(
-                "recommended_bid_expected_profit"
+            recommended_bid_predicted_profit=result.get(
+                "recommended_bid_predicted_profit"
+            ),
+            recommended_bid_predicted_cm=_predicted_cm(
+                result.get("recommended_bid_predicted_profit"),
+                request.expected_revenue,
             ),
             serving_config=_serving_config_snapshot(),
         )
-        result["prediction_id"] = prediction_id
-        result["lead_ping_id"] = request.lead_ping_id
 
         if model is not None and not pd.isna(result.get("recommended_bid")):
+            # Scheduled after the logging insert above -- Starlette runs
+            # BackgroundTasks in registration order, so this update always
+            # finds its row already there (or, on a logging failure, simply
+            # updates zero rows -- see update_shap_explanation).
             background_tasks.add_task(
                 _log_shap_background,
                 prediction_id,
@@ -1013,8 +1085,12 @@ if _FASTAPI_AVAILABLE:
             recommended_bid_predicted_win_rate=result.get(
                 "recommended_bid_predicted_win_rate"
             ),
-            recommended_bid_expected_profit=result.get(
-                "recommended_bid_expected_profit"
+            recommended_bid_predicted_profit=result.get(
+                "recommended_bid_predicted_profit"
+            ),
+            recommended_bid_predicted_cm=_predicted_cm(
+                result.get("recommended_bid_predicted_profit"),
+                request.expected_revenue,
             ),
             shap_explanation={
                 "top_factors": result.get("top_factors"),

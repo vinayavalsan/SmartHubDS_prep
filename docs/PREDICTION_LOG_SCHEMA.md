@@ -136,7 +136,8 @@ different database/schema. See §8 for how it gets populated.
 | `decision_path` | text, nullable | From `decide_bid`: `'model'` \| `'cold_start_fallback'` \| `'exploration'`. |
 | `decision_reason` | text, nullable | From `decide_bid` - plain-English reason for the path taken. |
 | `recommended_bid` | numeric, nullable | NULL means "no viable bid" (or an error before a bid was reached). |
-| `recommended_bid_predicted_win_rate`, `recommended_bid_expected_profit` | numeric, nullable | At the recommended bid. |
+| `recommended_bid_predicted_win_rate`, `recommended_bid_predicted_profit` | numeric, nullable | At the recommended bid. `recommended_bid_predicted_profit` renamed from `recommended_bid_expected_profit` (2026-07-23) to match `recommended_bid_predicted_win_rate`'s "predicted_" naming - both are model predictions, not realized/observed values, so "expected" (a different, ambiguous word for the same idea) was dropped. |
+| `recommended_bid_predicted_cm` | numeric, nullable | **New 2026-07-23.** `recommended_bid_predicted_profit / expected_revenue` - the predicted contribution margin at the recommended bid. Null under the same conditions as `recommended_bid_predicted_profit` (cold start, no viable bid, or an error before a bid was reached). |
 | `shap_explanation` | jsonb, nullable | **Replaces v1's SHAP child table.** For `/explain_bid`: `{"top_factors", "base_win_rate", "bid_curve", "explanation"}` - exactly what `/explain_bid` adds on top of `/recommend_bid`'s response (see `explain.explain_bid`), written synchronously (before the response). For `/recommend_bid`: `{"top_factors", "base_win_rate"}` only (no `bid_curve`/`explanation` - those stay LLM/on-demand-only), written by a background task *after* the response is sent - see the shapes in §4 below and the timing note in §2. Null on cold start (no model to explain), on a non-viable-bid result, or if the model isn't a supported type (`explain_row` only supports `lightgbm` today). |
 | `serving_config` | jsonb, nullable | **New in v2** - snapshot of the serving-policy config in effect for this prediction (`exploration_variance_pct`, `recency_window_days`, `cold_start_fallback_bid_pct`), so a prediction stays reproducible even if `config/smarthub.yaml` changes later (Vinaya's reproducibility ask, same meeting). |
 | `created_at` | timestamptz | Row-insert time. |
@@ -220,7 +221,8 @@ One lead ping (`lead_ping_id = 82931`), one `/explain_bid` call:
 | `model_data_age_days` | `13` |
 | `decision_path` / `decision_reason` | `model` / `"Standard profit-maximizing bid from the currently-serving model."` |
 | `recommended_bid` | `12.50` |
-| `recommended_bid_predicted_win_rate` / `recommended_bid_expected_profit` | `0.340` / `12.7500` |
+| `recommended_bid_predicted_win_rate` / `recommended_bid_predicted_profit` | `0.340` / `12.7500` |
+| `recommended_bid_predicted_cm` | `0.2550` (`= 12.75 / 50.00`) |
 | `shap_explanation` | see §4 shape above |
 | `serving_config` | `{"exploration_variance_pct": 0.10, "recency_window_days": 30, "cold_start_fallback_bid_pct": 0.50}` |
 | `created_at` | `2026-07-22 03:00:12.884+00` |
@@ -244,22 +246,37 @@ predicted win rate up to `34%`.
 
 ## 7. Where this is called from
 
-`PredictionLogStore.log_prediction(...)` is called once per request, from
-both `/recommend_bid` and `/explain_bid` in `smarthub/server/predict.py`,
-**after** the response is computed - never in the critical path of scoring
-itself (Vinaya's explicit ask: SHAP, and by the same logic logging, must
-never delay the prediction). The call is wrapped so a logging failure (DB
-down, network blip) is caught and logged as a warning, never raised - a
-logging outage must not take down live bidding.
+`/explain_bid` calls `PredictionLogStore.log_prediction(...)` synchronously,
+**after** the response is computed but still inside the request - reading
+the returned `prediction_id` straight into its own response body. This is
+fine there: `/explain_bid` already runs SHAP (and, when the LLM is
+reachable, an Ollama call) inline, so a bit more synchronous DB I/O doesn't
+change its latency character - it was never the fast path to begin with.
+
+`/recommend_bid` is different (2026-07-23): **the entire log-row insert is a
+`BackgroundTasks` job**, not just the SHAP enrichment. `prediction_id` is
+generated in the route itself (`uuid.uuid4()`, not by the store) and
+returned to the caller immediately; `log_prediction(...)` (with that exact
+id passed through) is scheduled to run only *after* the response has
+already been sent (Starlette semantics - see `_log_prediction_safe` and the
+`recommend_bid` route in `predict.py`). Nothing about logging - not the
+insert, not any derived metric computed for it (`recommended_bid_predicted_cm`
+included) - is ever on `/recommend_bid`'s response path. The trade-off:
+`prediction_id` in the response is a receipt for "this is the id we intend
+to log under," not a guarantee the row exists yet; if the background insert
+itself fails, it's caught and logged as a warning (same failure isolation as
+always), and a caller has no way to know except that a later lookup by that
+id would come up empty.
 
 `/recommend_bid` additionally schedules `PredictionLogStore
-.update_shap_explanation(...)` as a `fastapi.BackgroundTasks` job right
-before returning - Starlette runs this *after the response has been sent to
-the caller*, so it's strictly off the response path (see `_log_shap_background`
-in `predict.py`). Same failure isolation applies: any exception in there
-(logging DB unreachable, or a model type SHAP doesn't support) is caught and
-logged as a warning, leaving `shap_explanation` `null` rather than surfacing
-anywhere the caller would see it.
+.update_shap_explanation(...)` as a *second* `BackgroundTasks` job, added
+right after the logging insert above - Starlette runs `BackgroundTasks` in
+registration order, so this always finds its row already there (or, if the
+insert itself failed, simply updates zero rows). Same failure isolation
+applies: any exception in there (logging DB unreachable, or a model type
+SHAP doesn't support) is caught and logged as a warning, leaving
+`shap_explanation` `null` rather than surfacing anywhere the caller would
+see it.
 
 ## 8. Correlating a response back to its log row
 
@@ -272,11 +289,17 @@ rate actually right?") - the single most important monitoring question this
 log exists to answer.
 
 **`prediction_id` is now returned to the caller.** Both `/recommend_bid` and
-`/explain_bid` include `prediction_id` in their response body - the same id
-just written to the log row - so a caller (or a later support ticket) always
-has a receipt to reference, without needing `lead_ping_id` at all if the
-caller doesn't have one yet. `None` only if the logging write itself failed
-(never blocks or changes the bid decision - see §7).
+`/explain_bid` include `prediction_id` in their response body, so a caller
+(or a later support ticket) always has a receipt to reference, without
+needing `lead_ping_id` at all if the caller doesn't have one yet. The two
+routes differ slightly in what that guarantees, per §7's async split:
+`/explain_bid` writes synchronously and returns the store's own generated
+id, so `prediction_id` is `None` only if that write itself failed.
+`/recommend_bid` generates its `prediction_id` up front and always returns
+it (never `None`) - the actual row write happens in the background
+afterward, so this id is a receipt for "log under this id," not a
+guarantee the row exists yet; a lookup by it can (rarely) come up empty if
+the background insert itself failed.
 
 Both were gaps in the original version of this document; closed together
 since a caller either supplies `lead_ping_id` up front or gets `prediction_id`
@@ -306,15 +329,17 @@ main volume-control decision from this redesign - this was the dominant
 cost in v1 at any real QPS (100+ child rows per prediction) and is now a
 handful of JSON keys.
 
-**Decoupling the write path from the request path.** The main row insert
-happens synchronously today (simplest, fine at current volume, and matches
-how the existing codebase does things elsewhere) - see §7 for the
-failure-isolation approach that keeps this safe even so. `/recommend_bid`'s
-SHAP enrichment is the one piece already decoupled (a `BackgroundTasks` job,
-§7/§8) - not for volume reasons, but because SHAP itself is too slow to sit
-on the live bid path at all. Move the row insert itself to a background
-task/queue too if write latency ever becomes material to the request's own
-latency budget; not needed at today's volume.
+**Decoupling the write path from the request path.** `/explain_bid`'s row
+insert is still synchronous (simplest, and that route was never the fast
+path to begin with - see §7). `/recommend_bid` is fully decoupled as of
+2026-07-23: both the row insert and the SHAP enrichment run as
+`BackgroundTasks` jobs, so nothing about logging - not write latency, not
+any derived metric computed for the row - is ever on that response's
+critical path. This wasn't primarily a volume-scaling decision (the
+motivating case was SHAP being too slow to sit on the live bid path at
+all); it happens to also remove the plain row insert's DB-write latency
+from the response, for free. See §7 for the failure-isolation approach
+(and the `prediction_id` trade-off it implies) that keeps this safe.
 
 **Storage location.** Reuses the existing shared Postgres
 (`smarthub.core.config_store`'s instance) by default via
@@ -342,3 +367,6 @@ defaults to SQLite in tests.
 | Never wired into a live endpoint (design doc only) | Actually implemented and called from `/recommend_bid` / `/explain_bid` | This revision is the implementation pass, not just a design pass. |
 | `BidRequest` had no `lead_ping_id`; nothing returned to correlate a response back to its log row | Optional `lead_ping_id` added to `BidRequest`; `prediction_id` now returned in every response | Follow-up fix, same implementation pass: without one of these two, the log wasn't reliably joinable back to "which lead/request was this" - see §8. |
 | `shap_explanation` populated only by `/explain_bid` - always `null` for `/recommend_bid` rows | `/recommend_bid` also populates it, via a `BackgroundTasks` job after the response (`{"top_factors", "base_win_rate"}` only - no `bid_curve`/LLM `explanation`) | 2026-07-23 follow-up: every prediction (not just on-demand `/explain_bid` calls) can now be audited/calibrated against its own SHAP factors, without adding an Ollama call to the live bid path - see §2/§7. |
+| `recommended_bid_expected_profit` | `recommended_bid_predicted_profit` | 2026-07-23 rename: matches `recommended_bid_predicted_win_rate`'s "predicted_" naming - both are model predictions, not realized values, so "expected" (a different word for the same idea) was dropped to avoid confusion. |
+| No CM prediction stored | `recommended_bid_predicted_cm` added (`recommended_bid_predicted_profit / expected_revenue`) | 2026-07-23: a directly useful business metric that's one division away from columns already on the row - cheap to add, no reason to make a caller recompute it. |
+| `/recommend_bid`'s row insert ran synchronously, on the response path | Runs entirely as a `BackgroundTasks` job; `prediction_id` is generated up front (`uuid.uuid4()`) and returned before the insert happens | 2026-07-23: explicit ask that logging (including every derived metric, like the new `recommended_bid_predicted_cm`) never delay a bid response. Trade-off: `prediction_id` is now a receipt for "log under this id," not a guarantee the row exists yet - see §7/§8. `/explain_bid`'s logging is unchanged (still synchronous). |

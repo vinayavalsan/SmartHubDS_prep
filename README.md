@@ -656,8 +656,7 @@ have won more or less often. Configurable in `config/smarthub.yaml (explain sect
 
 Every `/recommend_bid` and `/explain_bid` call — success or failure — is
 logged as one row in `smarthub_prediction_log`
-(`smarthub/train_and_predict/prediction_log_schema.py`), after the response
-is computed, never in the critical scoring path. Full design + worked
+(`smarthub/train_and_predict/prediction_log_schema.py`). Full design + worked
 example: `docs/PREDICTION_LOG_SCHEMA.md`. In short: no per-candidate-bid
 table and no separate SHAP table — the candidate-bid sweep is summarized as
 JSON (`candidate_bid_generation`: method/bounds/count) and SHAP folds into a
@@ -670,6 +669,13 @@ shared Postgres by default (`$SMARTHUB_PREDICTION_LOG_DB_URL` to override;
 defaults to SQLite in tests) — a logging-DB outage only ever logs a warning,
 never breaks live bidding.
 
+`recommended_bid_predicted_profit` (renamed 2026-07-23 from
+`recommended_bid_expected_profit`, for consistency with
+`recommended_bid_predicted_win_rate`'s naming) and a new
+`recommended_bid_predicted_cm` (`= recommended_bid_predicted_profit /
+expected_revenue`) are both on the row for every prediction that reached a
+model-scored bid.
+
 Both endpoints accept an optional `lead_ping_id` (never used in the bid
 decision itself, purely a correlation key) and echo it straight back in the
 response, alongside a `prediction_id` generated for every response —
@@ -677,12 +683,23 @@ either one is enough to join a response back to its log row later; supply
 `lead_ping_id` up front if you have it, or just hang onto the returned
 `prediction_id` if you don't.
 
+**`/recommend_bid`'s logging is entirely off the response path (2026-07-23).**
+Not just the SHAP enrichment below — the row insert itself, and every
+derived metric computed for it (including `recommended_bid_predicted_cm`),
+run as a `BackgroundTasks` job scheduled to fire only after the response has
+already been sent. `prediction_id` is generated in the route (`uuid.uuid4()`)
+and returned immediately, before the write happens — so it's a receipt for
+"log under this id," not a guarantee the row exists yet; a lookup by it can
+(rarely) come up empty if the background write itself fails. `/explain_bid`
+is unchanged: it still logs synchronously, since it already runs SHAP (and
+sometimes an Ollama call) inline and was never the fast path.
+
 `/recommend_bid` also backfills `shap_explanation` for every prediction a
 real model served (`top_factors`/`base_win_rate` only — no `bid_curve` or
-LLM narrative, those stay `/explain_bid`-only) via a background task that
-runs *after* the response is sent, so it never adds latency to a live bid.
-Expect a brief window where a freshly-logged `/recommend_bid` row still has
-`shap_explanation: null` before the background task fills it in.
+LLM narrative, those stay `/explain_bid`-only) via a second background task,
+scheduled to run after the logging insert above. Expect a brief window
+where a freshly-logged `/recommend_bid` row still has `shap_explanation:
+null` before that task fills it in.
 
 ## Slack notifications
 

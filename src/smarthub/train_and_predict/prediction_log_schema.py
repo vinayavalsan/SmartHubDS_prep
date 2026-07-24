@@ -110,7 +110,16 @@ prediction_log_table = Table(
     Column("decision_reason", Text),
     Column("recommended_bid", Numeric(10, 2)),
     Column("recommended_bid_predicted_win_rate", Numeric(6, 5)),
-    Column("recommended_bid_expected_profit", Numeric(12, 4)),
+    # Renamed from recommended_bid_expected_profit (2026-07-23) -- matches
+    # recommended_bid_predicted_win_rate's "predicted_" naming, avoiding two
+    # different words ("expected" vs. "predicted") for the same idea: a
+    # model-predicted metric at the recommended bid, not a realized one.
+    Column("recommended_bid_predicted_profit", Numeric(12, 4)),
+    # recommended_bid_predicted_profit / expected_revenue -- added 2026-07-23.
+    # Same nullability as predicted_profit (null whenever there's no
+    # predicted profit to divide: cold start, no viable bid, or an error
+    # before a bid was reached).
+    Column("recommended_bid_predicted_cm", Numeric(6, 5)),
     Column("shap_explanation", Text),
     Column("serving_config", Text),
     Column("created_at", DateTime, nullable=False),
@@ -198,7 +207,8 @@ class PredictionLogStore:
         decision_reason: str | None = None,
         recommended_bid: float | None = None,
         recommended_bid_predicted_win_rate: float | None = None,
-        recommended_bid_expected_profit: float | None = None,
+        recommended_bid_predicted_profit: float | None = None,
+        recommended_bid_predicted_cm: float | None = None,
         shap_explanation: dict | None = None,
         serving_config: dict | None = None,
         request_id: str | None = None,
@@ -243,9 +253,15 @@ class PredictionLogStore:
         decision_path, decision_reason : str | None
             From ``predict.decide_bid``.
         recommended_bid, recommended_bid_predicted_win_rate,
-        recommended_bid_expected_profit : float | None
+        recommended_bid_predicted_profit : float | None
             From ``predict.decide_bid``. ``None`` recommended_bid means "no
-            viable bid" (or an error before one was reached).
+            viable bid" (or an error before one was reached). Renamed from
+            recommended_bid_expected_profit (2026-07-23) for consistency
+            with recommended_bid_predicted_win_rate's naming.
+        recommended_bid_predicted_cm : float | None
+            ``recommended_bid_predicted_profit / expected_revenue`` -- added
+            2026-07-23. ``None`` under the same conditions as
+            recommended_bid_predicted_profit.
         shap_explanation : dict | None
             Everything ``/explain_bid`` adds beyond ``/recommend_bid``
             (``top_factors``, ``base_win_rate``, ``bid_curve``,
@@ -328,7 +344,8 @@ class PredictionLogStore:
                     recommended_bid_predicted_win_rate=(
                         recommended_bid_predicted_win_rate
                     ),
-                    recommended_bid_expected_profit=recommended_bid_expected_profit,
+                    recommended_bid_predicted_profit=recommended_bid_predicted_profit,
+                    recommended_bid_predicted_cm=recommended_bid_predicted_cm,
                     shap_explanation=_json_or_none(shap_explanation),
                     serving_config=_json_or_none(serving_config),
                     created_at=now,

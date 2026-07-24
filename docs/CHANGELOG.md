@@ -3,6 +3,69 @@
 
 ## 2026-07-23
 
+### `/recommend_bid`'s entire log write moved off the response path; new CM column; renamed profit field
+- Three related asks, all in the prediction-logging table: add a
+  contribution-margin column, guarantee logging never delays a bid, and
+  rename a confusingly-worded field.
+- **New column**: `recommended_bid_predicted_cm` =
+  `recommended_bid_predicted_profit / expected_revenue`. Added to
+  `prediction_log_schema.py`'s table + `log_prediction(...)`, computed via a
+  new `_predicted_cm()` helper in `predict.py` (null-safe: `None` whenever
+  there's no predicted profit to divide — cold start, no viable bid, or an
+  error before a bid was reached). Wired into both `/recommend_bid` and
+  `/explain_bid`'s logging calls.
+- **Rename**: `recommended_bid_expected_profit` → `recommended_bid_predicted_profit`,
+  at the API-response/logging boundary only — matches
+  `recommended_bid_predicted_win_rate`'s "predicted_" naming, so both
+  model-predicted metrics use the same word instead of two different ones
+  ("expected" vs. "predicted") for the same idea. Scoped deliberately: the
+  internal training-time "expected_profit" family in `optimizer.py` /
+  `optimizer_evaluation.py` (`current_bid_expected_profit`,
+  `expected_profit_lift`, `recommended_bid_total_expected_profit`, etc.) was
+  **not** renamed — that's a separate, much wider-reaching convention baked
+  into already-saved model manifests (`optimizer_summary`) and
+  `registry.py`'s promotion-gate logic, out of scope here.
+  `predict.decide_bid()` now translates the one key it cares about right
+  after calling into `optimizer.py` (`result["recommended_bid_predicted_profit"]
+  = result.pop("recommended_bid_expected_profit")`), keeping the two
+  modules' naming decoupled at that one seam.
+- **`/recommend_bid`'s entire log-row insert is now a `BackgroundTasks` job**,
+  not just the SHAP enrichment from earlier this week. `prediction_id` is
+  generated in the route itself (`uuid.uuid4()`, not by the store) and
+  returned in the response immediately; `log_prediction(...)` — with every
+  derived metric, including the new `recommended_bid_predicted_cm` — runs
+  strictly *after* the response has already been sent. Explicit ask: "ensure
+  this logging does not delay bid predictions... calculate all extra
+  metrics after placing the bid." The SHAP-enrichment task is scheduled
+  right after the logging-insert task, so it always finds its row already
+  there (Starlette runs `BackgroundTasks` in registration order).
+  - **Trade-off, called out clearly in docs**: `prediction_id` in
+    `/recommend_bid`'s response is no longer a "confirmed persisted"
+    signal — it's a receipt for "log under this id." If the background
+    insert itself fails (logging DB down), it's caught and logged as a
+    warning same as always, but the caller has no way to know except that a
+    later lookup by that id would come up empty. The alternative (waiting
+    for the DB write before responding) is exactly the delay this avoids.
+  - The error path (an exception before a bid was even decided) is
+    unchanged — still a plain synchronous log call, since there's no bid
+    response to protect from delay in that case.
+  - `/explain_bid`'s logging is completely unchanged (still synchronous) —
+    it already runs SHAP (and sometimes Ollama) inline, so it was never the
+    fast path this mattered for.
+- **Tests**: renamed all `recommended_bid_expected_profit` references across
+  `test_predict.py`, `test_explain.py`, `test_prediction_log_schema.py`.
+  Added `test_recommend_bid_logs_predicted_profit_and_cm` (verifies the
+  renamed field, the new field's math, and that the old field name is gone
+  from the response), `test_recommend_bid_prediction_id_generated_before_background_write`
+  (confirms `prediction_id` is a well-formed `uuid4` returned by the route,
+  and that the background-written row uses that exact id), and updated the
+  cold-start test to assert both new/renamed fields are `null`. Full suite:
+  225 passed (up from 223), isort/black/flake8 clean.
+- Docs: `docs/PREDICTION_LOG_SCHEMA.md` §4/§6/§7/§8/§10/§12 and `README.md`'s
+  "Prediction logging" section rewritten to describe the rename, the new
+  column, and the fully-async `/recommend_bid` write path (and its
+  `prediction_id` trade-off).
+
 ### nginx: relaxed timeouts for non-bid routes, kept `/recommend_bid` tight
 - With the 504 on `/docs` still not fully resolved, bumped nginx's proxy
   timeouts to give more headroom -- but scoped, not blanket: the 3s/5s/5s

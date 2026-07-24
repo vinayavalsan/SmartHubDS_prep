@@ -10,457 +10,54 @@ endpoint:
     Ollama) turns that numeric breakdown into a couple of plain-English
     sentences.
 
-The LLM never sees model internals and never computes anything — it only
-formats facts it's handed, with an explicit "don't invent numbers"
-instruction, since this is a formatting task, not a reasoning task, and small
-models hallucinate numbers readily if given room to reason freely.
+This module is the thin orchestrator only (``explain_bid``) — the two
+pipeline stages themselves live in their own files, split out 2026-07-24 for
+readability (no logic changed, only which file each piece lives in):
 
-Heavy/optional deps (shap, lightgbm, requests) are imported lazily so the rest
-of `train_and_predict` keeps working without the `explain` extra installed —
-same pattern as `predict.py`'s lazy joblib/mlflow/fastapi imports.
+    - ``shap_explain.py`` — the SHAP factor breakdown (``explain_row`` and
+      its helpers).
+    - ``llm_explain.py`` — the LLM prompt template, Ollama calls, and the
+      model-pull/dedup infrastructure (``format_llm_prompt``, ``call_ollama``,
+      ``ensure_model_pulled_async``, ...).
+
+Everything from both is re-imported here (rather than referenced as
+``shap_explain.foo`` / ``llm_explain.foo``) so that ``explain_bid`` keeps
+resolving them as plain module-level names — this preserves both this
+module's public surface (``explain.explain_row``, ``explain.call_ollama``,
+``explain.TOP_N_FACTORS``, etc. all still work) and existing
+``monkeypatch.setattr(explain, "name", ...)``-based tests, which patch names
+on *this* module's namespace and rely on ``explain_bid`` looking them up here
+rather than on the sub-modules directly.
 """
 
 from __future__ import annotations
 
-import fcntl
-import logging
-import os
-import threading
-
-import numpy as np
 import pandas as pd
 
-from smarthub.core import task_config
 from smarthub.server import predict
 
-from . import config, preprocessing
-
-logger = logging.getLogger(__name__)
-
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
-
-# Task config: smarthub.yaml `explain` section — used only by this module, not live
-# bidding path, so it's kept local rather than in train_and_predict/config.py.
-LLM_MODEL = task_config.get("explain", "llm_model", "qwen2.5:1.5b-instruct")
-# $SMARTHUB_OLLAMA_HOST wins over the file config when set -- same
-# env-wins-over-file convention as SMARTHUB_PREDICTION_LOG_DB_URL/
-# SMARTHUB_CONFIG_DB_URL. Lets docker-compose point this at the `ollama`
-# service's Docker-network hostname (see docker-compose.prefect.yml) without
-# changing config/smarthub.yaml's own default, which stays `localhost` for
-# non-Docker/local-dev use (a natively-running Ollama).
-OLLAMA_HOST = os.getenv("SMARTHUB_OLLAMA_HOST") or task_config.get(
-    "explain", "ollama_host", DEFAULT_OLLAMA_HOST
+from . import preprocessing
+from .llm_explain import (  # noqa: F401 -- re-exported, see module docstring
+    _OLLAMA_PULL_LOCK_PATH,
+    DEFAULT_OLLAMA_HOST,
+    LLM_MODEL,
+    LLM_TIMEOUT_SECONDS,
+    OLLAMA_HOST,
+    _ensure_model_pulled_locked,
+    _ensure_model_pulled_sync,
+    call_ollama,
+    ensure_model_pulled_async,
+    format_llm_prompt,
+    is_model_pulled,
+    logger,
+    pull_model,
 )
-TOP_N_FACTORS = task_config.get_int("explain", "top_n_factors", 5)
-LLM_TIMEOUT_SECONDS = task_config.get_float("explain", "timeout_seconds", 30.0)
-
-# Dedupes the startup model-pull check across uvicorn's SERVE_WORKERS worker
-# PROCESSES (`--workers N` forks child processes within the same container --
-# see docker/Dockerfile.serve -- not separate containers, so they all share
-# this path). Deliberately under /tmp, not the `data` volume: container-
-# local and ephemeral is exactly right for a lock whose only job is "don't
-# let two workers of the same container race the same pull at once".
-_OLLAMA_PULL_LOCK_PATH = "/tmp/smarthub_ollama_pull.lock"
-
-
-def _fitted_lgbm_estimators(model):
-    """Return the fitted (preprocessor, LGBMClassifier) pair(s) inside ``model``.
-
-    Handles both a plain sklearn ``Pipeline`` (preprocessor + classifier, see
-    ``models.build_lightgbm_model``) and a ``CalibratedClassifierCV`` wrapping
-    one — isotonic calibration is a monotonic rescaling of the final
-    probability, so it doesn't change *which* features mattered or their
-    ranking, only the final number; that's why explaining the underlying
-    LightGBM model(s) is still valid even though the served model is
-    calibrated. When calibrated, there's one fitted pipeline per CV fold
-    (``models.py``'s ``cv=3``) — all are returned so callers can average.
-
-    Raises
-    ------
-    ValueError
-        If ``model`` isn't (or doesn't wrap) a LightGBM pipeline — SHAP
-        explanations here only support ``model_type=lightgbm`` for now.
-    """
-    from lightgbm import LGBMClassifier
-
-    calibrated_classifiers = getattr(model, "calibrated_classifiers_", None)
-    if calibrated_classifiers:
-        pipelines = [
-            getattr(cc, "estimator", None) or getattr(cc, "base_estimator", None)
-            for cc in calibrated_classifiers
-        ]
-        pipelines = [p for p in pipelines if p is not None]
-    else:
-        pipelines = [model]
-
-    pairs = []
-    for pipe in pipelines:
-        preprocessor = pipe.named_steps["preprocessor"]
-        classifier = pipe.named_steps["classifier"]
-        if not isinstance(classifier, LGBMClassifier):
-            raise ValueError(
-                "SHAP explanations currently support model_type='lightgbm' "
-                f"only (got {type(classifier).__name__}). Train an LGBM "
-                "model to use /explain_bid for this lead type."
-            )
-        pairs.append((preprocessor, classifier))
-
-    if not pairs:
-        raise ValueError("Could not find a fitted LightGBM estimator in this model.")
-    return pairs
-
-
-def _shap_for_row(model, row_frame, feature_cols):
-    """SHAP values for one row, averaged across calibration folds if any.
-
-    ``shap.TreeExplainer`` on an ``LGBMClassifier`` works in **margin
-    (log-odds) space**, not probability space: raw feature contributions and
-    ``explainer.expected_value`` are unbounded reals that sum to the model's
-    raw score, not a 0-1 probability (e.g. a base value of ``-2.0`` is a
-    normal log-odds figure — ``sigmoid(-2.0) ≈ 0.12``). Per-feature
-    contributions are left in log-odds units (their *sign* and *relative
-    magnitude* — which factor mattered most — are unaffected by the
-    sigmoid's monotonicity, so ranking/direction stay valid), but the base
-    value is converted to an actual probability here since callers use it as
-    "the model's average predicted win rate".
-
-    Returns
-    -------
-    tuple[dict[str, float], float]
-        ``(feature -> log-odds shap contribution, base_win_rate)`` where
-        ``base_win_rate`` IS a 0-1 probability — the model's average
-        predicted win rate before this lead's specific factors are applied.
-    """
-    import numpy as np
-    import shap
-
-    pairs = _fitted_lgbm_estimators(model)
-    per_fold_shap = []
-    base_values = []
-    for preprocessor, classifier in pairs:
-        transformed = preprocessor.transform(row_frame)
-        explainer = shap.TreeExplainer(classifier)
-        raw = explainer.shap_values(transformed)
-
-        # SHAP's return shape for binary classifiers has changed across
-        # versions: a [class0, class1] list (older), or a single array with a
-        # trailing class axis (newer). Normalize to "one row of feature
-        # contributions to the positive (win) class".
-        if isinstance(raw, list):
-            values = raw[1][0]
-        elif np.asarray(raw).ndim == 3:
-            values = np.asarray(raw)[0, :, 1]
-        else:
-            values = np.asarray(raw)[0]
-        per_fold_shap.append(np.asarray(values, dtype=float))
-
-        base = explainer.expected_value
-        base = base[1] if isinstance(base, (list, np.ndarray)) else base
-        base_values.append(float(base))
-
-    avg_shap = np.mean(per_fold_shap, axis=0)
-    avg_base_margin = float(np.mean(base_values))
-    avg_base_win_rate = float(1.0 / (1.0 + np.exp(-avg_base_margin)))
-    return dict(zip(feature_cols, avg_shap.tolist())), avg_base_win_rate
-
-
-def _to_native(value):
-    """Convert a numpy scalar (int64/float64/bool_) to a plain Python type.
-
-    ``frame.iloc[0][name]`` returns numpy scalars for numeric columns, and
-    some FastAPI/pydantic version combinations can't JSON-encode those (seen
-    in the wild as ``TypeError: 'numpy.int64' object is not iterable`` from
-    ``jsonable_encoder``) — cast explicitly rather than depend on the
-    installed encoder's numpy support.
-    """
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
-
-
-def explain_row(model, record, lead_type_id, top_n=None):
-    """Build the structured 'why' facts for one lead's win-probability score.
-
-    Inputs
-    ------
-    model : fitted sklearn Pipeline or CalibratedClassifierCV
-        Trained Anton model (LightGBM only — see ``_fitted_lgbm_estimators``).
-    record : dict
-        Raw lead attributes (same shape as ``BidRequest`` in ``predict.py``).
-    lead_type_id : int
-        6=auto, 1=home — selects the model feature schema.
-    top_n : int | None
-        How many top factors to keep; ``TOP_N_FACTORS`` (ini-configurable)
-        when ``None``.
-
-    Returns
-    -------
-    dict
-        ``{"top_factors": [...], "base_win_rate": float}``. Each factor is
-        ``{"feature", "value", "shap", "direction"}``, sorted by |shap|.
-    """
-    top_n = top_n or TOP_N_FACTORS
-    numeric, categorical = config.feature_columns(lead_type_id)
-    feature_cols = list(numeric) + list(categorical)
-
-    frame = preprocessing.serving_frame([record], lead_type_id)
-    shap_values, base_value = _shap_for_row(model, frame, feature_cols)
-
-    ranked = sorted(shap_values.items(), key=lambda kv: abs(kv[1]), reverse=True)
-    top_factors = [
-        {
-            "feature": name,
-            "value": _to_native(frame.iloc[0][name]),
-            "shap": round(value, 4),
-            "direction": "increased" if value > 0 else "decreased",
-        }
-        for name, value in ranked[:top_n]
-    ]
-    return {"top_factors": top_factors, "base_win_rate": base_value}
-
-
-def format_llm_prompt(facts: dict) -> str:
-    """Render structured facts into a tightly-templated LLM prompt.
-
-    Deliberately rigid (not "be creative") and explicit about not inventing
-    numbers — this is a formatting task, not a reasoning task, so the prompt
-    is written to minimize the model's room to hallucinate. An optional
-    ``decision_note`` (from ``predict.decide_bid`` — e.g. "this was a
-    scheduled exploration probe") is included as another fact the LLM may
-    use, not something it has to guess at from the numbers alone.
-
-    Two guardrails added after observing a small model's actual output on a
-    real lead:
-    - An explicit statement of the model's monotonic bid constraint, because
-      without it the LLM sometimes reasoned backwards about the `bid`
-      factor's SHAP sign (e.g. implying a *lower* bid would have won more
-      often, which the model's design rules out).
-    - An optional ``bid_curve`` (from ``predict.bid_curve_around``) — actual
-      win-rate/profit numbers at nearby bids — so claims about "what a
-      different bid would do" are grounded in real numbers instead of the
-      LLM guessing from the single chosen bid alone.
-    """
-    lines = [
-        "You explain a pricing model's decision in plain English for a "
-        "business user.",
-        "Use ONLY the facts below. Do not invent numbers. 2-3 sentences, no " "jargon.",
-        "Model rule: predicted win rate never decreases as the bid rises "
-        "(built into the model by design) -- never claim a lower bid would "
-        "win more often than a higher one.",
-        "",
-        f"Recommended bid: ${facts['recommended_bid']:.2f}",
-        f"Predicted win rate at this bid: {facts['predicted_win_rate']:.0%} "
-        f"(vs. average {facts['base_win_rate']:.0%})",
-        f"Expected profit: ${facts['expected_profit']:.2f}",
-    ]
-    if facts.get("decision_note"):
-        lines += ["", f"Note: {facts['decision_note']}"]
-    if facts.get("bid_curve"):
-        lines += ["", "Nearby bids explored (bid -> predicted win rate):"]
-        for point in facts["bid_curve"]:
-            lines.append(f"- ${point['bid']:.2f} -> {point['predicted_win_rate']:.0%}")
-    lines += ["", "Top factors:"]
-    for f in facts["top_factors"]:
-        lines.append(f"- {f['feature']}={f['value']}: {f['direction']} win likelihood")
-    lines += ["", "Explanation:"]
-    return "\n".join(lines)
-
-
-def call_ollama(prompt, model=None, host=None, timeout=None):
-    """Call a local Ollama model; returns the generated text.
-
-    Best-effort: if Ollama isn't reachable (not installed / not running),
-    this logs nothing scary and returns a clear fallback message instead of
-    raising — an explanation feature must never break its caller, and it's
-    not on the live bidding path anyway, so a degraded (but honest) response
-    is the right failure mode.
-    """
-    import requests
-
-    model = model or LLM_MODEL
-    host = host or OLLAMA_HOST
-    timeout = timeout or LLM_TIMEOUT_SECONDS
-    try:
-        resp = requests.post(
-            f"{host}/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()["response"].strip()
-    except Exception as exc:  # noqa: BLE001 - best-effort, never break the caller
-        return (
-            "(Explanation unavailable: could not reach the local LLM at "
-            f"{host} — {exc}. The numeric factors above are still accurate.)"
-        )
-
-
-def is_model_pulled(model=None, host=None, timeout=None) -> bool:
-    """Return whether ``model`` is already pulled (available) in the local
-    Ollama instance's model list.
-
-    Best-effort: any failure reaching Ollama (not running yet, network blip)
-    is treated as "not pulled" rather than raised -- the only caller
-    (``_ensure_model_pulled_sync``) reacts to either case by attempting a
-    pull, which is the safe default either way, so there's no need to
-    distinguish "definitely absent" from "couldn't check" here.
-    """
-    import requests
-
-    model = model or LLM_MODEL
-    host = host or OLLAMA_HOST
-    timeout = timeout or LLM_TIMEOUT_SECONDS
-    try:
-        resp = requests.get(f"{host}/api/tags", timeout=timeout)
-        resp.raise_for_status()
-        names = {m.get("name") for m in resp.json().get("models", [])}
-    except Exception:  # noqa: BLE001 -- best-effort, see docstring
-        return False
-    return model in names
-
-
-def pull_model(model=None, host=None) -> bool:
-    """Pull ``model`` into the local Ollama instance.
-
-    Blocking -- a real pull can take minutes for a multi-GB model, with no
-    fixed time budget, so this deliberately sets no request timeout. Callers
-    that must not block (e.g. FastAPI startup) should run this off the main
-    thread -- see ``ensure_model_pulled_async``.
-
-    Returns
-    -------
-    bool
-        Whether the pull request completed successfully.
-    """
-    import requests
-
-    model = model or LLM_MODEL
-    host = host or OLLAMA_HOST
-    try:
-        resp = requests.post(
-            f"{host}/api/pull",
-            json={"name": model, "stream": False},
-            timeout=None,
-        )
-        resp.raise_for_status()
-        return True
-    except Exception:  # noqa: BLE001 -- best-effort; caller only logs a warning
-        logger.warning(
-            "Failed to pull Ollama model %r from %s", model, host, exc_info=True
-        )
-        return False
-
-
-def _ensure_model_pulled_sync(
-    model=None,
-    host=None,
-    wait_for_host_seconds=60,
-    poll_interval_seconds=2,
-) -> None:
-    """Check-then-pull ``model``, after waiting briefly for Ollama itself to
-    become reachable (it may still be starting -- e.g. right after `docker
-    compose up`, `serve` and `ollama` start around the same time).
-
-    Synchronous/blocking by design -- kept separate from
-    ``ensure_model_pulled_async`` purely so the actual logic is directly
-    unit-testable without touching real threads; the async wrapper is the
-    only thing that needs a background thread.
-    """
-    import time
-
-    import requests
-
-    model = model or LLM_MODEL
-    host = host or OLLAMA_HOST
-
-    deadline = time.monotonic() + wait_for_host_seconds
-    reachable = False
-    while time.monotonic() < deadline:
-        try:
-            requests.get(f"{host}/api/tags", timeout=5).raise_for_status()
-            reachable = True
-            break
-        except Exception:  # noqa: BLE001 -- still starting up, keep polling
-            time.sleep(poll_interval_seconds)
-
-    if not reachable:
-        logger.warning(
-            "Ollama at %s was not reachable within %ss -- skipping the "
-            "model-pull check for now (retried automatically on next "
-            "startup).",
-            host,
-            wait_for_host_seconds,
-        )
-        return
-
-    if is_model_pulled(model, host):
-        logger.info("Ollama model %r already pulled at %s.", model, host)
-        return
-
-    logger.info("Ollama model %r not found at %s -- pulling now...", model, host)
-    if pull_model(model, host):
-        logger.info("Finished pulling Ollama model %r.", model)
-
-
-def _ensure_model_pulled_locked(model=None, host=None) -> None:
-    """Run ``_ensure_model_pulled_sync`` behind a non-blocking file lock, so
-    only one of uvicorn's `SERVE_WORKERS` worker PROCESSES (they fork inside
-    one container -- see docker/Dockerfile.serve -- and so share one
-    filesystem) actually performs the check/pull; the rest see the lock
-    already held and return immediately.
-
-    Without this, every worker independently calls this at its own startup
-    and all of them fire a simultaneous `POST /api/pull` for the identical
-    model -- quadrupling (at `SERVE_WORKERS=4`) bandwidth and disk I/O for
-    the exact same bytes, and contending for CPU badly enough to make the
-    API itself sluggish. Observed live: with 4 workers, `/docs` and
-    `/health` started timing out under nginx's 5s `proxy_read_timeout` while
-    all 4 workers pulled at once (see docs/CHANGELOG.md).
-
-    A plain advisory `flock` (non-blocking) is enough -- no need to wait or
-    retry if another worker already holds it, since whichever worker wins
-    pulls the model into the shared `ollama` service, which benefits every
-    worker's future `/explain_bid` (or /recommend_bid background SHAP) call
-    either way.
-    """
-    try:
-        lock_fd = os.open(_OLLAMA_PULL_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o644)
-    except OSError:
-        # Can't even open the lock file -- better to just run the check than
-        # silently never attempt a pull at all.
-        _ensure_model_pulled_sync(model, host)
-        return
-
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        # Another worker already holds the lock -- it's handling this.
-        os.close(lock_fd)
-        return
-
-    try:
-        _ensure_model_pulled_sync(model, host)
-    finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
-
-
-def ensure_model_pulled_async(model=None, host=None) -> None:
-    """Kick off the (lock-deduped) check/pull in a background daemon thread.
-
-    Returns immediately -- never blocks the caller (FastAPI startup, in this
-    codebase's only caller today, see ``predict._lifespan``). A real model
-    pull can take minutes for a multi-GB model, and neither startup nor any
-    in-flight `/recommend_bid` / `/explain_bid` request should ever wait on
-    it -- same "never hold up live serving" principle as SHAP/logging
-    elsewhere in this codebase. Daemon so it can't prevent process exit.
-    """
-    threading.Thread(
-        target=_ensure_model_pulled_locked,
-        args=(model, host),
-        daemon=True,
-        name="ollama-model-pull",
-    ).start()
+from .shap_explain import (  # noqa: F401 -- re-exported, see module docstring
+    TOP_N_FACTORS,
+    _fitted_lgbm_estimators,
+    _to_native,
+    explain_row,
+)
 
 
 def explain_bid(
@@ -569,7 +166,7 @@ def explain_bid(
     facts = {
         "recommended_bid": decision["recommended_bid"],
         "predicted_win_rate": decision["recommended_bid_predicted_win_rate"],
-        "expected_profit": decision["recommended_bid_expected_profit"],
+        "expected_profit": decision["recommended_bid_predicted_profit"],
         "base_win_rate": factors["base_win_rate"],
         "top_factors": factors["top_factors"],
         "bid_curve": bid_curve,

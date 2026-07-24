@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from smarthub.server import predict
-from smarthub.train_and_predict import config, explain
+from smarthub.train_and_predict import config, explain, llm_explain
 
 # --- _to_native (JSON-safety for numpy scalars) ------------------------------
 
@@ -269,12 +269,17 @@ def test_pull_model_returns_false_on_failure_without_raising(monkeypatch):
 
 def test_ensure_model_pulled_sync_skips_pull_when_already_present(monkeypatch):
     """Already-pulled model -> no pull attempted at all."""
-    monkeypatch.setattr(explain, "is_model_pulled", lambda model, host: True)
+    # Patched on llm_explain (not explain) -- _ensure_model_pulled_sync's
+    # internal calls to is_model_pulled/pull_model are bare-name lookups
+    # resolved in llm_explain's own module globals, since that's where all
+    # three are actually defined (explain.py only re-imports/re-exports the
+    # names for its own public surface -- see explain.py's module docstring).
+    monkeypatch.setattr(llm_explain, "is_model_pulled", lambda model, host: True)
 
     def _boom(*args, **kwargs):
         raise AssertionError("pull_model must not be called when already pulled")
 
-    monkeypatch.setattr(explain, "pull_model", _boom)
+    monkeypatch.setattr(llm_explain, "pull_model", _boom)
 
     explain._ensure_model_pulled_sync(
         "qwen2.5:1.5b-instruct",
@@ -293,7 +298,9 @@ def test_ensure_model_pulled_sync_pulls_when_missing(monkeypatch):
             return None
 
     monkeypatch.setattr(requests, "get", lambda url, timeout: _Resp())
-    monkeypatch.setattr(explain, "is_model_pulled", lambda model, host: False)
+    # Patched on llm_explain -- see comment in
+    # test_ensure_model_pulled_sync_skips_pull_when_already_present.
+    monkeypatch.setattr(llm_explain, "is_model_pulled", lambda model, host: False)
 
     called = {}
 
@@ -302,7 +309,7 @@ def test_ensure_model_pulled_sync_pulls_when_missing(monkeypatch):
         called["host"] = host
         return True
 
-    monkeypatch.setattr(explain, "pull_model", _fake_pull)
+    monkeypatch.setattr(llm_explain, "pull_model", _fake_pull)
 
     explain._ensure_model_pulled_sync(
         "qwen2.5:1.5b-instruct",
@@ -328,7 +335,9 @@ def test_ensure_model_pulled_sync_gives_up_quietly_if_host_never_reachable(
     def _fail(*args, **kwargs):
         raise AssertionError("pull_model must not run if Ollama is unreachable")
 
-    monkeypatch.setattr(explain, "pull_model", _fail)
+    # Patched on llm_explain -- see comment in
+    # test_ensure_model_pulled_sync_skips_pull_when_already_present.
+    monkeypatch.setattr(llm_explain, "pull_model", _fail)
 
     # Small budget so the test itself stays fast.
     explain._ensure_model_pulled_sync(
@@ -345,7 +354,13 @@ def test_ensure_model_pulled_async_returns_immediately(monkeypatch, tmp_path):
     import threading
     import time
 
-    monkeypatch.setattr(explain, "_OLLAMA_PULL_LOCK_PATH", str(tmp_path / "lock"))
+    # Patched on llm_explain -- ensure_model_pulled_async's background thread
+    # target (_ensure_model_pulled_locked) and its internal call to
+    # _ensure_model_pulled_sync are both bare-name lookups resolved in
+    # llm_explain's own module globals, since that's where all three are
+    # actually defined (see comment in
+    # test_ensure_model_pulled_sync_skips_pull_when_already_present).
+    monkeypatch.setattr(llm_explain, "_OLLAMA_PULL_LOCK_PATH", str(tmp_path / "lock"))
 
     started = threading.Event()
     finish = threading.Event()
@@ -354,7 +369,7 @@ def test_ensure_model_pulled_async_returns_immediately(monkeypatch, tmp_path):
         started.set()
         finish.wait(timeout=5)  # would block the caller for up to 5s if not threaded
 
-    monkeypatch.setattr(explain, "_ensure_model_pulled_sync", _slow_sync)
+    monkeypatch.setattr(llm_explain, "_ensure_model_pulled_sync", _slow_sync)
 
     t0 = time.monotonic()
     explain.ensure_model_pulled_async()
@@ -379,7 +394,9 @@ def test_ensure_model_pulled_locked_dedupes_concurrent_workers(monkeypatch, tmp_
     held and return immediately, without duplicating the work."""
     import threading
 
-    monkeypatch.setattr(explain, "_OLLAMA_PULL_LOCK_PATH", str(tmp_path / "lock"))
+    # Patched on llm_explain -- see comment in
+    # test_ensure_model_pulled_async_returns_immediately.
+    monkeypatch.setattr(llm_explain, "_OLLAMA_PULL_LOCK_PATH", str(tmp_path / "lock"))
 
     call_count = {"n": 0}
     first_running = threading.Event()
@@ -390,7 +407,7 @@ def test_ensure_model_pulled_locked_dedupes_concurrent_workers(monkeypatch, tmp_
         first_running.set()
         release_first.wait(timeout=5)
 
-    monkeypatch.setattr(explain, "_ensure_model_pulled_sync", _fake_sync)
+    monkeypatch.setattr(llm_explain, "_ensure_model_pulled_sync", _fake_sync)
 
     first = threading.Thread(target=explain._ensure_model_pulled_locked)
     first.start()
@@ -429,7 +446,7 @@ def test_explain_bid_no_viable_bid_skips_shap_and_llm(monkeypatch):
         return {
             "recommended_bid": float("nan"),
             "recommended_bid_predicted_win_rate": None,
-            "recommended_bid_expected_profit": None,
+            "recommended_bid_predicted_profit": None,
             "decision_path": "model",
             "decision_reason": "No viable bid: too little margin.",
         }
@@ -476,7 +493,7 @@ def test_explain_bid_cold_start_skips_shap_and_llm_uses_policy_text(monkeypatch)
         return {
             "recommended_bid": 5.0,
             "recommended_bid_predicted_win_rate": None,
-            "recommended_bid_expected_profit": None,
+            "recommended_bid_predicted_profit": None,
             "decision_path": "cold_start_fallback",
             "decision_reason": "No model has ever been trained/promoted yet.",
         }
@@ -523,7 +540,7 @@ def test_explain_bid_swaps_in_recommended_bid_before_explaining(monkeypatch):
         return {
             "recommended_bid": 15.0,
             "recommended_bid_predicted_win_rate": 0.5,
-            "recommended_bid_expected_profit": 4.0,
+            "recommended_bid_predicted_profit": 4.0,
             "max_bid": 18.0,
             "decision_path": "model",
             "decision_reason": "Standard profit-maximizing bid.",
@@ -583,7 +600,7 @@ def test_explain_bid_includes_decision_note_for_exploration(monkeypatch):
         return {
             "recommended_bid": 12.0,
             "recommended_bid_predicted_win_rate": 0.4,
-            "recommended_bid_expected_profit": 3.0,
+            "recommended_bid_predicted_profit": 3.0,
             "max_bid": 15.0,
             "decision_path": "exploration",
             "decision_reason": "Scheduled exploration probe above the optimum.",
