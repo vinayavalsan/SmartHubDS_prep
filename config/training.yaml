@@ -86,7 +86,7 @@ promotion:
 #               automatically when the policy passes.
 #   disabled  - skip serving-model evaluation and promotion-policy checks;
 #               train, evaluate, save reports/model, and log to MLflow only.
-  mode: automatic
+  mode: manual
 
   criteria:
     # Absolute quality gate applied to every challenger. Lower is better.
@@ -103,7 +103,7 @@ promotion:
     # Absolute companion to min_profit_ratio. Even when the relative floor
     # passes, the challenger cannot reduce total expected profit by more than
     # this amount on the same held-out rows.
-    max_expected_profit_decrease: 5000.0
+    max_absolute_profit_loss_tolerance: 5000.0
 
     # Probability-quality guardrail. Lower log loss is better; allow only this
     # much absolute regression versus the serving model.

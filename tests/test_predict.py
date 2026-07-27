@@ -334,7 +334,8 @@ def test_load_model_and_manifest_currently_serving(tmp_path, monkeypatch):
         lineage={},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="not evaluated",
     )
     registry.promote("auto", saved_manifest["version"])
@@ -360,7 +361,8 @@ def test_load_model_and_manifest_pinned_version(tmp_path, monkeypatch):
         lineage={},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="not evaluated",
     )
     # Deliberately do NOT promote it -- pinning should still find it.

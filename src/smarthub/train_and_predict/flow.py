@@ -113,7 +113,7 @@ def train_flow(
     logger.info(
         "Trained %s model %s: log loss=%.4f, rows=%s -> %s (promoted=%s)",
         lead_type_name,
-        result.get("model_version"),
+        result.get("production_model_version") or result.get("training_run_id"),
         m.get("log_loss", float("nan")),
         result["prep_summary"]["training_rows"],
         result["model_path"],
@@ -166,15 +166,16 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
     lineage = result.get("lineage", {})
     fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
     promoted = result.get("promoted")
-    eligible = result.get("promotion_eligible")
+    eligibility_status = result.get("eligibility_status")
+    promotion_status = result.get("promotion_status")
     promotion_mode = result.get("promotion_mode")
     if promotion_mode == "disabled":
         status_label = "⏭ PROMOTION EVALUATION DISABLED"
     elif promoted:
         status_label = "✅ PROMOTED to currently-serving"
-    elif promotion_mode == "manual" and eligible:
+    elif promotion_status == "awaiting_manual_promotion":
         status_label = "🟡 ELIGIBLE — awaiting manual promotion"
-    elif eligible:
+    elif eligibility_status == "eligible":
         status_label = "⏸ ELIGIBLE — promotion execution skipped"
     else:
         status_label = "⏸ NOT ELIGIBLE — currently-serving model unchanged"
@@ -202,9 +203,11 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 | field | value |
 | --- | --- |
 | lead_type_id | {lead_type_id} |
-| model version | `{result.get('model_version')}` |
+| training run ID | `{result.get('training_run_id')}` |
+| production model version | `{result.get('production_model_version') or '—'}` |
 | promotion mode | {promotion_mode} |
-| promotion eligible | {eligible} |
+| eligibility status | {eligibility_status} |
+| promotion status | {promotion_status} |
 | model | {lineage.get('model_type')} (calibrated={lineage.get('calibrated')}) |
 | rows trained | {prep.get('training_rows')} |
 | observed win rate | {_f(prep.get('win_rate'))} |
@@ -282,7 +285,8 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     lineage = result.get("lineage", {})
     fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
     promoted = result.get("promoted")
-    eligible = result.get("promotion_eligible")
+    eligibility_status = result.get("eligibility_status")
+    promotion_status = result.get("promotion_status")
     promotion_mode = result.get("promotion_mode")
     if promotion_mode == "disabled":
         icon = ":fast_forward:"
@@ -290,17 +294,18 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     elif promoted:
         icon = ":white_check_mark:"
         state = "Promoted to serving"
-    elif promotion_mode == "manual" and eligible:
+    elif promotion_status == "awaiting_manual_promotion":
         icon = ":large_yellow_circle:"
         state = "Eligible — awaiting manual promotion"
-    elif eligible:
+    elif eligibility_status == "eligible":
         icon = ":pause_button:"
         state = "Eligible — promotion execution skipped"
     else:
         icon = ":pause_button:"
         state = "Not eligible — serving model unchanged"
     headline = (
-        f"{icon} *{state}* · `{result.get('model_version')}`\n"
+        f"{icon} *{state}* · "
+        f"`{result.get('production_model_version') or result.get('training_run_id')}`\n"
         f"{result.get('promotion_reason', '—')}"
     )
 
@@ -315,8 +320,11 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
                 "Model": f"{lineage.get('model_type')} "
                 f"(cal={lineage.get('calibrated')})",
                 "Rows trained": result["prep_summary"].get("training_rows"),
+                "Training run ID": result.get("training_run_id"),
+                "Production version": (result.get("production_model_version") or "—"),
                 "Promotion mode": promotion_mode,
-                "Promotion eligible": eligible,
+                "Eligibility status": eligibility_status,
+                "Promotion status": promotion_status,
                 "Data range": (
                     f"{lineage.get('data_min_created_at')} → "
                     f"{lineage.get('data_max_created_at')}"

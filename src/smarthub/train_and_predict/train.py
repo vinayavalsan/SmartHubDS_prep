@@ -429,7 +429,8 @@ def run_training(
     promotion_mode = training_config.promotion_mode
     if promotion_mode == "disabled":
         decision = None
-        promotion_eligible = None
+        eligibility_status = "not_evaluated"
+        promotion_status = "not_evaluated"
         promotion_reason = "Promotion evaluation disabled."
         promotion_comparison = {}
         log.info("Promotion Evaluation")
@@ -461,7 +462,13 @@ def run_training(
             max_log_loss=training_config.promotion_max_log_loss,
             min_expected_profit=training_config.promotion_min_expected_profit,
         )
-        promotion_eligible = decision.promote
+        eligibility_status = "eligible" if decision.promote else "not_eligible"
+        if promotion_mode == "automatic":
+            promotion_status = "promoted" if decision.promote else "rejected"
+        else:
+            promotion_status = (
+                "awaiting_manual_promotion" if decision.promote else "rejected"
+            )
         promotion_reason = decision.reason
         promotion_comparison = decision.comparison
         log.info("Promotion Evaluation")
@@ -481,15 +488,17 @@ def run_training(
         lineage=lineage,
         model_params=model_params,
         promotion_mode=promotion_mode,
-        promotion_eligible=promotion_eligible,
+        eligibility_status=eligibility_status,
+        promotion_status=promotion_status,
         promotion_decision_reason=promotion_reason,
+        promotion_comparison=promotion_comparison,
     )
 
     model_path = manifest["model_path"]
 
     log.info(
-        "Saved model version %s -> %s",
-        manifest["version"],
+        "Saved training run %s -> %s",
+        manifest["training_run_id"],
         model_path,
     )
 
@@ -497,31 +506,35 @@ def run_training(
     if promotion_mode == "automatic" and decision is not None and decision.promote:
         registry.promote(
             lead_type_name,
-            manifest["version"],
+            manifest["training_run_id"],
             reason=decision.reason,
         )
         promoted = True
+        manifest = registry.load_manifest(lead_type_name, manifest["training_run_id"])
+        promotion_status = "promoted"
         log.info(
             "Automatically promoted %s to currently-serving for '%s'.",
-            manifest["version"],
+            manifest["production_model_version"],
             lead_type_name,
         )
     elif promotion_mode == "manual":
         log.info(
-            "Model %s was saved but not promoted because promotion mode "
-            "is manual. Currently-serving model remains unchanged.",
-            manifest["version"],
+            "Training run %s was saved with status %s. "
+            "Currently-serving model remains unchanged.",
+            manifest["training_run_id"],
+            promotion_status,
         )
     elif promotion_mode == "disabled":
         log.info(
-            "Model %s was saved; promotion evaluation and execution " "were skipped.",
-            manifest["version"],
+            "Training run %s was saved; promotion evaluation and execution "
+            "were skipped.",
+            manifest["training_run_id"],
         )
     else:
         log.warning(
-            "Model %s is not eligible for automatic promotion; "
+            "Training run %s is not eligible for automatic promotion; "
             "currently-serving model remains unchanged.",
-            manifest["version"],
+            manifest["training_run_id"],
         )
 
     if register_mlflow:
@@ -532,7 +545,7 @@ def run_training(
                 f"{training_config.mlflow_experiment_name}_{lead_type_name}"
             )
 
-            mlflow_utils.log_training_run(
+            mlflow_metadata = mlflow_utils.log_training_run(
                 model=model,
                 model_params=model_params,
                 feature_cols=feature_cols,
@@ -543,21 +556,51 @@ def run_training(
                 tracking_db_path=training_config.mlflow_tracking_db_path,
                 artifact_root=training_config.mlflow_artifact_root,
                 experiment_name=experiment_name,
-                run_name=manifest["version"],
-                registered_model_name=(training_config.mlflow_registered_model_name),
+                run_name=manifest["training_run_id"],
                 extra_params={
                     "lead_type_name": lead_type_name,
-                    "model_version": manifest["version"],
+                    "training_run_id": manifest["training_run_id"],
                     "promotion_mode": promotion_mode,
-                    "promotion_eligible": promotion_eligible,
-                    "promoted": promoted,
-                    "promotion_reason": promotion_reason,
                     **lineage,
                 },
+                extra_tags={
+                    "eligibility_status": eligibility_status,
+                    "promotion_status": promotion_status,
+                    "promoted": promoted,
+                    "production_model_version": manifest.get(
+                        "production_model_version"
+                    ),
+                    "model_version": manifest.get("production_model_version"),
+                    "promotion_reason": promotion_reason,
+                },
             )
+            manifest = registry.update_manifest(
+                lead_type_name,
+                manifest["training_run_id"],
+                **mlflow_metadata,
+            )
+            if promoted:
+                promotion_mlflow_metadata = mlflow_utils.promote_training_run(
+                    training_run_id=manifest["training_run_id"],
+                    lead_type_name=lead_type_name,
+                    production_model_version=manifest["production_model_version"],
+                    reason=promotion_reason,
+                    tracking_db_path=training_config.mlflow_tracking_db_path,
+                    artifact_root=training_config.mlflow_artifact_root,
+                    experiment_name=experiment_name,
+                    registered_model_name=(
+                        training_config.mlflow_registered_model_name
+                    ),
+                    mlflow_run_id=manifest.get("mlflow_run_id"),
+                )
+                manifest = registry.update_manifest(
+                    lead_type_name,
+                    manifest["training_run_id"],
+                    **promotion_mlflow_metadata,
+                )
             log.info(
                 "Logged run '%s' to MLflow experiment '%s'",
-                manifest["version"],
+                manifest["training_run_id"],
                 experiment_name,
             )
             log.info(
@@ -571,9 +614,17 @@ def run_training(
         "lead_type_id": lead_type_id,
         "lead_type_name": lead_type_name,
         "model_path": model_path,
-        "model_version": manifest["version"],
+        "training_run_id": manifest["training_run_id"],
+        "model_version": manifest.get("production_model_version"),
+        "production_model_version": manifest.get("production_model_version"),
         "promotion_mode": promotion_mode,
-        "promotion_eligible": promotion_eligible,
+        "eligibility_status": eligibility_status,
+        "promotion_status": promotion_status,
+        "promotion_eligible": (
+            True
+            if eligibility_status == "eligible"
+            else False if eligibility_status == "not_eligible" else None
+        ),
         "promoted": promoted,
         "promotion_reason": promotion_reason,
         "promotion_comparison": promotion_comparison,

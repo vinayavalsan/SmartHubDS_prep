@@ -26,7 +26,8 @@ def _save(lead_type_name="auto", roc_auc=0.70, profit=100.0, feature_cols=None):
         lineage={"model_type": "lightgbm"},
         model_params={"n_estimators": 10},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="not evaluated",
     )
     return manifest
@@ -60,35 +61,43 @@ def test_load_currently_serving_none_when_file_missing():
 # --- Versioning ---------------------------------------------------------------
 
 
-def test_versions_are_numbered_and_timestamped_and_never_overwritten():
-    """Versions are numbered sequentially and never overwritten."""
+def test_training_run_ids_are_unique_and_never_overwritten():
+    """Every saved candidate gets a unique immutable training-run ID."""
     m1 = _save()
     m2 = _save()
     m3 = _save()
 
-    assert m1["version"].startswith("v1_")
-    assert m2["version"].startswith("v2_")
-    assert m3["version"].startswith("v3_")
+    for manifest in (m1, m2, m3):
+        assert manifest["training_run_id"].startswith("run_")
+        assert manifest["version"] == manifest["training_run_id"]
+        assert manifest["production_model_version"] is None
+
+    assert len({m1["version"], m2["version"], m3["version"]}) == 3
     assert registry.list_versions("auto") == [
         m1["version"],
         m2["version"],
         m3["version"],
     ]
-    # all three pkl files exist independently -- nothing was overwritten
-    for m in (m1, m2, m3):
-        assert registry.version_path("auto", m["version"]).exists()
-        assert registry.manifest_path("auto", m["version"]).exists()
+    for manifest in (m1, m2, m3):
+        assert registry.version_path("auto", manifest["version"]).exists()
+        assert registry.manifest_path("auto", manifest["version"]).exists()
 
 
-def test_version_numbering_is_per_lead_type():
-    """Version numbering is counted independently per lead type."""
+def test_production_version_numbering_is_per_lead_type():
+    """Only promoted models consume per-lead-type production versions."""
     auto1 = _save("auto")
     home1 = _save("home")
     auto2 = _save("auto")
 
-    assert auto1["version"].startswith("v1_")
-    assert home1["version"].startswith("v1_")  # independent counter
-    assert auto2["version"].startswith("v2_")
+    pointer_auto1 = registry.promote("auto", auto1["version"])
+    pointer_home1 = registry.promote("home", home1["version"])
+    pointer_auto2 = registry.promote("auto", auto2["version"])
+
+    assert pointer_auto1["production_model_version"] == "auto_v1"
+    assert pointer_home1["production_model_version"] == "home_v1"
+    assert pointer_auto2["production_model_version"] == "auto_v2"
+    assert registry.list_production_versions("auto") == ["auto_v1", "auto_v2"]
+    assert registry.list_production_versions("home") == ["home_v1"]
 
 
 def test_nothing_currently_serving_before_any_promotion():
@@ -148,14 +157,14 @@ def test_rollback_at_earliest_version_raises():
     """rollback raises when there is no earlier version to revert to."""
     m1 = _save()
     registry.promote("auto", m1["version"])
-    with pytest.raises(ValueError, match="nothing to roll back to"):
+    with pytest.raises(ValueError, match="earliest promoted model"):
         registry.rollback("auto")
 
 
 def test_rollback_without_anything_serving_raises():
     """rollback raises when nothing is currently serving."""
     _save()
-    with pytest.raises(ValueError, match="No currently-serving model"):
+    with pytest.raises(ValueError, match="No currently-serving promoted model"):
         registry.rollback("auto")
 
 

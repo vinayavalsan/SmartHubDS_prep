@@ -84,7 +84,8 @@ def _promote_constant_model(win_rate=0.42):
         lineage={"model_type": "constant_test_model", "calibrated": False},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="test",
     )
     registry.promote("auto", manifest["version"])
@@ -334,7 +335,8 @@ def _promote_tiny_lightgbm_model():
         lineage={"model_type": "lightgbm", "calibrated": False},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="test",
     )
     registry.promote("auto", manifest["version"])

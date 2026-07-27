@@ -269,7 +269,8 @@ def test_resolve_model_uri_uses_pinned_ini_version_over_currently_serving(
         lineage={},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="not evaluated",
     )
     registry.promote("auto", manifest["version"])
@@ -292,7 +293,8 @@ def test_resolve_model_uri_falls_back_to_currently_serving(tmp_path, monkeypatch
         lineage={},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="not evaluated",
     )
     registry.promote("auto", manifest["version"])
