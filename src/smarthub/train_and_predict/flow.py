@@ -5,6 +5,8 @@ This module runs training, publishes run summaries, and sends notifications.
 
 from __future__ import annotations
 
+import argparse
+
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 
@@ -74,7 +76,7 @@ def _train_task(lead_type_id, version, register_mlflow):
     on_failure=[notifications.flow_failure_hook],
 )
 def train_flow(
-    lead_type_id: int = 6,
+    lead_type_id: int,
     version: str | None = None,
     register_mlflow: bool = True,
 ) -> dict:
@@ -109,10 +111,10 @@ def train_flow(
     m = result["metrics"]
     opt = result["optimizer_summary"] or {}
     logger.info(
-        "Trained %s model %s: ROC AUC=%.4f, rows=%s -> %s (promoted=%s)",
+        "Trained %s model %s: log loss=%.4f, rows=%s -> %s (promoted=%s)",
         lead_type_name,
-        result.get("model_version"),
-        m.get("roc_auc", float("nan")),
+        result.get("production_model_version") or result.get("training_run_id"),
+        m.get("log_loss", float("nan")),
         result["prep_summary"]["training_rows"],
         result["model_path"],
         result.get("promoted"),
@@ -122,7 +124,7 @@ def train_flow(
     _notify_success(lead_type_name, lead_type_id, result, m, opt)
     return {
         "lead_type": lead_type_name,
-        "roc_auc": m.get("roc_auc"),
+        "log_loss": m.get("log_loss"),
         "rows_trained": result["prep_summary"]["training_rows"],
         "model_path": result["model_path"],
     }
@@ -164,15 +166,16 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
     lineage = result.get("lineage", {})
     fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
     promoted = result.get("promoted")
-    eligible = result.get("promotion_eligible")
+    eligibility_status = result.get("eligibility_status")
+    promotion_status = result.get("promotion_status")
     promotion_mode = result.get("promotion_mode")
     if promotion_mode == "disabled":
         status_label = "⏭ PROMOTION EVALUATION DISABLED"
     elif promoted:
         status_label = "✅ PROMOTED to currently-serving"
-    elif promotion_mode == "manual" and eligible:
+    elif promotion_status == "awaiting_manual_promotion":
         status_label = "🟡 ELIGIBLE — awaiting manual promotion"
-    elif eligible:
+    elif eligibility_status == "eligible":
         status_label = "⏸ ELIGIBLE — promotion execution skipped"
     else:
         status_label = "⏸ NOT ELIGIBLE — currently-serving model unchanged"
@@ -200,9 +203,11 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 | field | value |
 | --- | --- |
 | lead_type_id | {lead_type_id} |
-| model version | `{result.get('model_version')}` |
+| training run ID | `{result.get('training_run_id')}` |
+| production model version | `{result.get('production_model_version') or '—'}` |
 | promotion mode | {promotion_mode} |
-| promotion eligible | {eligible} |
+| eligibility status | {eligibility_status} |
+| promotion status | {promotion_status} |
 | model | {lineage.get('model_type')} (calibrated={lineage.get('calibrated')}) |
 | rows trained | {prep.get('training_rows')} |
 | observed win rate | {_f(prep.get('win_rate'))} |
@@ -222,6 +227,7 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 | ROC AUC | {_f(m.get('roc_auc'))} |
 | PR AUC | {_f(m.get('pr_auc'))} |
 | Log loss | {_f(m.get('log_loss'))} |
+| F2 | {_f(m.get('f2'))} |
 | Brier score | {_f(m.get('brier_score'))} |
 | Calibration error | {_f(m.get('calibration_error'))} |
 
@@ -279,7 +285,8 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     lineage = result.get("lineage", {})
     fb = _feature_breakdown(lead_type_id, result.get("feature_cols"))
     promoted = result.get("promoted")
-    eligible = result.get("promotion_eligible")
+    eligibility_status = result.get("eligibility_status")
+    promotion_status = result.get("promotion_status")
     promotion_mode = result.get("promotion_mode")
     if promotion_mode == "disabled":
         icon = ":fast_forward:"
@@ -287,17 +294,18 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     elif promoted:
         icon = ":white_check_mark:"
         state = "Promoted to serving"
-    elif promotion_mode == "manual" and eligible:
+    elif promotion_status == "awaiting_manual_promotion":
         icon = ":large_yellow_circle:"
         state = "Eligible — awaiting manual promotion"
-    elif eligible:
+    elif eligibility_status == "eligible":
         icon = ":pause_button:"
         state = "Eligible — promotion execution skipped"
     else:
         icon = ":pause_button:"
         state = "Not eligible — serving model unchanged"
     headline = (
-        f"{icon} *{state}* · `{result.get('model_version')}`\n"
+        f"{icon} *{state}* · "
+        f"`{result.get('production_model_version') or result.get('training_run_id')}`\n"
         f"{result.get('promotion_reason', '—')}"
     )
 
@@ -312,8 +320,11 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
                 "Model": f"{lineage.get('model_type')} "
                 f"(cal={lineage.get('calibrated')})",
                 "Rows trained": result["prep_summary"].get("training_rows"),
+                "Training run ID": result.get("training_run_id"),
+                "Production version": (result.get("production_model_version") or "—"),
                 "Promotion mode": promotion_mode,
-                "Promotion eligible": eligible,
+                "Eligibility status": eligibility_status,
+                "Promotion status": promotion_status,
                 "Data range": (
                     f"{lineage.get('data_min_created_at')} → "
                     f"{lineage.get('data_max_created_at')}"
@@ -327,6 +338,7 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
                 "ROC AUC": _f(m.get("roc_auc")),
                 "PR AUC": _f(m.get("pr_auc")),
                 "Log loss": _f(m.get("log_loss")),
+                "F2": _f(m.get("f2")),
                 "Calibration error": _f(m.get("calibration_error")),
             },
         ),
@@ -375,5 +387,40 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     )
 
 
+def _parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for local flow execution.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed command-line arguments.
+    """
+    parser = argparse.ArgumentParser(
+        description="Run the SmartHub Prefect model-training flow."
+    )
+    parser.add_argument(
+        "--lead-type-id",
+        type=int,
+        required=True,
+        help="SmartHub lead type identifier to train.",
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        help="Optional training-table or model version identifier.",
+    )
+    parser.add_argument(
+        "--no-register-mlflow",
+        action="store_true",
+        help="Disable MLflow logging and registration for this run.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    train_flow(lead_type_id=6)
+    args = _parse_args()
+    train_flow(
+        lead_type_id=args.lead_type_id,
+        version=args.version,
+        register_mlflow=not args.no_register_mlflow,
+    )

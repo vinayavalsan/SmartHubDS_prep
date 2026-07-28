@@ -54,18 +54,6 @@ features:
   # keeps every home feature.
   home_optional: all
 
-training:
-  model_type: lightgbm          # logistic_regression | lightgbm
-  calibrate: true               # isotonic probability calibration
-  drop_zero_variance: true
-  test_size: 0.20
-  random_seed: 42
-  # Promotion gate (see train_and_predict/registry.py). A newly trained model
-  # only replaces the one currently serving traffic if it clears both checks
-  # below, evaluated on the SAME held-out test set as the currently-serving one.
-  promotion_min_roc_auc_regression: 0.01   # max allowed ROC AUC drop
-  promotion_min_profit_ratio: 0.98         # challenger profit >= 98% of serving
-
 prediction:
   bid_step: 0.25
   # Cold-start / exploration bidding policy (smarthub/server/predict.py:

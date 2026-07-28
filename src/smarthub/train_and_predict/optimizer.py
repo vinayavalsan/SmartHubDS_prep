@@ -246,7 +246,7 @@ def score_recommended_bids(
     target_cm: float,
     min_bid: float,
     bid_step: float,
-    chunk_size: int = 500,
+    chunk_size: int,
     log=None,
 ) -> pd.DataFrame | None:
     """Attach recommended-bid outputs using chunked scoring.

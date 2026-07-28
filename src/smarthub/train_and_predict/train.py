@@ -68,7 +68,7 @@ def split_training_data(
         train_df = frame.iloc[:split_index].copy()
         test_df = frame.iloc[split_index:].copy()
     elif strategy == "random":
-        use_stratification = bool(split_settings.get("stratify", False))
+        use_stratification = split_settings["stratify"]
         stratify = None
 
         if use_stratification:
@@ -291,7 +291,7 @@ def run_training(
     if split_settings["strategy"] == "random":
         log.info(
             "  Stratified                            : %s",
-            bool(split_settings.get("stratify", False)),
+            split_settings["stratify"],
         )
 
     model_type = training_config.model_type
@@ -302,32 +302,16 @@ def run_training(
     log.info("  Model type                            : %s", model_type)
     log.info("  Calibrate probabilities               : %s", calibrate)
 
-    try:
-        model = models.build_model(
-            model_type,
-            numeric,
-            categorical,
-            model_params,
-            calibrate=calibrate,
-        )
-        model.fit(X_train, y_train)
-    except Exception as exc:  # noqa: BLE001
-        if not calibrate:
-            raise
-
-        log.warning(
-            "Calibration failed (%s); refitting without calibration",
-            exc,
-        )
-        calibrate = False
-        model = models.build_model(
-            model_type,
-            numeric,
-            categorical,
-            model_params,
-            calibrate=False,
-        )
-        model.fit(X_train, y_train)
+    model = models.build_model(
+        model_type,
+        numeric,
+        categorical,
+        model_params,
+        calibrate=calibrate,
+        calibration_method=training_config.calibration_method,
+        calibration_cv=training_config.calibration_cv,
+    )
+    model.fit(X_train, y_train)
 
     log.info("Evaluating Model")
     pred, pred_class, model_metrics = metrics.evaluate_model(
@@ -340,6 +324,7 @@ def run_training(
     target_cm = optimizer_config.target_cm
     min_bid = optimizer_config.minimum_bid
     bid_step = optimizer_config.bid_step
+    optimizer_chunk_size = optimizer_config.chunk_size
 
     optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
         test_eval_df=test_df,
@@ -348,6 +333,7 @@ def run_training(
         target_cm=target_cm,
         min_bid=min_bid,
         bid_step=bid_step,
+        chunk_size=optimizer_chunk_size,
         log=log,
     )
 
@@ -393,6 +379,7 @@ def run_training(
         precision=model_metrics.precision,
         recall=model_metrics.recall,
         f1=model_metrics.f1,
+        f2=model_metrics.f2,
         optimizer_eval_df=optimizer_eval_df,
     )
 
@@ -401,10 +388,10 @@ def run_training(
         "calibrated": bool(calibrate),
         "split_strategy": split_settings["strategy"],
         "split_test_size": split_settings["test_size"],
-        "training_table_version": prep_summary.get("training_table_version"),
-        "data_min_created_at": prep_summary.get("data_min_created_at"),
-        "data_max_created_at": prep_summary.get("data_max_created_at"),
-        "source_row_count": prep_summary.get("source_row_count"),
+        "training_table_version": prep_summary["training_table_version"],
+        "data_min_created_at": prep_summary["data_min_created_at"],
+        "data_max_created_at": prep_summary["data_max_created_at"],
+        "source_row_count": prep_summary["source_row_count"],
     }
 
     log.info(
@@ -442,7 +429,8 @@ def run_training(
     promotion_mode = training_config.promotion_mode
     if promotion_mode == "disabled":
         decision = None
-        promotion_eligible = None
+        eligibility_status = "not_evaluated"
+        promotion_status = "not_evaluated"
         promotion_reason = "Promotion evaluation disabled."
         promotion_comparison = {}
         log.info("Promotion Evaluation")
@@ -457,6 +445,7 @@ def run_training(
             target_cm,
             min_bid,
             bid_step,
+            optimizer_chunk_size,
             log,
         )
         decision = registry.decide_promotion(
@@ -464,10 +453,22 @@ def run_training(
             challenger_optimizer=optimizer_summary_dict,
             currently_serving_metrics=serving_metrics,
             currently_serving_optimizer=serving_optimizer_summary,
-            min_roc_auc_regression=(training_config.promotion_min_roc_auc_regression),
+            max_log_loss_regression=(training_config.promotion_max_log_loss_regression),
             min_profit_ratio=training_config.promotion_min_profit_ratio,
+            max_absolute_profit_loss_tolerance=(
+                training_config.promotion_max_absolute_profit_loss_tolerance
+            ),
+            target_cm=target_cm,
+            max_log_loss=training_config.promotion_max_log_loss,
+            min_expected_profit=training_config.promotion_min_expected_profit,
         )
-        promotion_eligible = decision.promote
+        eligibility_status = "eligible" if decision.promote else "not_eligible"
+        if promotion_mode == "automatic":
+            promotion_status = "promoted" if decision.promote else "rejected"
+        else:
+            promotion_status = (
+                "awaiting_manual_promotion" if decision.promote else "rejected"
+            )
         promotion_reason = decision.reason
         promotion_comparison = decision.comparison
         log.info("Promotion Evaluation")
@@ -487,15 +488,17 @@ def run_training(
         lineage=lineage,
         model_params=model_params,
         promotion_mode=promotion_mode,
-        promotion_eligible=promotion_eligible,
+        eligibility_status=eligibility_status,
+        promotion_status=promotion_status,
         promotion_decision_reason=promotion_reason,
+        promotion_comparison=promotion_comparison,
     )
 
     model_path = manifest["model_path"]
 
     log.info(
-        "Saved model version %s -> %s",
-        manifest["version"],
+        "Saved training run %s -> %s",
+        manifest["training_run_id"],
         model_path,
     )
 
@@ -503,31 +506,35 @@ def run_training(
     if promotion_mode == "automatic" and decision is not None and decision.promote:
         registry.promote(
             lead_type_name,
-            manifest["version"],
+            manifest["training_run_id"],
             reason=decision.reason,
         )
         promoted = True
+        manifest = registry.load_manifest(lead_type_name, manifest["training_run_id"])
+        promotion_status = "promoted"
         log.info(
             "Automatically promoted %s to currently-serving for '%s'.",
-            manifest["version"],
+            manifest["production_model_version"],
             lead_type_name,
         )
     elif promotion_mode == "manual":
         log.info(
-            "Model %s was saved but not promoted because promotion mode "
-            "is manual. Currently-serving model remains unchanged.",
-            manifest["version"],
+            "Training run %s was saved with status %s. "
+            "Currently-serving model remains unchanged.",
+            manifest["training_run_id"],
+            promotion_status,
         )
     elif promotion_mode == "disabled":
         log.info(
-            "Model %s was saved; promotion evaluation and execution " "were skipped.",
-            manifest["version"],
+            "Training run %s was saved; promotion evaluation and execution "
+            "were skipped.",
+            manifest["training_run_id"],
         )
     else:
         log.warning(
-            "Model %s is not eligible for automatic promotion; "
+            "Training run %s is not eligible for automatic promotion; "
             "currently-serving model remains unchanged.",
-            manifest["version"],
+            manifest["training_run_id"],
         )
 
     if register_mlflow:
@@ -538,7 +545,7 @@ def run_training(
                 f"{training_config.mlflow_experiment_name}_{lead_type_name}"
             )
 
-            mlflow_utils.log_training_run(
+            mlflow_metadata = mlflow_utils.log_training_run(
                 model=model,
                 model_params=model_params,
                 feature_cols=feature_cols,
@@ -549,21 +556,51 @@ def run_training(
                 tracking_db_path=training_config.mlflow_tracking_db_path,
                 artifact_root=training_config.mlflow_artifact_root,
                 experiment_name=experiment_name,
-                run_name=manifest["version"],
-                registered_model_name=(training_config.mlflow_registered_model_name),
+                run_name=manifest["training_run_id"],
                 extra_params={
                     "lead_type_name": lead_type_name,
-                    "model_version": manifest["version"],
+                    "training_run_id": manifest["training_run_id"],
                     "promotion_mode": promotion_mode,
-                    "promotion_eligible": promotion_eligible,
-                    "promoted": promoted,
-                    "promotion_reason": promotion_reason,
                     **lineage,
                 },
+                extra_tags={
+                    "eligibility_status": eligibility_status,
+                    "promotion_status": promotion_status,
+                    "promoted": promoted,
+                    "production_model_version": manifest.get(
+                        "production_model_version"
+                    ),
+                    "model_version": manifest.get("production_model_version"),
+                    "promotion_reason": promotion_reason,
+                },
             )
+            manifest = registry.update_manifest(
+                lead_type_name,
+                manifest["training_run_id"],
+                **mlflow_metadata,
+            )
+            if promoted:
+                promotion_mlflow_metadata = mlflow_utils.promote_training_run(
+                    training_run_id=manifest["training_run_id"],
+                    lead_type_name=lead_type_name,
+                    production_model_version=manifest["production_model_version"],
+                    reason=promotion_reason,
+                    tracking_db_path=training_config.mlflow_tracking_db_path,
+                    artifact_root=training_config.mlflow_artifact_root,
+                    experiment_name=experiment_name,
+                    registered_model_name=(
+                        training_config.mlflow_registered_model_name
+                    ),
+                    mlflow_run_id=manifest.get("mlflow_run_id"),
+                )
+                manifest = registry.update_manifest(
+                    lead_type_name,
+                    manifest["training_run_id"],
+                    **promotion_mlflow_metadata,
+                )
             log.info(
                 "Logged run '%s' to MLflow experiment '%s'",
-                manifest["version"],
+                manifest["training_run_id"],
                 experiment_name,
             )
             log.info(
@@ -577,9 +614,17 @@ def run_training(
         "lead_type_id": lead_type_id,
         "lead_type_name": lead_type_name,
         "model_path": model_path,
-        "model_version": manifest["version"],
+        "training_run_id": manifest["training_run_id"],
+        "model_version": manifest.get("production_model_version"),
+        "production_model_version": manifest.get("production_model_version"),
         "promotion_mode": promotion_mode,
-        "promotion_eligible": promotion_eligible,
+        "eligibility_status": eligibility_status,
+        "promotion_status": promotion_status,
+        "promotion_eligible": (
+            True
+            if eligibility_status == "eligible"
+            else False if eligibility_status == "not_eligible" else None
+        ),
         "promoted": promoted,
         "promotion_reason": promotion_reason,
         "promotion_comparison": promotion_comparison,
@@ -600,6 +645,7 @@ def _evaluate_currently_serving_model(
     target_cm: float,
     min_bid: float,
     bid_step: float,
+    chunk_size: int,
     log: logging.Logger,
 ) -> tuple[dict | None, dict | None]:
     """Evaluate the serving model on the challenger test rows.
@@ -618,6 +664,8 @@ def _evaluate_currently_serving_model(
         Minimum candidate bid.
     bid_step : float
         Increment between candidate bids.
+    chunk_size : int
+        Maximum rows processed per optimizer scoring chunk.
     log : logging.Logger | None
         Optional logger for structured output.
 
@@ -626,54 +674,59 @@ def _evaluate_currently_serving_model(
     tuple[dict | None, dict | None]
         Serving model metrics followed by optimizer metrics.
     """
-    serving_model, serving_manifest = registry.load_currently_serving_model(
-        lead_type_name
-    )
-
-    if serving_model is None:
+    serving_version = registry.currently_serving_version(lead_type_name)
+    if serving_version is None:
         log.info(
             "Nothing currently serving for '%s' (first model).",
             lead_type_name,
         )
         return None, None
 
-    serving_feature_cols = serving_manifest.get("feature_cols") or []
+    serving_model, serving_manifest = registry.load_currently_serving_model(
+        lead_type_name
+    )
+    if serving_model is None or serving_manifest is None:
+        raise RuntimeError(
+            "A currently-serving model is configured for "
+            f"'{lead_type_name}' as version '{serving_version}', but its "
+            "manifest or model artifact could not be loaded."
+        )
 
-    try:
-        X_serving = test_df[serving_feature_cols]
-        _, _, serving_metrics = metrics.evaluate_model(
-            serving_model,
-            X_serving,
-            y_test,
+    serving_feature_cols = serving_manifest.get("feature_cols") or []
+    if not serving_feature_cols:
+        raise ValueError(
+            "Currently-serving model manifest "
+            f"'{serving_version}' has no feature_cols."
         )
-        serving_optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
-            test_eval_df=test_df,
-            model=serving_model,
-            feature_cols=serving_feature_cols,
-            target_cm=target_cm,
-            min_bid=min_bid,
-            bid_step=bid_step,
-            log=log,
-            log_summary_result=False,
-        )
-        serving_optimizer_summary = (
-            serving_optimizer_result[1].to_dict() if serving_optimizer_result else {}
-        )
-        log.info(
-            "Currently-serving model (%s) re-scored on this test set: " "ROC AUC=%.4f",
-            serving_manifest.get("version"),
-            serving_metrics.roc_auc,
-        )
-        return serving_metrics.to_dict(), serving_optimizer_summary
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "Could not score currently-serving model %s on the current "
-            "test set (%s); treating as nothing comparable currently "
-            "serving.",
-            serving_manifest.get("version"),
-            exc,
-        )
-        return None, None
+
+    X_serving = test_df[serving_feature_cols]
+    _, _, serving_metrics = metrics.evaluate_model(
+        serving_model,
+        X_serving,
+        y_test,
+    )
+    serving_optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
+        test_eval_df=test_df,
+        model=serving_model,
+        feature_cols=serving_feature_cols,
+        target_cm=target_cm,
+        min_bid=min_bid,
+        bid_step=bid_step,
+        chunk_size=chunk_size,
+        log=log,
+        log_summary_result=False,
+    )
+    serving_optimizer_summary = (
+        serving_optimizer_result[1].to_dict() if serving_optimizer_result else {}
+    )
+    log.info(
+        "Currently-serving model (%s) re-scored on this test set: "
+        "log loss=%.4f, PR AUC=%.4f",
+        serving_manifest.get("version"),
+        serving_metrics.log_loss,
+        serving_metrics.pr_auc,
+    )
+    return serving_metrics.to_dict(), serving_optimizer_summary
 
 
 def main(argv: list[str] | None = None) -> int:

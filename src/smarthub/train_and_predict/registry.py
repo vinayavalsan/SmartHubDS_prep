@@ -1,6 +1,9 @@
 """Versioned model registry and promotion controls for SmartHub.
 
-This module saves model versions, manages serving pointers, and supports rollback.
+Training runs and production model versions are separate concepts:
+- every saved candidate receives a unique ``training_run_id``;
+- only promoted models receive a sequential production version such as
+  ``auto_v1``.
 """
 
 from __future__ import annotations
@@ -9,133 +12,107 @@ import argparse
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from smarthub.core import paths
 
-# Redirectable in tests the same way smarthub.core.io.TRAINING_DIR is.
 MODEL_DIR_ROOT = paths.data_dir() / "models"
-
-_VERSION_RE = re.compile(r"^v(\d+)_")
+_PRODUCTION_VERSION_RE = re.compile(r"^(?P<lead>[a-z0-9_]+)_v(?P<number>\d+)$")
 
 
 def model_dir(lead_type_name: str) -> Path:
-    """Return the model directory for a lead type.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-
-    Returns
-    -------
-    pathlib.Path
-        Lead-type model directory.
-    """
     return MODEL_DIR_ROOT / lead_type_name.strip().lower()
 
 
 def _timestamp() -> str:
-    """Return a sortable UTC timestamp for model version names."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _version_number(version: str) -> int:
-    """Extract the numeric sequence from a model version."""
-    match = _VERSION_RE.match(version)
-    return int(match.group(1)) if match else 0
+def _lead_type_slug(lead_type_name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", lead_type_name.strip().lower()).strip("_")
+    if not slug:
+        raise ValueError("lead_type_name must contain at least one letter or number.")
+    return slug
 
 
-def list_versions(lead_type_name: str) -> list[str]:
-    """List saved model versions from oldest to newest.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-
-    Returns
-    -------
-    list[str]
-        Model version identifiers ordered oldest to newest.
-    """
-    folder = model_dir(lead_type_name)
-    if not folder.exists():
-        return []
-    versions = [p.stem for p in folder.glob("v*.json") if _VERSION_RE.match(p.stem)]
-    return sorted(versions, key=_version_number)
-
-
-def _next_version_number(lead_type_name: str) -> int:
-    """Return the next model version sequence number."""
-    existing = [_version_number(v) for v in list_versions(lead_type_name)]
-    return (max(existing) + 1) if existing else 1
+def _new_training_run_id() -> str:
+    return f"run_{_timestamp()}_{uuid.uuid4().hex[:8]}"
 
 
 def version_path(lead_type_name: str, version: str) -> Path:
-    """Return the model artifact path for a version.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-    version : str | None
-        Optional training-table or model version identifier.
-
-    Returns
-    -------
-    pathlib.Path
-        Model artifact path.
-    """
+    """Return the artifact path for a training run identifier."""
     return model_dir(lead_type_name) / f"{version}.pkl"
 
 
 def manifest_path(lead_type_name: str, version: str) -> Path:
-    """Return the manifest path for a model version.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-    version : str | None
-        Optional training-table or model version identifier.
-
-    Returns
-    -------
-    pathlib.Path
-        Model manifest path.
-    """
+    """Return the manifest path for a training run identifier."""
     return model_dir(lead_type_name) / f"{version}.json"
 
 
 def load_manifest(lead_type_name: str, version: str) -> dict:
-    """Load a model-version manifest.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-    version : str | None
-        Optional training-table or model version identifier.
-
-    Returns
-    -------
-    dict
-        Parsed model manifest.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the requested manifest does not exist.
-    """
     path = manifest_path(lead_type_name, version)
     if not path.exists():
         raise FileNotFoundError(
-            f"No manifest for lead type '{lead_type_name}' version '{version}'."
+            f"No manifest for lead type '{lead_type_name}' training run '{version}'."
         )
     return json.loads(path.read_text())
+
+
+def update_manifest(lead_type_name: str, version: str, **updates) -> dict:
+    """Update mutable lifecycle metadata in a saved training-run manifest."""
+    manifest = load_manifest(lead_type_name, version)
+    manifest.update(updates)
+    manifest_path(lead_type_name, version).write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False, default=str)
+    )
+    return manifest
+
+
+def list_versions(lead_type_name: str) -> list[str]:
+    """List saved training-run identifiers from oldest to newest."""
+    folder = model_dir(lead_type_name)
+    if not folder.exists():
+        return []
+    manifests = []
+    for path in folder.glob("run_*.json"):
+        try:
+            manifest = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        manifests.append((manifest.get("created_at", ""), path.stem))
+    return [run_id for _, run_id in sorted(manifests)]
+
+
+def list_production_versions(lead_type_name: str) -> list[str]:
+    """List assigned production versions in numeric order."""
+    versions = []
+    folder = model_dir(lead_type_name)
+    if not folder.exists():
+        return versions
+    for path in folder.glob("run_*.json"):
+        try:
+            value = json.loads(path.read_text()).get("production_model_version")
+        except (OSError, json.JSONDecodeError):
+            continue
+        if value:
+            versions.append(value)
+    return sorted(set(versions), key=_production_version_number)
+
+
+def _production_version_number(version: str) -> int:
+    match = _PRODUCTION_VERSION_RE.match(version)
+    return int(match.group("number")) if match else 0
+
+
+def _next_production_model_version(lead_type_name: str) -> str:
+    existing = [
+        _production_version_number(v) for v in list_production_versions(lead_type_name)
+    ]
+    number = max(existing, default=0) + 1
+    return f"{_lead_type_slug(lead_type_name)}_v{number}"
 
 
 def save_version(
@@ -148,53 +125,36 @@ def save_version(
     lineage: dict,
     model_params: dict,
     promotion_mode: str,
-    promotion_eligible: bool | None,
+    eligibility_status: str,
+    promotion_status: str,
     promotion_decision_reason: str,
+    promotion_comparison: dict | None = None,
 ) -> dict:
-    """Save a new immutable model version without promoting it.
+    """Save one immutable candidate artifact identified by ``training_run_id``."""
+    import joblib
 
-    Inputs
-    ------
-    model : Any
-        Fitted model or model pipeline.
-    lead_type_name : str
-        Human-readable lead type name.
-    feature_cols : list[str]
-        Ordered model feature names.
-    metrics : dict
-        Model evaluation metrics.
-    optimizer_summary : dict | None
-        Offline optimizer summary metrics.
-    lineage : dict
-        Model and data lineage metadata.
-    model_params : dict
-        Parameters passed to the classifier.
-    promotion_mode : str
-        Promotion execution mode used for the training run.
-    promotion_eligible : bool | None
-        Whether the model passed the configured promotion policy, or ``None``
-        when promotion evaluation was disabled.
-    promotion_decision_reason : str
-        Explanation produced by the promotion policy.
-
-    Returns
-    -------
-    dict
-        Manifest for the saved model version.
-    """
-    import joblib  # lazy: registry.py must stay importable without the `ml` extra
+    allowed_eligibility = {"eligible", "not_eligible", "not_evaluated"}
+    allowed_promotion = {
+        "promoted",
+        "rejected",
+        "awaiting_manual_promotion",
+        "not_evaluated",
+    }
+    if eligibility_status not in allowed_eligibility:
+        raise ValueError(f"Unsupported eligibility_status: {eligibility_status!r}")
+    if promotion_status not in allowed_promotion:
+        raise ValueError(f"Unsupported promotion_status: {promotion_status!r}")
 
     folder = model_dir(lead_type_name)
     folder.mkdir(parents=True, exist_ok=True)
-    number = _next_version_number(lead_type_name)
-    version = f"v{number}_{_timestamp()}"
-
-    model_file = version_path(lead_type_name, version)
+    training_run_id = _new_training_run_id()
+    model_file = version_path(lead_type_name, training_run_id)
     joblib.dump(model, model_file)
 
     manifest = {
-        "version": version,
-        "version_number": number,
+        "training_run_id": training_run_id,
+        "version": training_run_id,  # compatibility for existing serving code
+        "production_model_version": None,
         "lead_type_name": lead_type_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_file),
@@ -204,54 +164,50 @@ def save_version(
         "lineage": lineage,
         "model_params": model_params,
         "promotion_mode": promotion_mode,
-        "promotion_eligible": promotion_eligible,
+        "eligibility_status": eligibility_status,
+        "promotion_status": promotion_status,
         "promotion_decision_reason": promotion_decision_reason,
+        "promotion_comparison": promotion_comparison or {},
+        "promotion_eligible": (
+            True
+            if eligibility_status == "eligible"
+            else False if eligibility_status == "not_eligible" else None
+        ),
         "promoted": False,
         "promoted_at": None,
+        "mlflow_run_id": None,
+        "mlflow_experiment_id": None,
+        "mlflow_model_uri": None,
+        "mlflow_registered_model_name": None,
+        "mlflow_registered_model_version": None,
     }
-    manifest_path(lead_type_name, version).write_text(
+    manifest_path(lead_type_name, training_run_id).write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False, default=str)
     )
     return manifest
 
 
 def _serving_pointer_path(lead_type_name: str) -> Path:
-    """Return the currently-serving pointer path."""
     return model_dir(lead_type_name) / "current.json"
 
 
 def currently_serving_version(lead_type_name: str) -> str | None:
-    """Return the currently-serving model version.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-
-    Returns
-    -------
-    str | None
-        Serving version identifier, or ``None``.
-    """
+    """Return the serving training-run identifier (legacy-compatible name)."""
     pointer = _serving_pointer_path(lead_type_name)
     if not pointer.exists():
         return None
-    return json.loads(pointer.read_text()).get("version")
+    payload = json.loads(pointer.read_text())
+    return payload.get("training_run_id") or payload.get("version")
+
+
+def currently_serving_production_version(lead_type_name: str) -> str | None:
+    pointer = _serving_pointer_path(lead_type_name)
+    if not pointer.exists():
+        return None
+    return json.loads(pointer.read_text()).get("production_model_version")
 
 
 def currently_serving_manifest(lead_type_name: str) -> dict | None:
-    """Load the currently-serving model manifest.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-
-    Returns
-    -------
-    dict | None
-        Serving manifest, or ``None``.
-    """
     version = currently_serving_version(lead_type_name)
     if version is None:
         return None
@@ -262,35 +218,11 @@ def currently_serving_manifest(lead_type_name: str) -> dict | None:
 
 
 def currently_serving_model_path(lead_type_name: str) -> Path | None:
-    """Return the currently-serving model artifact path.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-
-    Returns
-    -------
-    pathlib.Path | None
-        Serving model path, or ``None``.
-    """
     version = currently_serving_version(lead_type_name)
     return version_path(lead_type_name, version) if version else None
 
 
 def load_currently_serving_model(lead_type_name: str):
-    """Load the currently-serving model and manifest.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-
-    Returns
-    -------
-    tuple[Any | None, dict | None]
-        Loaded model followed by its manifest, or two ``None`` values.
-    """
     version = currently_serving_version(lead_type_name)
     if version is None:
         return None, None
@@ -298,58 +230,61 @@ def load_currently_serving_model(lead_type_name: str):
         manifest = load_manifest(lead_type_name, version)
     except FileNotFoundError:
         return None, None
-
     model_file = version_path(lead_type_name, version)
     if not model_file.exists():
         return None, None
     import joblib
 
-    model = joblib.load(model_file)
-    return model, manifest
+    return joblib.load(model_file), manifest
 
 
 def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
-    """Promote a saved model version to serve traffic.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-    version : str | None
-        Optional training-table or model version identifier.
-    reason : str
-        Human-readable reason for the operation.
-
-    Returns
-    -------
-    dict
-        Updated serving-pointer metadata.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the requested model version does not exist.
-    """
+    """Promote an eligible training run and assign a production version once."""
     if not manifest_path(lead_type_name, version).exists():
         raise FileNotFoundError(
-            f"Cannot promote unknown version '{version}' for '{lead_type_name}'."
+            f"Cannot promote unknown training run '{version}' for '{lead_type_name}'."
         )
 
-    previous = currently_serving_version(lead_type_name)
-    promoted_at = datetime.now(timezone.utc).isoformat()
-
     manifest = load_manifest(lead_type_name, version)
-    manifest["promoted"] = True
-    manifest["promoted_at"] = promoted_at
-    manifest["promotion_reason"] = reason
-    manifest_path(lead_type_name, version).write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False, default=str)
+    if manifest.get("eligibility_status") != "eligible":
+        raise ValueError(
+            f"Training run '{version}' is not eligible for promotion "
+            f"(status={manifest.get('eligibility_status')!r})."
+        )
+
+    previous_run_id = currently_serving_version(lead_type_name)
+    previous_production_version = currently_serving_production_version(lead_type_name)
+    promoted_at = datetime.now(timezone.utc).isoformat()
+    production_version = manifest.get("production_model_version")
+    if not production_version:
+        production_version = _next_production_model_version(lead_type_name)
+
+    manifest.update(
+        {
+            "production_model_version": production_version,
+            "promotion_status": "promoted",
+            "promoted": True,
+            "promoted_at": promoted_at,
+            "promotion_reason": reason,
+        }
+    )
+    update_manifest(
+        lead_type_name,
+        version,
+        production_model_version=production_version,
+        promotion_status="promoted",
+        promoted=True,
+        promoted_at=promoted_at,
+        promotion_reason=reason,
     )
 
     pointer = {
         "version": version,
+        "training_run_id": version,
+        "production_model_version": production_version,
         "promoted_at": promoted_at,
-        "previous_version": previous,
+        "previous_training_run_id": previous_run_id,
+        "previous_production_model_version": previous_production_version,
         "reason": reason,
     }
     _serving_pointer_path(lead_type_name).write_text(
@@ -363,44 +298,29 @@ def rollback(
     to_version: str | None = None,
     reason: str = "manual rollback",
 ) -> dict:
-    """Move the serving pointer to an earlier model version.
-
-    Inputs
-    ------
-    lead_type_name : str
-        Human-readable lead type name.
-    to_version : str | None
-        Optional target model version for rollback.
-    reason : str
-        Human-readable reason for the operation.
-
-    Returns
-    -------
-    dict
-        Updated serving-pointer metadata.
-
-    Raises
-    ------
-    ValueError
-        If no valid earlier model version is available.
-    """
-    versions = list_versions(lead_type_name)
-    serving_version = currently_serving_version(lead_type_name)
-
+    """Move serving to an earlier already-promoted training run."""
+    promoted = []
+    for run_id in list_versions(lead_type_name):
+        manifest = load_manifest(lead_type_name, run_id)
+        if manifest.get("production_model_version"):
+            promoted.append(
+                (
+                    _production_version_number(manifest["production_model_version"]),
+                    run_id,
+                )
+            )
+    promoted.sort()
+    serving = currently_serving_version(lead_type_name)
+    run_ids = [run_id for _, run_id in promoted]
     if to_version is None:
-        if serving_version is None or serving_version not in versions:
+        if serving not in run_ids:
             raise ValueError(
-                f"No currently-serving model for '{lead_type_name}' to roll "
-                "back from."
+                f"No currently-serving promoted model for '{lead_type_name}'."
             )
-        idx = versions.index(serving_version)
+        idx = run_ids.index(serving)
         if idx == 0:
-            raise ValueError(
-                f"'{serving_version}' is the earliest version for "
-                f"'{lead_type_name}'; nothing to roll back to."
-            )
-        to_version = versions[idx - 1]
-
+            raise ValueError(f"'{serving}' is the earliest promoted model.")
+        to_version = run_ids[idx - 1]
     return promote(lead_type_name, to_version, reason=reason)
 
 
@@ -422,93 +342,164 @@ def decide_promotion(
     currently_serving_metrics: dict | None,
     currently_serving_optimizer: dict | None,
     *,
-    min_roc_auc_regression: float = 0.01,
-    min_profit_ratio: float = 0.98,
+    max_log_loss_regression: float,
+    min_profit_ratio: float,
+    max_absolute_profit_loss_tolerance: float,
+    target_cm: float,
+    max_log_loss: float,
+    min_expected_profit: float,
 ) -> PromotionDecision:
-    """Compare challenger and serving metrics and decide promotion.
+    """Compare challenger and serving performance and decide promotion.
 
-    Inputs
-    ------
-    challenger_metrics : dict
-        Challenger model metrics.
-    challenger_optimizer : dict | None
-        Challenger optimizer metrics.
-    currently_serving_metrics : dict | None
-        Serving model metrics, when available.
-    currently_serving_optimizer : dict | None
-        Serving optimizer metrics, when available.
-    min_roc_auc_regression : float
-        Maximum permitted ROC AUC regression.
-    min_profit_ratio : float
-        Minimum challenger-to-serving profit ratio.
-
-    Returns
-    -------
-    PromotionDecision
-        Promotion decision and comparison details.
+    Every challenger must pass absolute log-loss, expected-profit, and
+    contribution-margin gates. When a serving model exists, the challenger
+    must also satisfy the relative profit and log-loss requirements.
     """
-    if currently_serving_metrics is None:
-        return PromotionDecision(
-            True,
-            "Nothing currently serving for this lead type — promoting by default.",
-        )
-
-    challenger_auc = challenger_metrics.get("roc_auc", 0.0)
-    serving_auc = currently_serving_metrics.get("roc_auc", 0.0)
-    auc_drop = serving_auc - challenger_auc
-    comparison = {
-        "challenger_roc_auc": challenger_auc,
-        "currently_serving_roc_auc": serving_auc,
-        "roc_auc_drop": auc_drop,
-    }
-    if auc_drop > min_roc_auc_regression:
-        return PromotionDecision(
-            False,
-            f"Challenger ROC AUC regressed by {auc_drop:.4f} versus the "
-            f"currently-serving model (tolerance {min_roc_auc_regression:.4f}).",
-            comparison,
-        )
-
-    serving_profit = (currently_serving_optimizer or {}).get(
-        "recommended_bid_total_expected_profit"
-    )
+    challenger_log_loss = challenger_metrics.get("log_loss")
     challenger_profit = (challenger_optimizer or {}).get(
         "recommended_bid_total_expected_profit"
     )
-    comparison["challenger_profit"] = challenger_profit
-    comparison["currently_serving_profit"] = serving_profit
+    challenger_cm = (challenger_optimizer or {}).get("avg_recommended_bid_cm_if_won")
 
-    if serving_profit is not None and challenger_profit is not None:
-        if serving_profit <= 0:
-            # The currently-serving model wasn't profitable on this test set;
-            # any non-regressing challenger profit is an improvement or a wash.
-            ok = challenger_profit >= serving_profit
-        else:
-            ok = challenger_profit >= serving_profit * min_profit_ratio
-        comparison["profit_ratio"] = (
-            (challenger_profit / serving_profit) if serving_profit else None
+    comparison = {
+        "challenger_log_loss": challenger_log_loss,
+        "maximum_log_loss": max_log_loss,
+        "challenger_profit": challenger_profit,
+        "minimum_expected_profit": min_expected_profit,
+        "challenger_recommended_cm": challenger_cm,
+        "target_cm": target_cm,
+    }
+
+    if challenger_log_loss is None:
+        return PromotionDecision(
+            False,
+            "Challenger log loss is unavailable.",
+            comparison,
         )
-        if not ok:
-            return PromotionDecision(
-                False,
-                f"Challenger expected profit ({challenger_profit:.2f}) is below "
-                f"{min_profit_ratio:.0%} of the currently-serving model's "
-                f"({serving_profit:.2f}) on the same held-out test set.",
-                comparison,
-            )
+    if challenger_log_loss > max_log_loss:
+        return PromotionDecision(
+            False,
+            f"Challenger log loss ({challenger_log_loss:.4f}) exceeds the "
+            f"maximum allowed ({max_log_loss:.4f}).",
+            comparison,
+        )
+
+    if challenger_profit is None:
+        return PromotionDecision(
+            False,
+            "Challenger expected profit is unavailable.",
+            comparison,
+        )
+    if challenger_profit < min_expected_profit:
+        return PromotionDecision(
+            False,
+            f"Challenger expected profit ({challenger_profit:.2f}) is below "
+            f"the required minimum ({min_expected_profit:.2f}).",
+            comparison,
+        )
+
+    if challenger_cm is None:
+        return PromotionDecision(
+            False,
+            "Challenger recommended contribution margin is unavailable.",
+            comparison,
+        )
+    if challenger_cm < target_cm:
+        return PromotionDecision(
+            False,
+            f"Challenger recommended CM ({challenger_cm:.2%}) is below the "
+            f"optimizer target CM ({target_cm:.2%}).",
+            comparison,
+        )
+
+    if currently_serving_metrics is None:
         return PromotionDecision(
             True,
-            f"Challenger profit {challenger_profit:.2f} >= "
-            f"{min_profit_ratio:.0%} of currently-serving profit "
-            f"{serving_profit:.2f} (ROC AUC drop {auc_drop:.4f} within tolerance).",
+            f"First model passed all absolute promotion thresholds: log loss "
+            f"{challenger_log_loss:.4f}, expected profit "
+            f"{challenger_profit:.2f}, and recommended CM "
+            f"{challenger_cm:.2%}.",
+            comparison,
+        )
+
+    serving_log_loss = currently_serving_metrics.get("log_loss")
+    serving_profit = (currently_serving_optimizer or {}).get(
+        "recommended_bid_total_expected_profit"
+    )
+    comparison.update(
+        {
+            "currently_serving_log_loss": serving_log_loss,
+            "currently_serving_profit": serving_profit,
+            "log_loss_regression": None,
+        }
+    )
+
+    if serving_log_loss is None:
+        return PromotionDecision(
+            False,
+            "Currently-serving model log loss is unavailable.",
+            comparison,
+        )
+    if serving_profit is None:
+        return PromotionDecision(
+            False,
+            "Currently-serving model expected profit is unavailable.",
+            comparison,
+        )
+    if serving_profit <= 0:
+        return PromotionDecision(
+            False,
+            f"Currently-serving expected profit ({serving_profit:.2f}) must be "
+            "greater than zero for a valid relative profit comparison.",
+            comparison,
+        )
+
+    log_loss_regression = challenger_log_loss - serving_log_loss
+    profit_ratio = challenger_profit / serving_profit
+    absolute_profit_loss = serving_profit - challenger_profit
+    comparison["log_loss_regression"] = log_loss_regression
+    comparison["profit_ratio"] = profit_ratio
+    comparison["absolute_profit_loss"] = absolute_profit_loss
+    comparison["max_absolute_profit_loss_tolerance"] = (
+        max_absolute_profit_loss_tolerance
+    )
+
+    if profit_ratio < min_profit_ratio:
+        return PromotionDecision(
+            False,
+            f"Challenger expected profit ({challenger_profit:.2f}) is below "
+            f"{min_profit_ratio:.0%} of the currently-serving model's "
+            f"({serving_profit:.2f}) on the same held-out rows.",
+            comparison,
+        )
+
+    if absolute_profit_loss > max_absolute_profit_loss_tolerance:
+        return PromotionDecision(
+            False,
+            f"Challenger expected profit is lower by "
+            f"{absolute_profit_loss:.2f}, exceeding the allowed "
+            "absolute profit-loss tolerance "
+            f"of {max_absolute_profit_loss_tolerance:.2f} on the same held-out rows.",
+            comparison,
+        )
+
+    if log_loss_regression > max_log_loss_regression:
+        return PromotionDecision(
+            False,
+            f"Challenger log loss regressed by {log_loss_regression:.4f} versus "
+            f"the currently-serving model (tolerance "
+            f"{max_log_loss_regression:.4f}).",
             comparison,
         )
 
     return PromotionDecision(
         True,
-        f"ROC AUC drop {auc_drop:.4f} within tolerance "
-        f"({min_roc_auc_regression:.4f}); no optimizer comparison available "
-        "on one or both sides.",
+        f"Challenger passed the absolute thresholds and satisfies the "
+        f"{min_profit_ratio:.0%} relative profit requirement and the "
+        f"{max_absolute_profit_loss_tolerance:.2f} absolute profit-loss "
+        f"tolerance; recommended CM "
+        f"is {challenger_cm:.2%}, and log-loss regression "
+        f"{log_loss_regression:.4f} is within tolerance.",
         comparison,
     )
 
@@ -548,16 +539,43 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.command == "promote":
+        from . import config, mlflow_utils
+
         pointer = promote(
             args.lead_type_name,
             args.version,
             reason=args.reason,
         )
-        logging.getLogger(__name__).info(
-            "Promoted %s for %s (previous=%s).",
-            pointer["version"],
+        manifest = load_manifest(args.lead_type_name, args.version)
+        training_config = config.load_training_config()
+        experiment_name = (
+            f"{training_config.mlflow_experiment_name}_{args.lead_type_name}"
+        )
+        mlflow_metadata = mlflow_utils.promote_training_run(
+            training_run_id=args.version,
+            lead_type_name=args.lead_type_name,
+            production_model_version=pointer["production_model_version"],
+            reason=args.reason,
+            tracking_db_path=training_config.mlflow_tracking_db_path,
+            artifact_root=training_config.mlflow_artifact_root,
+            experiment_name=experiment_name,
+            registered_model_name=training_config.mlflow_registered_model_name,
+            mlflow_run_id=manifest.get("mlflow_run_id"),
+        )
+        update_manifest(
             args.lead_type_name,
-            pointer.get("previous_version"),
+            args.version,
+            **mlflow_metadata,
+        )
+        logging.getLogger(__name__).info(
+            "Promoted %s for %s (training_run_id=%s, previous=%s, "
+            "mlflow_model=%s v%s).",
+            pointer["production_model_version"],
+            args.lead_type_name,
+            pointer["training_run_id"],
+            pointer.get("previous_production_model_version"),
+            mlflow_metadata["mlflow_registered_model_name"],
+            mlflow_metadata["mlflow_registered_model_version"],
         )
     return 0
 

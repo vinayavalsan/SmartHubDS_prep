@@ -181,8 +181,22 @@ def test_prepare_training_data_missing_target(monkeypatch):
     monkeypatch.setattr(
         preprocessing.io, "load_training_table", lambda name, v=None: table
     )
+    monkeypatch.setattr(
+        preprocessing.io,
+        "load_training_metadata",
+        lambda name, v=None: {
+            "data_min_created_at": "2026-06-20",
+            "data_max_created_at": "2026-07-06",
+            "row_count": len(table),
+        },
+    )
+
     with pytest.raises(ValueError, match="missing target"):
-        preprocessing.prepare_training_data(fe.LEAD_TYPE_AUTO, "auto")
+        preprocessing.prepare_training_data(
+            fe.LEAD_TYPE_AUTO,
+            "auto",
+            version="test-version",
+        )
 
 
 # --- Bid optimizer math ------------------------------------------------------
@@ -255,7 +269,8 @@ def test_resolve_model_uri_uses_pinned_ini_version_over_currently_serving(
         lineage={},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="not evaluated",
     )
     registry.promote("auto", manifest["version"])
@@ -278,7 +293,8 @@ def test_resolve_model_uri_falls_back_to_currently_serving(tmp_path, monkeypatch
         lineage={},
         model_params={},
         promotion_mode="manual",
-        promotion_eligible=None,
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
         promotion_decision_reason="not evaluated",
     )
     registry.promote("auto", manifest["version"])
@@ -309,6 +325,10 @@ def test_run_bid_optimizer_evaluation_summary():
         test_eval_df=df,
         model=_StubModel(0.5),
         feature_cols=feature_cols,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
+        chunk_size=100,
     )
     assert out is not None
     eval_df, summary = out

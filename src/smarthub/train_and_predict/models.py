@@ -13,7 +13,9 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 def build_logistic_regression_model(
-    numeric_features, categorical_features, model_params, calibrate=False
+    numeric_features,
+    categorical_features,
+    model_params,
 ):
     """Build an unfitted logistic-regression pipeline.
 
@@ -25,9 +27,6 @@ def build_logistic_regression_model(
         Categorical feature names.
     model_params : dict
         Parameters passed to the classifier.
-    calibrate : bool
-        Whether to apply probability calibration.
-
     Returns
     -------
     sklearn.pipeline.Pipeline
@@ -60,11 +59,13 @@ def build_logistic_regression_model(
             ("classifier", LogisticRegression(**model_params)),
         ]
     )
-    return _maybe_calibrate(pipeline, calibrate)
+    return pipeline
 
 
 def build_xgboost_model(
-    numeric_features, categorical_features, model_params, calibrate=False
+    numeric_features,
+    categorical_features,
+    model_params,
 ):
     """Build an unfitted XGBoost pipeline.
 
@@ -76,9 +77,6 @@ def build_xgboost_model(
         Categorical feature names.
     model_params : dict
         Parameters passed to the classifier.
-    calibrate : bool
-        Whether to apply probability calibration.
-
     Returns
     -------
     sklearn.pipeline.Pipeline
@@ -119,11 +117,13 @@ def build_xgboost_model(
         **model_params,
     )
     pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", classifier)])
-    return _maybe_calibrate(pipeline, calibrate)
+    return pipeline
 
 
 def build_lightgbm_model(
-    numeric_features, categorical_features, model_params, calibrate=False
+    numeric_features,
+    categorical_features,
+    model_params,
 ):
     """Build an unfitted LightGBM pipeline.
 
@@ -135,9 +135,6 @@ def build_lightgbm_model(
         Categorical feature names.
     model_params : dict
         Parameters passed to the classifier.
-    calibrate : bool
-        Whether to apply probability calibration.
-
     Returns
     -------
     sklearn.pipeline.Pipeline
@@ -171,11 +168,11 @@ def build_lightgbm_model(
 
     classifier = LGBMClassifier(monotone_constraints=monotone, **model_params)
     pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", classifier)])
-    return _maybe_calibrate(pipeline, calibrate)
+    return pipeline
 
 
-def _maybe_calibrate(pipeline, calibrate):
-    """Apply isotonic probability calibration when enabled.
+def _maybe_calibrate(pipeline, calibrate, calibration_method, calibration_cv):
+    """Apply the configured probability calibration when enabled.
 
     Inputs
     ------
@@ -183,6 +180,10 @@ def _maybe_calibrate(pipeline, calibrate):
         Classifier pipeline to calibrate.
     calibrate : bool
         Whether to apply probability calibration.
+    calibration_method : str
+        Calibration method passed to ``CalibratedClassifierCV``.
+    calibration_cv : int
+        Number of calibration cross-validation folds.
 
     Returns
     -------
@@ -196,7 +197,9 @@ def _maybe_calibrate(pipeline, calibrate):
     # Positional estimator arg works across sklearn versions
     # (estimator= / base_estimator=). Isotonic is monotonic, so it preserves
     # the bid monotonicity above.
-    return CalibratedClassifierCV(pipeline, method="isotonic", cv=3)
+    return CalibratedClassifierCV(
+        pipeline, method=calibration_method, cv=calibration_cv
+    )
 
 
 MODEL_BUILDERS = {
@@ -211,7 +214,10 @@ def build_model(
     numeric_features,
     categorical_features,
     model_params,
-    calibrate=False,
+    *,
+    calibrate,
+    calibration_method,
+    calibration_cv,
 ):
     """Build the configured classifier pipeline.
 
@@ -227,6 +233,10 @@ def build_model(
         Parameters passed to the classifier.
     calibrate : bool
         Whether to apply probability calibration.
+    calibration_method : str
+        Calibration method passed to ``CalibratedClassifierCV``.
+    calibration_cv : int
+        Number of calibration cross-validation folds.
 
     Returns
     -------
@@ -246,9 +256,14 @@ def build_model(
             f"Unknown model_type: {model_type!r}. Supported: {supported}."
         ) from exc
 
-    return builder(
+    pipeline = builder(
         numeric_features,
         categorical_features,
         model_params,
-        calibrate,
+    )
+    return _maybe_calibrate(
+        pipeline,
+        calibrate=calibrate,
+        calibration_method=calibration_method,
+        calibration_cv=calibration_cv,
     )

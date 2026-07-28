@@ -59,19 +59,31 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
         Prepared dataframe, numeric features, categorical features, and
     preparation summary.
     """
-    # Resolve which training-table version we're using (for model lineage).
+    # Resolve the exact training-table version used for model lineage.
     resolved_version = version
     if resolved_version is None:
         versions = io.training_versions(lead_type_name)
-        resolved_version = versions[-1] if versions else None
-    manifest = {}
-    try:
-        if resolved_version is not None:
-            manifest = io.load_training_metadata(lead_type_name, resolved_version)
-    except Exception:  # noqa: BLE001 - lineage is best-effort
-        manifest = {}
+        if not versions:
+            raise FileNotFoundError(
+                "No training-table versions exist for " f"lead type '{lead_type_name}'."
+            )
+        resolved_version = versions[-1]
 
-    table = io.load_training_table(lead_type_name, version)
+    manifest = io.load_training_metadata(lead_type_name, resolved_version)
+    required_metadata = {
+        "data_min_created_at",
+        "data_max_created_at",
+        "row_count",
+    }
+    missing_metadata = sorted(required_metadata.difference(manifest))
+    if missing_metadata:
+        raise ValueError(
+            "Training metadata is missing required fields for "
+            f"'{lead_type_name}' version '{resolved_version}': "
+            f"{missing_metadata}"
+        )
+
+    table = io.load_training_table(lead_type_name, resolved_version)
     raw_rows = len(table)
 
     numeric, categorical = config.feature_columns(lead_type_id)
@@ -110,9 +122,9 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
         "win_rate": (float(frame[config.TARGET_COL].mean()) if len(frame) else None),
         # Lineage — what data this training table came from.
         "training_table_version": resolved_version,
-        "data_min_created_at": manifest.get("data_min_created_at"),
-        "data_max_created_at": manifest.get("data_max_created_at"),
-        "source_row_count": manifest.get("row_count"),
+        "data_min_created_at": manifest["data_min_created_at"],
+        "data_max_created_at": manifest["data_max_created_at"],
+        "source_row_count": manifest["row_count"],
     }
     return frame, numeric, categorical, summary
 
