@@ -58,6 +58,7 @@ def log_training_run(
     artifact_root,
     experiment_name,
     run_name,
+    training_config_path,
     registered_model_name=None,
     extra_params=None,
     extra_tags=None,
@@ -68,6 +69,9 @@ def log_training_run(
     Mutable lifecycle fields such as ``promotion_status`` and ``promoted`` are
     stored only as tags. MLflow parameters are immutable and therefore must not
     be used for values that change during a later manual promotion.
+
+    The exact training YAML used for the run is logged under the MLflow
+    ``config`` artifact directory.
 
     ``registered_model_name`` is retained for backward compatibility but model
     registration is intentionally handled by :func:`promote_training_run`, so
@@ -101,6 +105,10 @@ def log_training_run(
                 mlflow.log_metric(metric_name, metric_value)
 
         mlflow.log_artifacts(report_dir, artifact_path=report_artifact_path)
+        mlflow.log_artifact(
+            str(training_config_path),
+            artifact_path="config",
+        )
         mlflow.log_params(dict(model_params))
         mlflow.sklearn.log_model(
             sk_model=model,

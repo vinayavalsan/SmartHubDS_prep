@@ -124,13 +124,18 @@ def save_version(
     optimizer_summary: dict | None,
     lineage: dict,
     model_params: dict,
+    training_config: dict,
     promotion_mode: str,
     eligibility_status: str,
     promotion_status: str,
     promotion_decision_reason: str,
     promotion_comparison: dict | None = None,
 ) -> dict:
-    """Save one immutable candidate artifact identified by ``training_run_id``."""
+    """Save one immutable candidate artifact identified by ``training_run_id``.
+
+    The manifest stores the resolved training configuration so the model can
+    be audited and reproduced without depending on the current YAML file.
+    """
     import joblib
 
     allowed_eligibility = {"eligible", "not_eligible", "not_evaluated"}
@@ -163,6 +168,7 @@ def save_version(
         "optimizer_summary": optimizer_summary or {},
         "lineage": lineage,
         "model_params": model_params,
+        "training_config": training_config,
         "promotion_mode": promotion_mode,
         "eligibility_status": eligibility_status,
         "promotion_status": promotion_status,

@@ -296,18 +296,21 @@ def run_training(
 
     model_type = training_config.model_type
     model_params = training_config.model_parameters
-    calibrate = training_config.calibrate
+    calibration_enabled = training_config.calibration_enabled
 
     log.info("Training Model")
     log.info("  Model type                            : %s", model_type)
-    log.info("  Calibrate probabilities               : %s", calibrate)
+    log.info(
+        "  Calibration enabled                   : %s",
+        calibration_enabled,
+    )
 
     model = models.build_model(
         model_type,
         numeric,
         categorical,
         model_params,
-        calibrate=calibrate,
+        calibration_enabled=calibration_enabled,
         calibration_method=training_config.calibration_method,
         calibration_cv=training_config.calibration_cv,
     )
@@ -385,7 +388,7 @@ def run_training(
 
     lineage = {
         "model_type": model_type,
-        "calibrated": bool(calibrate),
+        "calibrated": bool(calibration_enabled),
         "split_strategy": split_settings["strategy"],
         "split_test_size": split_settings["test_size"],
         "training_table_version": prep_summary["training_table_version"],
@@ -487,6 +490,7 @@ def run_training(
         optimizer_summary=optimizer_summary_dict,
         lineage=lineage,
         model_params=model_params,
+        training_config=training_config.as_dict(),
         promotion_mode=promotion_mode,
         eligibility_status=eligibility_status,
         promotion_status=promotion_status,
@@ -557,6 +561,9 @@ def run_training(
                 artifact_root=training_config.mlflow_artifact_root,
                 experiment_name=experiment_name,
                 run_name=manifest["training_run_id"],
+                training_config_path=Path(
+                    training_config.raw["resolved"]["config_path"]
+                ),
                 extra_params={
                     "lead_type_name": lead_type_name,
                     "training_run_id": manifest["training_run_id"],

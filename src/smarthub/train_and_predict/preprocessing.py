@@ -208,7 +208,7 @@ def serving_frame(records, lead_type_id):
         Model-ready serving dataframe.
     """
     raw = records.copy() if isinstance(records, pd.DataFrame) else pd.DataFrame(records)
-    derived = fe.derive_serving_features(raw)
+    derived = fe.derive_serving_features(raw, lead_type_id=lead_type_id)
 
     numeric, categorical = config.feature_columns(lead_type_id)
     feature_cols = numeric + categorical

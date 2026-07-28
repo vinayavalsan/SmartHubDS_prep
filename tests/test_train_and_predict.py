@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from smarthub.core.lead_types import lead_type_id
 from smarthub.feature_engineering import features as fe
 from smarthub.server import predict
 from smarthub.train_and_predict import (
@@ -23,26 +24,38 @@ from smarthub.train_and_predict import (
 
 
 def test_model_feature_columns_auto_vs_home():
-    num_auto, cat_auto = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
-    num_home, cat_home = fe.model_feature_columns(fe.LEAD_TYPE_HOME)
+    num_auto, cat_auto = fe.model_feature_columns(lead_type_id("auto"))
+    num_home, cat_home = fe.model_feature_columns(lead_type_id("home"))
+
+    auto_features = set(num_auto) | set(cat_auto)
+    home_features = set(num_home) | set(cat_home)
 
     # auto-only features present for auto, absent for home
-    assert "multi_vehicle" in num_auto and "num_vehicles" in num_auto
-    assert "multi_vehicle" not in num_home and "num_vehicles" not in num_home
-    assert "home_owner" in cat_auto and "home_owner" not in cat_home
+    for col in ("multi_vehicle", "num_vehicles", "home_owner"):
+        assert col in auto_features
+        assert col not in home_features
+
     # home-only features present for home, absent for auto
-    assert "num_home_claims" in num_home and "num_home_claims" not in num_auto
-    assert "home_property_type" in cat_home
-    assert "home_property_type" not in cat_auto
+    for col in ("num_home_claims", "home_property_type"):
+        assert col in home_features
+        assert col not in auto_features
+
     # shared features present in both
-    assert fe.AGE_COHORT_COLUMN in cat_auto and fe.AGE_COHORT_COLUMN in cat_home
-    for col in ["is_married", "created_hour", "is_workday"]:
-        assert col in num_auto and col in num_home
-    assert "state" in cat_auto and "state" in cat_home
-    assert "traffic_tier" in cat_auto and "traffic_tier" in cat_home
+    for col in (
+        "age_cohort",
+        "is_married",
+        "created_hour",
+        "is_workday",
+        "state",
+        "traffic_tier",
+    ):
+        assert col in auto_features
+        assert col in home_features
+
     # high-cardinality / redundant identifiers are excluded
-    assert "source_type_id" not in cat_auto
-    assert "account_id" not in cat_auto
+    for col in ("source_type_id", "account_id"):
+        assert col not in auto_features
+        assert col not in home_features
 
 
 def test_derive_serving_features_parity():
@@ -90,8 +103,8 @@ def test_serving_frame_selects_and_normalizes():
         "created_dayofweek": 2,
         "bid": 0.25,
     }
-    frame = preprocessing.serving_frame([record], fe.LEAD_TYPE_AUTO)
-    numeric, categorical = config.feature_columns(fe.LEAD_TYPE_AUTO)
+    frame = preprocessing.serving_frame([record], lead_type_id("auto"))
+    numeric, categorical = config.feature_columns(lead_type_id("auto"))
 
     assert list(frame.columns) == numeric + categorical
     # ids normalised to strings for one-hot; blank -> NAvail
@@ -106,7 +119,7 @@ def test_serving_frame_selects_and_normalizes():
 
 
 def _fake_training_table():
-    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
     n = 6
     data = {
         "id": range(n),
@@ -140,7 +153,7 @@ def test_prepare_training_data(monkeypatch):
     )
 
     frame, numeric, categorical, summary = preprocessing.prepare_training_data(
-        fe.LEAD_TYPE_AUTO, "auto"
+        lead_type_id("auto"), "auto"
     )
     assert summary["training_rows"] == len(table)
     assert summary["win_rate"] == pytest.approx(0.5)
@@ -194,7 +207,7 @@ def test_prepare_training_data_missing_target(monkeypatch):
 
     with pytest.raises(ValueError, match="missing target"):
         preprocessing.prepare_training_data(
-            fe.LEAD_TYPE_AUTO,
+            lead_type_id("auto"),
             "auto",
             version="test-version",
         )
@@ -252,7 +265,7 @@ def test_optimize_bid_skips_when_no_room():
 def test_resolve_model_uri_prefers_env_override(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
     monkeypatch.setenv("MODEL_URI", "s3://somewhere/pinned-model.pkl")
-    resolved = predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
+    resolved = predict.resolve_model_uri(lead_type_id("auto"))
     assert resolved == "s3://somewhere/pinned-model.pkl"
 
 
@@ -269,6 +282,7 @@ def test_resolve_model_uri_uses_pinned_ini_version_over_currently_serving(
         optimizer_summary={},
         lineage={},
         model_params={},
+        training_config={},
         promotion_mode="manual",
         eligibility_status="eligible",
         promotion_status="awaiting_manual_promotion",
@@ -277,7 +291,7 @@ def test_resolve_model_uri_uses_pinned_ini_version_over_currently_serving(
     registry.promote("auto", manifest["version"])
     monkeypatch.setattr(config, "active_model_version", lambda: manifest["version"])
 
-    resolved = predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
+    resolved = predict.resolve_model_uri(lead_type_id("auto"))
     assert resolved == str(registry.version_path("auto", manifest["version"]))
 
 
@@ -293,6 +307,7 @@ def test_resolve_model_uri_falls_back_to_currently_serving(tmp_path, monkeypatch
         optimizer_summary={},
         lineage={},
         model_params={},
+        training_config={},
         promotion_mode="manual",
         eligibility_status="eligible",
         promotion_status="awaiting_manual_promotion",
@@ -300,7 +315,7 @@ def test_resolve_model_uri_falls_back_to_currently_serving(tmp_path, monkeypatch
     )
     registry.promote("auto", manifest["version"])
 
-    resolved = predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
+    resolved = predict.resolve_model_uri(lead_type_id("auto"))
     assert resolved == str(registry.currently_serving_model_path("auto"))
 
 
@@ -309,11 +324,11 @@ def test_resolve_model_uri_nothing_serving_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("MODEL_URI", raising=False)
     monkeypatch.setattr(config, "active_model_version", lambda: None)
     with pytest.raises(FileNotFoundError):
-        predict.resolve_model_uri(fe.LEAD_TYPE_AUTO)
+        predict.resolve_model_uri(lead_type_id("auto"))
 
 
 def test_run_bid_optimizer_evaluation_summary():
-    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
     feature_cols = numeric + categorical
     n = 4
     df = pd.DataFrame({c: np.ones(n) for c in numeric})

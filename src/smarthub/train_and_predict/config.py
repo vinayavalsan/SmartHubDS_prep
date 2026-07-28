@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from smarthub.core import paths, task_config
+from smarthub.core.lead_types import lead_type_name as canonical_lead_type_name
 from smarthub.feature_engineering import features as fe
 
 TARGET_COL = fe.TARGET_COLUMN
@@ -61,7 +62,7 @@ class TrainingConfig:
     model_type: str
     random_seed: int
     drop_zero_variance: bool
-    calibrate: bool
+    calibration_enabled: bool
     calibration_method: str
     calibration_cv: int
     split: dict[str, Any]
@@ -136,7 +137,7 @@ def lead_type_name(lead_type_id: int) -> str:
     str
         Human-readable lead type name.
     """
-    return fe.lead_type_name(lead_type_id)
+    return canonical_lead_type_name(lead_type_id)
 
 
 def feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
@@ -388,9 +389,15 @@ def load_training_config(
             raise TypeError("split.random.stratify must be a YAML boolean.")
 
     random_seed = int(training["random_seed"])
+    if "enabled" not in calibration_root:
+        raise ValueError("Missing required config: calibration.enabled")
+    calibration_enabled = calibration_root["enabled"]
+    if not isinstance(calibration_enabled, bool):
+        raise TypeError("calibration.enabled must be a YAML boolean.")
+
     calibration_method = str(calibration_root["method"]).strip().lower()
     if calibration_method not in {"sigmoid", "isotonic"}:
-        raise ValueError("calibration.method must be either 'sigmoid' or 'isotonic'.")
+        raise ValueError("calibration.method must be one of 'sigmoid' or 'isotonic'.")
     calibration_cv = _positive_int(
         calibration_root["cv"],
         "calibration.cv",
@@ -463,7 +470,11 @@ def load_training_config(
         "config_path": str(resolved_path),
         "selected_model": model_type,
         "selected_split": copy.deepcopy(selected_split),
-        "calibration": {"method": calibration_method, "cv": calibration_cv},
+        "calibration": {
+            "enabled": calibration_enabled,
+            "method": calibration_method,
+            "cv": calibration_cv,
+        },
         "selected_model_parameters": copy.deepcopy(model_parameters),
         "optimizer": optimizer.as_dict(),
         "promotion": {
@@ -485,7 +496,7 @@ def load_training_config(
         model_type=model_type,
         random_seed=random_seed,
         drop_zero_variance=bool(training["drop_zero_variance"]),
-        calibrate=bool(training["calibrate"]),
+        calibration_enabled=calibration_enabled,
         calibration_method=calibration_method,
         calibration_cv=calibration_cv,
         split=selected_split,

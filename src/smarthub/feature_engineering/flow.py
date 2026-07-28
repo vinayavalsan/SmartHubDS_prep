@@ -16,6 +16,7 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 
 from smarthub.core import notifications, storage
+from smarthub.core.lead_types import lead_type_name as registered_lead_type_name
 
 from . import build
 from .build import _DAY_DEFS, _pct, run_build_features
@@ -30,7 +31,7 @@ def _build_task(lead_type_id, lead_type_name, window_days):
     lead_type_id : int
         Lead type id to build.
     lead_type_name : str
-        Lead type name (may be ``None`` to derive from the id).
+        Optional lead type name; ``None`` derives it from ``lead_type_id``.
     window_days : int | None
         Rolling training window in days; config default when ``None``.
 
@@ -50,7 +51,7 @@ def _build_task(lead_type_id, lead_type_name, window_days):
 @flow(name="smarthub-build-features", on_failure=[notifications.flow_failure_hook])
 def build_features_flow(
     lead_type_id: int = 6,
-    lead_type_name: str = "auto",
+    lead_type_name: str | None = None,
     window_days: int | None = None,
 ) -> dict:
     """Build and save the training table for one lead type (STEP 2).
@@ -63,8 +64,8 @@ def build_features_flow(
     ------
     lead_type_id : int
         Lead type id to build (6=auto, 1=home).
-    lead_type_name : str
-        Human name for the lead type.
+    lead_type_name : str | None
+        Optional human name; ``None`` derives it from ``lead_type_id``.
     window_days : int | None
         Overrides the rolling training window; falls back to
         ``training_window_days`` in config/smarthub.yaml (default 21).
@@ -76,8 +77,10 @@ def build_features_flow(
         Summary with ``lead_type``, ``version``, ``rows``, ``columns`` and
         ``path``.
     """
+    resolved_lead_type_name = lead_type_name or registered_lead_type_name(lead_type_id)
+
     try:
-        result = _build_task(lead_type_id, lead_type_name, window_days)
+        result = _build_task(lead_type_id, resolved_lead_type_name, window_days)
     except storage.StorageError:
         _blocked_artifact()
         raise

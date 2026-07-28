@@ -25,6 +25,7 @@ def _save(lead_type_name="auto", roc_auc=0.70, profit=100.0, feature_cols=None):
         optimizer_summary={"recommended_bid_total_expected_profit": profit},
         lineage={"model_type": "lightgbm"},
         model_params={"n_estimators": 10},
+        training_config={},
         promotion_mode="manual",
         eligibility_status="eligible",
         promotion_status="awaiting_manual_promotion",

@@ -21,9 +21,10 @@ import pandas as pd
 
 from smarthub.core import io, storage
 from smarthub.core.config import StorageSettings, training_window_days
+from smarthub.core.lead_types import lead_type_name as _lead_type_name
 from smarthub.feature_engineering import features as fe
+from smarthub.feature_engineering.feature_registry import FEATURES
 from smarthub.feature_engineering.features import build_training_table
-from smarthub.feature_engineering.features import lead_type_name as _lead_type_name
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,22 @@ def _required_raw_columns() -> list[str]:
     list[str]
         Ordered, de-duplicated raw column names to read.
     """
+    # Registry entries declare every model feature and the raw input used to
+    # produce it. Raw features use ``api_input`` when provided (otherwise the
+    # feature name); derived features contribute their declared raw dependency.
+    registry_inputs = [
+        spec.api_input or spec.name
+        for spec in FEATURES.values()
+        if spec.source == "raw" or spec.api_input is not None
+    ]
+
     cols = (
-        list(fe.PRE_BID_FEATURES)
-        + list(fe.TIME_FEATURES)
+        registry_inputs
+        + list(fe.RETAINED_NON_MODEL_COLUMNS)
         + [
             "id",
             "created_at",
+            # Registry time derivations prefer Pacific fields when available.
             "pst_date",
             "pst_hour",
             "won",

@@ -20,7 +20,7 @@ fastapi = pytest.importorskip("fastapi")  # noqa: F841 -- import-gate only
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from smarthub.feature_engineering import features as fe  # noqa: E402
+from smarthub.core.lead_types import lead_type_id  # noqa: E402
 from smarthub.server import predict  # noqa: E402
 from smarthub.train_and_predict import config, registry  # noqa: E402
 from smarthub.train_and_predict.prediction_log_schema import (  # noqa: E402
@@ -46,7 +46,7 @@ PAYLOAD = {
     "bid_step": 0.25,
     "campaign_id": 12345,
     "account_id": 118,
-    "lead_type_id": fe.LEAD_TYPE_AUTO,
+    "lead_type_id": lead_type_id("auto"),
     "created_hour": 14,
     "created_dayofweek": 2,
     "state": "TX",
@@ -83,6 +83,7 @@ def _promote_constant_model(win_rate=0.42):
         optimizer_summary={},
         lineage={"model_type": "constant_test_model", "calibrated": False},
         model_params={},
+        training_config={},
         promotion_mode="manual",
         eligibility_status="eligible",
         promotion_status="awaiting_manual_promotion",
@@ -111,7 +112,7 @@ def test_recommend_bid_logs_success_row_with_model(client, log_store):
     assert row["decision_path"] == "model"
     assert row["model_version"] == manifest["version"]
     assert row["model_type"] == "constant_test_model"
-    assert row["lead_type_id"] == fe.LEAD_TYPE_AUTO
+    assert row["lead_type_id"] == lead_type_id("auto")
     assert row["campaign_id"] == PAYLOAD["campaign_id"]
     assert row["input_features"]["state"] == "TX"
     assert row["model_input_features"] is not None
@@ -334,6 +335,7 @@ def _promote_tiny_lightgbm_model():
         optimizer_summary={},
         lineage={"model_type": "lightgbm", "calibrated": False},
         model_params={},
+        training_config={},
         promotion_mode="manual",
         eligibility_status="eligible",
         promotion_status="awaiting_manual_promotion",

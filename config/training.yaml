@@ -5,12 +5,15 @@
 # connection details remain outside this file.
 
 training:
-  model_type: lightgbm
-  calibrate: true
+  model_type: xgboost
   drop_zero_variance: true
   random_seed: 42
 
 calibration:
+  # Set to false to skip calibration.
+  enabled: true
+
+  # Supported values: isotonic, sigmoid
   method: isotonic
   cv: 3
 
@@ -86,7 +89,7 @@ promotion:
 #               automatically when the policy passes.
 #   disabled  - skip serving-model evaluation and promotion-policy checks;
 #               train, evaluate, save reports/model, and log to MLflow only.
-  mode: manual
+  mode: automatic
 
   criteria:
     # Absolute quality gate applied to every challenger. Lower is better.

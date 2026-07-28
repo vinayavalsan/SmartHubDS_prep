@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import pandas as pd
 
+from smarthub.core.lead_types import all_lead_types
 from smarthub.data_pull import models
-from smarthub.feature_engineering import features as fe
+from smarthub.feature_engineering.feature_registry import FEATURES
 
 # Columns the pull is expected to produce (drives schema-drift detection).
 EXPECTED_COLUMNS: tuple[str, ...] = tuple(c.key for c in models.LEADS_COLUMNS)
@@ -255,17 +256,26 @@ def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
         accepted = _lower(df["accepted"]).isin({"true", "t", "1", "yes", "y"})
         out["accepted_but_won_null"] = int((accepted & (won == "")).sum())
 
-    # Lead-type completeness — driven by the feature registry so each type's
-    # required raw columns live in one place (features.LEAD_TYPES[id].
-    # required_raw). Adding a type's rule = one registry entry, no branches here.
+    # Lead-type completeness — driven by the feature registry. A feature is
+    # required for a lead type when that name appears in ``mandatory_for``.
+    # Raw features use their own name unless ``api_input`` declares a different
+    # source column; derived features contribute their declared raw input.
     if present("lead_type_id"):
         lt = pd.to_numeric(df["lead_type_id"], errors="coerce")
-        for lead_type_id, spec in fe.LEAD_TYPES.items():
-            for col in sorted(spec.required_raw):
+
+        for lead_type_name, lead_type_id in all_lead_types().items():
+            required_raw_columns = {
+                spec.api_input or spec.name
+                for spec in FEATURES.values()
+                if lead_type_name in spec.mandatory_for
+                and (spec.source == "raw" or spec.api_input is not None)
+            }
+
+            for col in sorted(required_raw_columns):
                 if not present(col):
                     continue
                 miss = _null_or_blank(df[col])
-                out[_completeness_rule_name(spec.name, col)] = int(
+                out[_completeness_rule_name(lead_type_name, col)] = int(
                     ((lt == lead_type_id) & miss).sum()
                 )
 

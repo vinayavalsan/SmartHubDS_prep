@@ -122,7 +122,10 @@ training:
   model_type: lightgbm
   random_seed: 42
   drop_zero_variance: true
-  calibrate: true
+
+calibration:
+  method: isotonic  # isotonic, sigmoid, or none
+  cv: 3
 
 split:
   strategy: time
@@ -141,6 +144,7 @@ optimizer:
   target_cm: 0.25
   minimum_bid: 0.25
   bid_step: 0.25
+  chunk_size: 500
 
 promotion:
   mode: automatic
@@ -148,7 +152,6 @@ promotion:
   criteria:
     max_log_loss: 0.55
     min_expected_profit: 0.0
-    target_cm: 0.25
     min_profit_ratio: 0.95
     max_absolute_profit_loss_tolerance: 5000.0
     max_log_loss_regression: 0.01
@@ -166,13 +169,15 @@ mlflow:
 
 The actual model parameters belong under the selected model in the `models` section. Only the configuration for `training.model_type` is loaded for the run.
 
+The loader also stores resolved metadata in memory, including the source config path, selected split, calibration settings, selected model parameters, optimizer settings, and promotion criteria. The optional environment variable `SMARTHUB_TRAINING_CONFIG` can override the packaged `config/training.yaml` path.
+
 ### Main responsibilities
 
 - Select the model family.
 - Define the train/test split.
-- Enable or disable calibration.
+- Configure probability calibration using `isotonic`, `sigmoid`, or `none`.
 - Define the parameters passed to the selected estimator.
-- Configure candidate-bid generation for offline optimizer evaluation.
+- Configure candidate-bid generation and offline scoring chunk size.
 - Define promotion mode and promotion guardrails.
 - Define report, model-registry, and MLflow locations.
 
@@ -341,7 +346,7 @@ Builds supported estimator pipelines:
 
 The model pipeline includes preprocessing and the classifier. XGBoost and LightGBM apply a monotonic constraint to `bid`, ensuring predicted win probability does not decrease as bid increases.
 
-When calibration is enabled, the pipeline is wrapped with isotonic `CalibratedClassifierCV`.
+When `calibration.method` is `isotonic` or `sigmoid`, the pipeline is wrapped with `CalibratedClassifierCV` using the configured number of folds. When the method is `none`, the base pipeline is returned without calibration.
 
 ### `metrics.py`
 
@@ -438,26 +443,31 @@ Example layout:
 ```text
 data/models/auto/
 ├── current.json
-├── v1_2026-07-17T205039Z.pkl
-├── v1_2026-07-17T205039Z.json
-├── v2_2026-07-23T183011Z.pkl
-└── v2_2026-07-23T183011Z.json
+├── run_20260727T162136Z_a1b2c3d4.pkl
+├── run_20260727T162136Z_a1b2c3d4.json
+├── run_20260728T101500Z_e5f6a7b8.pkl
+└── run_20260728T101500Z_e5f6a7b8.json
 ```
+
+Every saved candidate receives an immutable `training_run_id` such as
+`run_20260727T162136Z_a1b2c3d4`. Only a promoted candidate receives a
+sequential production version such as `auto_v1`, `auto_v2`, and so on.
 
 Each manifest records:
 
-- model version,
+- training run ID and optional production model version,
 - feature columns,
 - model metrics,
 - optimizer summary,
 - training parameters,
 - data and model lineage,
 - promotion mode,
-- promotion eligibility,
-- promotion reason,
-- promotion timestamp.
+- eligibility and promotion status,
+- promotion comparison details and reason,
+- MLflow identifiers,
+- promotion timestamp when promoted.
 
-`current.json` identifies the model served by production unless a specific model version is pinned in production configuration.
+`current.json` points to the currently serving training run and its assigned production version. A manual promotion is allowed only for a candidate whose saved `eligibility_status` is `eligible`.
 
 ### `mlflow_utils.py`
 
@@ -469,9 +479,11 @@ It records:
 - model parameters,
 - model metrics including F2,
 - optimizer metrics,
-- lineage parameters and tags,
+- lineage parameters and lifecycle tags,
 - generated report artifacts,
 - serialized model artifacts.
+
+Model registration is performed only when a run is promoted. Automatic and manual promotion use the same idempotent MLflow registration path, so promoting the same training run again does not create a duplicate registered-model version.
 
 ---
 
@@ -504,7 +516,7 @@ The `promotion.mode` setting supports:
 
 The promotion policy is business-driven. Every challenger is first evaluated independently and, when a serving model exists, compared with the currently serving model.
 
-Both the challenger and the serving model are evaluated on the **same held-out test rows**, ensuring all comparisons are performed on identical data.
+When a serving model exists, it is re-evaluated on the challenger's **same held-out test rows**, using the challenger's optimizer settings. This keeps the Log Loss and expected-profit comparisons on identical data.
 
 ### Absolute promotion gates
 
@@ -512,9 +524,11 @@ Every challenger must satisfy all of the following:
 
 - Log Loss ≤ `max_log_loss`
 - Total recommended expected profit ≥ `min_expected_profit`
-- Average recommended contribution margin ≥ `target_cm`
+- Average recommended contribution margin ≥ `optimizer.target_cm`
 
 These gates apply even when no serving model exists.
+
+`max_log_loss`, `min_expected_profit`, and `max_absolute_profit_loss_tolerance` have centralized defaults in `config.py` when omitted. Other required promotion values are read from YAML and validated.
 
 ### Relative promotion gates
 
@@ -538,7 +552,7 @@ serving_expected_profit -
 challenger_expected_profit
 ```
 
-A challenger is promoted only if **all** configured promotion criteria pass.
+A challenger is eligible only if **all** configured promotion criteria pass. Missing challenger Log Loss, expected profit, or recommended CM causes failure. For an existing serving model, missing serving Log Loss or expected profit also causes failure, and serving expected profit must be greater than zero for the relative comparison.
 
 ### Diagnostic metrics
 
@@ -554,7 +568,7 @@ The following are logged and reported but do not independently determine promoti
 - Brier Score
 - calibration error
 
-When no serving model exists, only the absolute promotion gates are evaluated. The first model is promoted only if it satisfies all configured absolute thresholds.
+When no serving model exists, only the absolute promotion gates are evaluated. In `automatic` mode, the first model is promoted only if those gates pass. In `manual` mode, an eligible first model is saved as `awaiting_manual_promotion` until the registry command is run.
 
 ---
 
@@ -590,7 +604,9 @@ It:
 5. asks Optuna to select candidate parameters,
 6. evaluates each trial using the configured scorer,
 7. writes a run summary,
-8. writes copy-paste-ready best parameters.
+8. writes copy-paste-ready best parameters,
+9. copies the search YAML used for the run,
+10. writes interactive Optuna history, importance, and contour plots when visualization succeeds.
 
 ### Shared scripts
 
@@ -613,7 +629,11 @@ data/hyperparameter_tuning/
         └── 20260723_143000/
             ├── summary.json
             ├── best_parameters.yaml
-            └── hyperparameter_search.yaml
+            ├── hyperparameter_search.yaml
+            └── plots/
+                ├── optimization_history.html
+                ├── parameter_importance.html
+                └── contour_matrix.html
 ```
 
 `best_parameters.yaml` is a recommendation. Review it and copy the selected model block into `config/training.yaml` before starting the official training workflow.
@@ -836,7 +856,7 @@ python -m smarthub.train_and_predict.registry promote \
 
 | Script | Workflow | Responsibility | Main configuration |
 |---|---|---|---|
-| `train_and_predict/config.py` | Shared | Loads and validates training and search YAML; exposes serving helpers | All three YAML files indirectly |
+| `train_and_predict/config.py` | Training, search | Loads and validates training and search YAML and resolves selected model/split settings | `training.yaml`, `hyperparameter_search.yaml` |
 | `train_and_predict/preprocessing.py` | Shared | Creates normalized training and serving frames | Feature definitions and training config |
 | `train_and_predict/models.py` | Training, search | Builds Logistic Regression, XGBoost, and LightGBM pipelines | `training.yaml`, `hyperparameter_search.yaml` |
 | `train_and_predict/metrics.py` | Training | Computes Log Loss, Brier, calibration, ranking, F1, and F2 metrics | None directly |
@@ -848,7 +868,7 @@ python -m smarthub.train_and_predict.registry promote \
 | `train_and_predict/registry.py` | Training, prediction | Saves versions, manages serving pointer, promotes, and rolls back | Promotion settings supplied by training |
 | `train_and_predict/mlflow_utils.py` | Training | Logs model, metrics, parameters, and reports | `training.yaml` |
 | `train_and_predict/plots_and_reports.py` | Training | Writes plots, CSVs, and JSON evaluation reports | Output paths from `training.yaml` |
-| `train_and_predict/prediction_log_schema.py` | Prediction | Defines and writes the single-table prediction audit log | `smarthub.yaml` and environment variables |
+| `train_and_predict/prediction_log_schema.py` | Prediction | Defines and writes the single-table prediction audit log | `SMARTHUB_PREDICTION_LOG_DB_URL` plus values supplied by serving |
 | `train_and_predict/explain.py` | Prediction support | Produces SHAP and optional Ollama explanations | `smarthub.yaml` explain settings |
 | `train_and_predict/manual_api_check.py` | Prediction support | Sends a sample request to the local API | URL and sample payload in the script |
 | `server/predict.py` | Prediction | Production FastAPI application and serving-policy entry point | `smarthub.yaml` |
@@ -860,14 +880,14 @@ python -m smarthub.train_and_predict.registry promote \
 - Training, hyperparameter search, and prediction are separate workflows.
 - Hyperparameter search is optional and never changes production by itself.
 - Official model parameters come from `training.yaml`.
-- Every completed training run saves an immutable model version.
+- Every completed training run saves an immutable candidate identified by a `training_run_id`.
+- Only promoted candidates receive sequential production versions such as `auto_v1`.
 - Production loads the model selected by the registry or explicit production pin.
-- The model estimates probabilities; it does not directly decide a fixed win/loss class for bidding.
+- The model estimates probabilities for bidding. The `0.5` class threshold is used only for diagnostic classification metrics and plots.
 - Log Loss is the primary probability-quality objective for tuning.
-- Expected profit is the primary model-promotion comparison.
 - Every challenger must satisfy absolute business and model-quality thresholds.
 - Existing serving models are protected by profit-ratio, absolute-profit-loss, and Log Loss regression guardrails.
-- Expected profit is the primary promotion objective.
+- Promotion requires both probability-quality and business guardrails; no single metric can bypass the others.
 - Log Loss is the primary probability-quality guardrail.
 - F2, PR AUC, ROC AUC, F1, precision, and recall remain diagnostics.
 - Production prediction does not retrain models.
