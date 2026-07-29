@@ -71,3 +71,6 @@ data/**
 
 # Keep the folder itself (optional)
 !data/.gitkeep
+
+docs/SmartHub_Architecture.drawio
+docs/SmartHub_Overview.drawio

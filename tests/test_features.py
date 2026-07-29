@@ -102,47 +102,38 @@ def test_derived_features():
     assert table.loc[5, "multi_vehicle"] == 1
 
 
-def test_age_cohort_one_hot():
-    """Age is one-hot encoded into exactly one cohort band per row."""
-    from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
-
+def test_age_cohort_single_categorical():
+    """Age is banded into a single categorical age_cohort column."""
     table = build_training_table(_raw()).set_index("id")  # ages 40,55,60,28
-    assert set(AGE_COHORT_COLUMNS).issubset(table.columns)
-    assert table.loc[1, "age_cohort_35_44"] == 1
-    assert table.loc[2, "age_cohort_55_64"] == 1
-    assert table.loc[4, "age_cohort_55_64"] == 1
-    assert table.loc[5, "age_cohort_25_34"] == 1
-    # exactly one band set per row
-    assert table[AGE_COHORT_COLUMNS].sum(axis=1).tolist() == [1, 1, 1, 1]
+    assert "age_cohort" in table.columns
+    assert table.loc[1, "age_cohort"] == "35_44"
+    assert table.loc[2, "age_cohort"] == "55_64"
+    assert table.loc[4, "age_cohort"] == "55_64"
+    assert table.loc[5, "age_cohort"] == "25_34"
 
 
-def test_age_cohort_missing_all_zero():
-    """Missing age yields all-zero age-cohort columns."""
-    from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
-
+def test_age_cohort_missing_is_null():
+    """Missing age yields a null age_cohort (no band assigned)."""
     raw = _raw()
     raw.loc[raw["id"] == 1, "age"] = None
     table = build_training_table(raw).set_index("id")
-    assert table.loc[1, AGE_COHORT_COLUMNS].sum() == 0
+    assert pd.isna(table.loc[1, "age_cohort"])
 
 
-def test_age_missing_sentinel_and_flag():
-    """Implausible ages become the -1 sentinel with age_missing flag set."""
-    from smarthub.feature_engineering.features import AGE_COHORT_COLUMNS
-
+def test_age_sentinel_and_cohort_for_implausible_age():
+    """Implausible ages become the -1 sentinel with a null age_cohort."""
     raw = _raw()
     raw.loc[raw["id"] == 1, "age"] = -7648  # garbage / implausible
     raw.loc[raw["id"] == 2, "age"] = 1828  # garbage / implausible
     table = build_training_table(raw).set_index("id")
-    # implausible age -> -1 sentinel (not NaN), age_missing flag set, no cohort
+    # implausible age -> -1 sentinel (not NaN), age_cohort left null
     assert table.loc[1, "age"] == -1
     assert table.loc[2, "age"] == -1
-    assert table.loc[1, "age_missing"] == 1
-    assert table.loc[2, "age_missing"] == 1
-    assert table.loc[1, AGE_COHORT_COLUMNS].sum() == 0
-    # a valid age is unchanged and not flagged
+    assert pd.isna(table.loc[1, "age_cohort"])
+    assert pd.isna(table.loc[2, "age_cohort"])
+    # a valid age is unchanged and gets a real band
     assert table.loc[4, "age"] == 60
-    assert table.loc[4, "age_missing"] == 0
+    assert table.loc[4, "age_cohort"] == "55_64"
 
 
 def test_is_workday_from_pst_date(monkeypatch, tmp_path):
@@ -268,7 +259,7 @@ def test_mandatory_features_kept_when_no_optional():
         "age",
     ):
         assert col in selected
-    assert set(fe.AGE_COHORT_COLUMNS).issubset(selected)
+    assert fe.AGE_COHORT_COLUMN in selected
     # optional features are gone
     for col in (
         "state",

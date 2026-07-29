@@ -167,7 +167,17 @@ def build_metadata(
         "data_min_created_at": created.min() if len(created) else None,
         "data_max_created_at": created.max() if len(created) else None,
         "expected_revenue_coverage": er_coverage,  # share with R > 0
-        "age_missing_rate": _rate("age_missing"),
+        # age_cohort is null whenever age was missing/implausible (see
+        # feature_engineering.features._derive_features) -- same signal the
+        # old standalone age_missing flag carried, now folded into the
+        # single age_cohort column. Key name kept as "age_missing_rate" so
+        # existing manifest/Slack/artifact readers (flow.py) don't need to
+        # change.
+        "age_missing_rate": (
+            float(table["age_cohort"].isna().mean())
+            if "age_cohort" in table.columns and n
+            else None
+        ),
         "weekday_share": weekday_share,
         "weekend_share": weekend_share,
         "workday_rate": _rate("is_workday"),  # is_workday feature share

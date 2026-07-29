@@ -38,9 +38,8 @@ features:
   # table, so no re-pull/re-build is needed — just retrain.
   #
   # MANDATORY (auto) — ALWAYS trained on, cannot be removed (locked in code,
-  # features.LEAD_TYPES[6].mandatory): bid, age, age_missing, age_cohort_<band>,
-  # num_vehicles, multi_vehicle, num_auto_accidents, home_owner, insured, dui,
-  # sr22_required.
+  # features.LEAD_TYPES[6].mandatory): bid, age, age_cohort, num_vehicles,
+  # multi_vehicle, num_auto_accidents, home_owner, insured, dui, sr22_required.
   #
   # OPTIONAL (auto) — the model trains on exactly the names listed in
   # `auto_optional`. Remove a name to drop that feature; add it to include it.

@@ -35,7 +35,8 @@ def test_model_feature_columns_auto_vs_home():
     assert "home_property_type" in cat_home
     assert "home_property_type" not in cat_auto
     # shared features present in both
-    for col in fe.AGE_COHORT_COLUMNS + ["is_married", "created_hour", "is_workday"]:
+    assert fe.AGE_COHORT_COLUMN in cat_auto and fe.AGE_COHORT_COLUMN in cat_home
+    for col in ["is_married", "created_hour", "is_workday"]:
         assert col in num_auto and col in num_home
     assert "state" in cat_auto and "state" in cat_home
     assert "traffic_tier" in cat_auto and "traffic_tier" in cat_home
@@ -59,7 +60,7 @@ def test_derive_serving_features_parity():
     out = fe.derive_serving_features(raw)
     assert out.loc[0, "is_married"] == 1
     assert out.loc[0, "multi_vehicle"] == 1
-    assert out.loc[0, "age_cohort_35_44"] == 1
+    assert out.loc[0, "age_cohort"] == "35_44"
     # time parts already supplied are preserved
     assert out.loc[0, "created_hour"] == 9
 
@@ -98,7 +99,7 @@ def test_serving_frame_selects_and_normalizes():
     assert frame.loc[0, "marital_status"] == "NAvail"
     # derived features computed from raw
     assert frame.loc[0, "multi_vehicle"] == 1
-    assert frame.loc[0, "age_cohort_25_34"] == 1
+    assert frame.loc[0, "age_cohort"] == "25_34"
 
 
 # --- Training-table preparation ---------------------------------------------

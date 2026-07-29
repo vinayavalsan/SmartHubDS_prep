@@ -1,6 +1,62 @@
 # Changelog
 
 
+## 2026-07-29
+
+### `age_cohort_*` one-hot columns collapsed into a single categorical `age_cohort`
+- Feature engineering was manually one-hot-encoding age bands into seven
+  `age_cohort_<band>` 0/1 columns, then declaring them as *numeric* model
+  features -- the only feature built this way; every other categorical
+  (`state`, `gender`, `traffic_tier`, ...) is left as a raw string and
+  encoded downstream in the model pipeline, per model type. That was also a
+  quiet correctness smell: the seven dummy columns went through the numeric
+  preprocessing branch, so logistic regression's `StandardScaler` was
+  standardizing 0/1 indicators as if they were continuous.
+- `features.py`'s `_derive_features` now writes one categorical `age_cohort`
+  column (values: `under_18`, `18_24`, `25_34`, `35_44`, `45_54`, `55_64`,
+  `65_plus`, or null) instead of the seven dummy columns. Encoding is left to
+  the training step -- `OneHotEncoder` for logistic regression,
+  `OrdinalEncoder` for XGBoost/LightGBM -- exactly the machinery already used
+  for every other categorical, no new preprocessing code needed.
+- **`age_missing` folded into `age_cohort`, removed as a standalone feature.**
+  A missing/implausible age now simply leaves `age_cohort` null;
+  `preprocessing.normalize_model_frame` maps that to the same `"NAvail"`
+  sentinel every other categorical column's missing values already get. The
+  raw `age` column's own `-1` sentinel fill (Vinaya's missingness-as-signal
+  decision) is unchanged -- this only removes the *duplicate* signal that
+  existed between the dedicated flag and the (previously) all-zero dummy
+  columns.
+- Registry updates (`features.py`): `age_cohort` added to `MODEL_CATEGORICAL_ORDER`
+  / `_SHARED_CATEGORICAL`; `age_missing` and the seven `age_cohort_*` names
+  removed from `MODEL_NUMERIC_ORDER` / `_SHARED_NUMERIC`; auto's mandatory
+  set now lists `age_cohort` in place of `age_missing` + the seven dummy
+  names. No changes needed in `predict.py`/`explain.py`/`preprocessing.py` --
+  they all read the feature list from `config.feature_columns()`, so the new
+  schema flows through automatically.
+- `build.py`'s `age_missing_rate` build-metadata metric now reads
+  `age_cohort.isna().mean()` instead of the old flag column; the manifest key
+  name is unchanged so `flow.py`'s Prefect artifact / Slack notification
+  don't need updating.
+- **Bonus for `/explain_bid`:** SHAP attributions for a lead's age used to be
+  split across up to seven `age_cohort_<band>` entries in `top_factors`. With
+  a single `age_cohort` column, that's one clean, interpretable attribution
+  per lead instead of a fragmented one.
+- **Breaking change to the model input schema** -- this is not a hot-swappable
+  code change. The currently-promoted model's pickled pipeline was fit on the
+  old 7-dummy-column schema; deploying this requires rebuilding the training
+  table, retraining, and promoting a new model version alongside the code
+  change.
+- Updated: `config/smarthub.yaml`'s mandatory-features comment,
+  `docs/MODELING.md` §8's feature/missing-values description,
+  `tests/test_features.py` (3 tests rewritten + 1 reference fixed),
+  `tests/test_train_and_predict.py` (3 assertions updated), `tests/test_build.py`
+  (fixture + new assertion). Full suite: 224 passed both before and after this
+  change (6 pre-existing failures in `test_explain.py`/`test_predict_logging.py`
+  are unrelated -- a `build_model()` missing-kwarg signature drift already
+  present on this branch -- confirmed identical with this change stashed out).
+  Lint clean (isort/black/flake8).
+
+
 ## 2026-07-23
 
 ### `/recommend_bid`'s entire log write moved off the response path; new CM column; renamed profit field

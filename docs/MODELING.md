@@ -238,10 +238,10 @@ warehouse (no `'false'`). Rules:
 
 **Features.** Curated per-lead-type set via `model_feature_columns(lead_type_id)`
 (not the raw 28-col list, which was illustrative):
-- **Shared:** `bid`, `age` (+ `age_missing`), `continuous_coverage_months`,
-  `created_hour`, `created_dayofweek`, `is_workday`, `is_married`,
-  one-hot `age_cohort_*`; categorical `state`, `gender`, `marital_status`,
-  `military_affiliation`, `insured`, `campaign_id`, **`traffic_tier`**.
+- **Shared:** `bid`, `age`, `continuous_coverage_months`, `created_hour`,
+  `created_dayofweek`, `is_workday`, `is_married`; categorical `age_cohort`,
+  `state`, `gender`, `marital_status`, `military_affiliation`, `insured`,
+  `campaign_id`, **`traffic_tier`**.
 - **Auto-only:** `num_vehicles`, `num_drivers`, `num_auto_violations`,
   `num_auto_accidents`, `dui`, `home_owner`, `multi_vehicle`.
 - **Home-only:** `home_property_type`, `num_home_claims`.
@@ -259,9 +259,12 @@ holidays live in `config/holidays.json` (SmartFinancial's observed list).
 populating) when `> 0`, else the interim listings-sum. Used for the ceiling
 (`R × (1 − target_cm)`) and the profit objective — never a feature.
 
-**Missing values.** Strings → `"NAvail"`; `age` → `-1` sentinel + `age_missing`
-flag (no mean imputation). **No** per-ping completeness/reliability features —
-`traffic_tier` carries source quality at the aggregate level (Kiran).
+**Missing values.** Strings (including `age_cohort`) → `"NAvail"`; `age` → `-1`
+sentinel (no mean imputation). A missing/implausible age leaves `age_cohort`
+null, which folds into the same `"NAvail"` handling every other categorical
+gets — no separate `age_missing` flag (2026-07-24, see CHANGELOG). **No** per-
+ping completeness/reliability features — `traffic_tier` carries source quality
+at the aggregate level (Kiran).
 
 **Serving.** Anton takes the **full lead payload** (not a ping-id DB lookup),
 pared to the needed features; the auto/home API payloads define per-type fields.

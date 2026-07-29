@@ -56,8 +56,15 @@ PRE_BID_FEATURES = [
 TIME_FEATURES = ["created_hour", "created_dayofweek"]
 
 # Age band edges + labels (competitiveness is non-linear in age — the 25–40
-# range is the most contested, per Kiran). Right-open bins. Each band becomes
-# its own 0/1 one-hot column named ``age_cohort_<label>``.
+# range is the most contested, per Kiran). Right-open bins, collapsed into a
+# SINGLE categorical column (``age_cohort``) rather than one 0/1 column per
+# band -- encoding (one-hot for logistic regression, ordinal for the tree
+# models) is left to the training step, same as every other categorical
+# feature (state, gender, traffic_tier, ...). A missing/implausible age
+# leaves ``age_cohort`` null, which ``preprocessing.normalize_model_frame``
+# maps to the same "NAvail" sentinel every other categorical column's missing
+# values get -- so there's no separate ``age_missing`` flag to keep in sync.
+AGE_COHORT_COLUMN = "age_cohort"
 AGE_COHORT_BINS = [0, 18, 25, 35, 45, 55, 65, 200]
 AGE_COHORT_LABELS = [
     "under_18",
@@ -68,11 +75,10 @@ AGE_COHORT_LABELS = [
     "55_64",
     "65_plus",
 ]
-AGE_COHORT_COLUMNS = [f"age_cohort_{label}" for label in AGE_COHORT_LABELS]
 
 # Plausible human-age bounds; anything outside is treated as missing (the raw
 # warehouse `age` contains garbage like -7648 / 1828). Applied to BOTH the raw
-# `age` feature and the age_cohort bands, in training and serving.
+# `age` feature and age_cohort, in training and serving.
 AGE_MIN = 1
 AGE_MAX = 200
 
@@ -80,9 +86,9 @@ AGE_MAX = 200
 DERIVED_FEATURES = [
     "is_married",
     "multi_vehicle",
-    "age_missing",
     "is_workday",
-] + AGE_COHORT_COLUMNS
+    AGE_COHORT_COLUMN,
+]
 
 # Known at bid time, used in the profit objective (kept alongside features).
 REVENUE_COLUMN = "expected_revenue"
@@ -132,7 +138,6 @@ LEAD_TYPE_HOME = 1
 MODEL_NUMERIC_ORDER = [
     "bid",
     "age",
-    "age_missing",
     "continuous_coverage_months",
     "created_hour",
     "created_dayofweek",
@@ -144,8 +149,9 @@ MODEL_NUMERIC_ORDER = [
     "num_home_claims",
     "is_married",
     "multi_vehicle",
-] + AGE_COHORT_COLUMNS
+]
 MODEL_CATEGORICAL_ORDER = [
+    AGE_COHORT_COLUMN,
     "state",
     "gender",
     "marital_status",
@@ -164,17 +170,16 @@ _SHARED_NUMERIC = frozenset(
     {
         "bid",
         "age",
-        "age_missing",
         "continuous_coverage_months",
         "created_hour",
         "created_dayofweek",
         "is_workday",
         "is_married",
     }
-    | set(AGE_COHORT_COLUMNS)
 )
 _SHARED_CATEGORICAL = frozenset(
     {
+        AGE_COHORT_COLUMN,
         "state",
         "gender",
         "marital_status",
@@ -238,7 +243,7 @@ LEAD_TYPES: dict[int, LeadTypeSpec] = {
             {
                 "bid",
                 "age",
-                "age_missing",
+                AGE_COHORT_COLUMN,
                 "num_vehicles",
                 "multi_vehicle",
                 "num_auto_accidents",
@@ -247,7 +252,6 @@ LEAD_TYPES: dict[int, LeadTypeSpec] = {
                 "dui",
                 "sr22_required",
             }
-            | set(AGE_COHORT_COLUMNS)
         ),
         required_raw=frozenset({"num_vehicles"}),
     ),
@@ -565,8 +569,8 @@ def derive_serving_features(df: pd.DataFrame) -> pd.DataFrame:
 
     Train/serve parity hook: online prediction and the training build go
     through the same derivation (time parts, is_workday, is_married,
-    multi_vehicle, age_missing, age_cohort_*), so a model never sees features
-    computed a different way than it was trained on.
+    multi_vehicle, age_cohort), so a model never sees features computed a
+    different way than it was trained on.
 
     Inputs
     ------
@@ -592,8 +596,8 @@ def _derive_features(out: pd.DataFrame) -> list[str]:
     Inputs
     ------
     out : pandas.DataFrame
-        Frame mutated in place with ``is_married``, ``multi_vehicle``,
-        ``age_missing``, the cleaned ``age`` and one-hot ``age_cohort_*``.
+        Frame mutated in place with ``is_married``, ``multi_vehicle``, the
+        cleaned ``age``, and the categorical ``age_cohort`` band.
 
     Returns
     -------
@@ -611,23 +615,23 @@ def _derive_features(out: pd.DataFrame) -> list[str]:
         added.append("multi_vehicle")
     if "age" in out.columns:
         age = pd.to_numeric(out["age"], errors="coerce")
-        # Missingness as signal (Vinaya): flag null OR implausible/default age,
-        # and fill the raw `age` with the -1 sentinel instead of mean-imputing.
+        # Missingness as signal (Vinaya): null OR implausible/default age fills
+        # the raw `age` with the -1 sentinel instead of mean-imputing, and
+        # leaves `age_cohort` null rather than assigning a band. That null is
+        # the ONLY missingness signal now (no separate `age_missing` flag) --
+        # `preprocessing.normalize_model_frame` maps it to "NAvail" at
+        # model-input time, the same sentinel every other categorical
+        # column's missing values get.
         plausible = age.between(AGE_MIN, AGE_MAX)  # False for NaN / out-of-range
-        out["age_missing"] = (~plausible).astype("int64")
-        added.append("age_missing")
         age_clean = age.where(plausible)  # NaN where implausible
         out["age"] = age_clean.fillna(-1)
-        cohort = pd.cut(
+        out[AGE_COHORT_COLUMN] = pd.cut(
             age_clean,
             bins=AGE_COHORT_BINS,
             labels=AGE_COHORT_LABELS,
             right=False,
-        )
-        # One-hot: one 0/1 column per band. Missing/implausible age -> all 0.
-        for label, col in zip(AGE_COHORT_LABELS, AGE_COHORT_COLUMNS):
-            out[col] = cohort.eq(label).astype("int64")
-            added.append(col)
+        ).astype("string")
+        added.append(AGE_COHORT_COLUMN)
     return added
 
 
@@ -649,8 +653,9 @@ def build_training_table(
     - Selects ping-time features + engineered features + bid + expected_revenue
       and target ``won_flag``. Nothing is dropped by default.
     - Engineered: ``is_married`` (from marital_status), ``multi_vehicle`` (from
-      num_vehicles), and one-hot ``age_cohort_<band>`` 0/1 columns (banded from
-      age).
+      num_vehicles), and the categorical ``age_cohort`` band (from age;
+      one-hot/ordinal-encoded like other categoricals at training time, not
+      here).
     - When ``lead_type_id`` is given, the table is lead-type-clean: the auto
       table drops home-only columns and the home table drops auto-only columns.
 

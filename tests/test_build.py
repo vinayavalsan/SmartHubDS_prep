@@ -26,7 +26,7 @@ def test_build_metadata_counts():
             "created_dayofweek": [0, 5, 0],  # Mon, Sat, Mon
             "is_workday": [1, 0, 1],
             "traffic_tier": ["a", "a", "b"],
-            "age_missing": [0, 0, 1],
+            "age_cohort": ["25_34", "35_44", None],
             "state": ["CA", "NY", "TX"],
         }
     )
@@ -37,6 +37,9 @@ def test_build_metadata_counts():
     assert m["expected_revenue_coverage"] == 2 / 3
     assert m["weekday_share"] == 2 / 3 and m["weekend_share"] == 1 / 3
     assert m["traffic_tier_distinct"] == 2
+    # age_missing_rate is now derived from age_cohort's null share (folded
+    # in from the old standalone age_missing flag -- see CHANGELOG).
+    assert m["age_missing_rate"] == pytest.approx(1 / 3)
     assert "state" in m["feature_columns"]
     assert "won_flag" not in m["feature_columns"]
 
