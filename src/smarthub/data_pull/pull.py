@@ -178,13 +178,13 @@ def run(
         selected_only=selected_only,
         lead_type_id=lead_type_id,
     )
-    _validate(leads_df)
+    _validate(leads_df, lead_type_id=lead_type_id)
     results = storage.save_pull(leads_df, StorageSettings.from_env())
     logger.info("Persisted pull: %s", results)
     return leads_df
 
 
-def _validate(leads_df: pd.DataFrame) -> None:
+def _validate(leads_df: pd.DataFrame, lead_type_id: int | None = None) -> None:
     """Run data validation on the fetched batch (warn + report only).
 
     Detect-only: logs a summary and never drops rows or fails the pull.
@@ -193,14 +193,19 @@ def _validate(leads_df: pd.DataFrame) -> None:
     ------
     leads_df : pandas.DataFrame
         The freshly-fetched leads batch.
+    lead_type_id : int | None
+        Lead type of the batch; scopes the high-missing catalogue so other
+        products' columns aren't flagged (``None`` for an all-types pull).
     """
     try:
         from smarthub.core import task_config
-        from smarthub.validation import report as vreport
-        from smarthub.validation import validate_leads
+        from smarthub.data_pull import validation_report as vreport
+        from smarthub.data_pull.validation_runner import validate_leads
 
         threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
-        vreport.log_summary(validate_leads(leads_df, threshold), logger)
+        vreport.log_summary(
+            validate_leads(leads_df, threshold, lead_type_id=lead_type_id), logger
+        )
     except Exception as exc:  # noqa: BLE001 - validation must never break a pull
         logger.warning("Data validation skipped (error): %s", exc)
 

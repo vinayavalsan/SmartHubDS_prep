@@ -1,6 +1,62 @@
 # Changelog
 
 
+## 2026-07-30
+
+### Consolidated raw-data validation into `data_pull` + a centralized raw-field registry
+- The validation layer moved out of its own `smarthub/validation` package into
+  `smarthub/data_pull` (`validation_rules.py`, `validation_runner.py`,
+  `validation_report.py`), since raw validation always runs immediately after
+  extraction. The old package was removed; call sites (`pull.py`, `flow.py`)
+  and `tests/` were repointed. Behaviour is unchanged.
+- **New `data_pull/field_registry.py` — the single source of truth for every
+  raw `lead_pings` field.** Each of the 54 pulled fields is declared exactly
+  once (`RawFieldSpec` = `DataSourceSpec` + `ValidationSpec` + `lead_types` +
+  `pii`), via small `_num`/`_cat`/`_bin`/`_dt` constructors. Mirrors the
+  `feature_engineering.feature_registry` pattern.
+- **Extraction is now registry-driven.** `models.LEADS_COLUMNS` is derived from
+  `query_builder.leads_column_names()` (new `data_pull/query_builder.py`, which
+  reads the registry) instead of a hand-maintained 54-line ORM tuple. The ORM
+  is kept — `query_builder` resolves names to columns via `getattr(LeadPing,
+  name)`, so parameterized/dialect-safe queries are preserved. A golden test
+  pins the generated column set + order to the original pull.
+- **Generic validation is now registry-driven.** `leads_schema()` builds the
+  pandera schema from each field's `ValidationSpec` (`in_range` / `ge` /
+  `isin` / `unique`); `batch_metrics` and `EXPECTED_COLUMNS` read the registry
+  too. The duplicated `NUMERIC_RANGES` / `NON_NEGATIVE` / gender+marital domain
+  constants were deleted from `validation_rules.py`.
+- **Custom validation via `custom_rule`.** `validate_us_state` (+ `US_STATES`,
+  a `ValidationResult` type) live in a new leaf module `validation_custom.py`
+  — a leaf so the metadata-only registry can reference the function without an
+  import cycle. `state`'s `ValidationSpec.custom_rule` points at it, and the
+  runner executes custom rules as plain pandas, so they run even when pandera
+  isn't installed (previously the state check was pandera-only).
+- **Per-lead-type scoping of the high-missing catalogue.** `validate_leads`
+  takes an optional `lead_type_id`; when given, columns that don't apply to
+  that type (via `field_registry.columns_not_for_lead_type`) are no longer
+  flagged as high-missing — so an auto pull stops reporting empty `home_*`
+  columns (the noise noted in `validation_rules.md` §9). Threaded through
+  `pull.py` and `flow.py`; `lead_type_id=None` (all-types pull) is unscoped,
+  matching prior behaviour. The full per-column `missing` rates are unchanged.
+- **Output preserved.** The existing validation tests pass unchanged (same
+  detected issues, same check labels, same report shape); new tests cover the
+  registry, `query_builder`, the custom rule, and the per-type scoping.
+
+### Training promotion tolerates a stale / incompatible currently-serving model
+- `train._evaluate_currently_serving_model` re-scores the currently-serving
+  model on the new run's test set for the promotion comparison. When that
+  model's saved `feature_cols` reference columns the current training data no
+  longer produces (e.g. the old one-hot `age_cohort_*` / `age_missing` champion
+  vs. the new single `age_cohort`), it used to raise `KeyError` and fail the
+  whole training run — a feature-migration deadlock (you couldn't promote a
+  new-schema model because the comparison against the old one crashed).
+- It now treats a schema-drifted (or otherwise unscoreable) champion as **not
+  comparable**: logs a warning and returns `None`, so `decide_promotion` judges
+  the challenger on the absolute gates alone (same as the first-model case).
+  Registry-load errors still propagate. The corresponding test was updated and
+  a scoring-failure case added.
+
+
 ## 2026-07-29
 
 ### `age_cohort_*` one-hot columns collapsed into a single categorical `age_cohort`

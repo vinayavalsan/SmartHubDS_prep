@@ -60,8 +60,13 @@ def test_evaluate_currently_serving_model_propagates_registry_load_error(monkeyp
         )
 
 
-def test_evaluate_currently_serving_model_propagates_schema_mismatch(monkeypatch):
-    """An incompatible serving feature schema raises a clear KeyError."""
+def test_evaluate_currently_serving_model_skips_incompatible_schema(monkeypatch):
+    """An incompatible serving feature schema is treated as not comparable
+    (logged) rather than raising -- so a feature-pipeline migration (e.g. the
+    one-hot age_cohort_* / age_missing columns replaced by a single age_cohort)
+    doesn't fail the whole training run. The challenger is then judged on the
+    absolute promotion gates alone (decide_promotion handles None serving
+    metrics)."""
     monkeypatch.setattr(
         registry, "currently_serving_version", lambda lead_type_name: "v1_x"
     )
@@ -75,7 +80,39 @@ def test_evaluate_currently_serving_model_propagates_schema_mismatch(monkeypatch
     )
     log = _StubLogger()
     test_df = pd.DataFrame({"bid": [1.0, 2.0]})
-    with pytest.raises(KeyError, match="not_a_real_column"):
-        train._evaluate_currently_serving_model(
-            "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100, log
-        )
+    result = train._evaluate_currently_serving_model(
+        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100, log
+    )
+    assert result == (None, None)
+    assert any("not present in the current training data" in w for w in log.warnings)
+
+
+def test_evaluate_currently_serving_model_skips_on_scoring_failure(monkeypatch):
+    """If the champion's fitted pipeline can't score the current columns, it's
+    treated as not comparable rather than failing the training run."""
+
+    class _Boom:
+        def predict_proba(self, X):
+            raise RuntimeError("incompatible encoders")
+
+        def predict(self, X):
+            raise RuntimeError("incompatible encoders")
+
+    monkeypatch.setattr(
+        registry, "currently_serving_version", lambda lead_type_name: "v2_x"
+    )
+    monkeypatch.setattr(
+        registry,
+        "load_currently_serving_model",
+        lambda lead_type_name: (
+            _Boom(),
+            {"version": "v2_x", "feature_cols": ["bid"]},
+        ),
+    )
+    log = _StubLogger()
+    test_df = pd.DataFrame({"bid": [1.0, 2.0]})
+    result = train._evaluate_currently_serving_model(
+        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100, log
+    )
+    assert result == (None, None)
+    assert any("not comparable" in w for w in log.warnings)

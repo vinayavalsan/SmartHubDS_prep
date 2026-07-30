@@ -3,8 +3,8 @@
 import pandas as pd
 import pytest
 
-from smarthub.validation import report as vreport
-from smarthub.validation import validate_leads
+from smarthub.data_pull import validation_report as vreport
+from smarthub.data_pull.validation_runner import validate_leads
 
 
 def _raw():
@@ -137,3 +137,18 @@ def test_validate_never_mutates_input():
     before = raw.copy()
     validate_leads(raw)
     pd.testing.assert_frame_equal(raw, before)
+
+
+def test_high_missing_scoped_by_lead_type():
+    """An empty other-product column isn't flagged high-missing for a lead type."""
+    raw = _raw()
+    raw["home_property_type"] = [None, None, None]  # empty on an auto pull
+
+    # Unscoped (no lead_type_id): the empty home column is flagged high-missing.
+    assert "home_property_type" in validate_leads(raw).high_missing
+
+    # Scoped to auto: home_property_type is out-of-scope, so it's not flagged...
+    auto = validate_leads(raw, lead_type_id=6)
+    assert "home_property_type" not in auto.high_missing
+    # ...but a shared empty column (pst_hour) is still flagged.
+    assert "pst_hour" in auto.high_missing

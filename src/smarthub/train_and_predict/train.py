@@ -706,23 +706,57 @@ def _evaluate_currently_serving_model(
             f"'{serving_version}' has no feature_cols."
         )
 
-    X_serving = test_df[serving_feature_cols]
-    _, _, serving_metrics = metrics.evaluate_model(
-        serving_model,
-        X_serving,
-        y_test,
-    )
-    serving_optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
-        test_eval_df=test_df,
-        model=serving_model,
-        feature_cols=serving_feature_cols,
-        target_cm=target_cm,
-        min_bid=min_bid,
-        bid_step=bid_step,
-        chunk_size=chunk_size,
-        log=log,
-        log_summary_result=False,
-    )
+    # Feature-schema drift: the serving model was trained by an older feature
+    # pipeline and expects columns the current training data no longer produces
+    # (e.g. the one-hot age_cohort_* / age_missing columns replaced by a single
+    # age_cohort). We can't re-score it like-for-like, so treat it as "not
+    # comparable" and let the challenger be judged on the absolute gates alone
+    # (decide_promotion handles currently_serving_metrics=None). This keeps a
+    # feature migration from failing the whole training run.
+    missing = [c for c in serving_feature_cols if c not in test_df.columns]
+    if missing:
+        log.warning(
+            "Currently-serving model '%s' expects %d feature column(s) not "
+            "present in the current training data (e.g. %s); its feature schema "
+            "predates the current pipeline. Skipping the head-to-head comparison "
+            "and evaluating the challenger on the absolute promotion gates only.",
+            serving_version,
+            len(missing),
+            missing[:6],
+        )
+        return None, None
+
+    try:
+        X_serving = test_df[serving_feature_cols]
+        _, _, serving_metrics = metrics.evaluate_model(
+            serving_model,
+            X_serving,
+            y_test,
+        )
+        serving_optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
+            test_eval_df=test_df,
+            model=serving_model,
+            feature_cols=serving_feature_cols,
+            target_cm=target_cm,
+            min_bid=min_bid,
+            bid_step=bid_step,
+            chunk_size=chunk_size,
+            log=log,
+            log_summary_result=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A stale / otherwise-incompatible champion (e.g. its fitted encoders
+        # can't consume the current columns) must never fail the training run;
+        # treat it as not comparable, same as the schema-drift case above.
+        log.warning(
+            "Could not score the currently-serving model '%s' on the current "
+            "test set (%s); treating it as not comparable and evaluating the "
+            "challenger on the absolute promotion gates only.",
+            serving_version,
+            exc,
+        )
+        return None, None
+
     serving_optimizer_summary = (
         serving_optimizer_result[1].to_dict() if serving_optimizer_result else {}
     )
