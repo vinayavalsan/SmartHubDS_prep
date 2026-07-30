@@ -3,6 +3,9 @@
 import pandas as pd
 import pytest
 
+from smarthub.core.lead_types import all_lead_type_ids, lead_type_id
+from smarthub.feature_engineering import features as fe
+from smarthub.feature_engineering.feature_registry import FEATURES, FeatureSpec
 from smarthub.feature_engineering.features import (
     LEAKAGE_COLUMNS,
     TARGET_COLUMN,
@@ -226,26 +229,81 @@ def test_has_time_features():
     assert {"created_hour", "created_dayofweek"}.issubset(table.columns)
 
 
-# --- Mandatory / optional feature selection ---------------------------------
+# --- Generic lead-type feature contracts -------------------------------------
 
-from smarthub.feature_engineering import features as fe  # noqa: E402
+
+def test_model_feature_columns_reject_unknown_lead_type():
+    """Unknown IDs fail clearly instead of silently using another schema."""
+    with pytest.raises(ValueError, match="Unknown lead_type_id"):
+        fe.model_feature_columns(999_999)
+
+
+def test_every_registered_lead_type_has_model_features():
+    """Every lead type in the canonical registry has a usable model schema."""
+    for registered_id in all_lead_type_ids():
+        numeric, categorical = fe.model_feature_columns(registered_id)
+        assert numeric or categorical
+
+
+def test_model_feature_columns_are_unique_and_disjoint():
+    """A feature cannot be duplicated or belong to both preprocessing groups."""
+    for registered_id in all_lead_type_ids():
+        numeric, categorical = fe.model_feature_columns(registered_id)
+
+        assert len(numeric) == len(set(numeric))
+        assert len(categorical) == len(set(categorical))
+        assert set(numeric).isdisjoint(categorical)
+
+
+def test_model_feature_column_order_is_deterministic():
+    """Repeated resolution returns the same ordered feature lists."""
+    for registered_id in all_lead_type_ids():
+        first = fe.model_feature_columns(registered_id)
+        second = fe.model_feature_columns(registered_id)
+        assert first == second
+
+
+def test_mandatory_and_optional_features_partition_model_schema():
+    """Mandatory and optional sets are complete, non-overlapping partitions."""
+    for registered_id in all_lead_type_ids():
+        numeric, categorical = fe.model_feature_columns(registered_id)
+        selected = set(numeric) | set(categorical)
+        mandatory = fe.mandatory_features(registered_id)
+        optional = fe.optional_features(registered_id)
+
+        assert mandatory.isdisjoint(optional)
+        assert mandatory | optional == selected
+
+
+def test_disabling_optional_features_keeps_only_mandatory_features():
+    """An empty optional selection never removes mandatory model inputs."""
+    for registered_id in all_lead_type_ids():
+        numeric, categorical = fe.model_feature_columns(
+            registered_id, optional_enabled=set()
+        )
+        assert set(numeric) | set(categorical) == fe.mandatory_features(registered_id)
+
+
+# --- Mandatory / optional feature selection ---------------------------------
 
 
 def test_sr22_is_auto_only_model_feature():
     """sr22_required is an auto-only model feature."""
-    _, cat_auto = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
-    _, cat_home = fe.model_feature_columns(fe.LEAD_TYPE_HOME)
-    assert "sr22_required" in cat_auto  # SR-22 is an auto matching criterion
-    assert "sr22_required" not in cat_home
+    num_auto, cat_auto = fe.model_feature_columns(lead_type_id("auto"))
+    num_home, cat_home = fe.model_feature_columns(lead_type_id("home"))
+    auto_features = set(num_auto) | set(cat_auto)
+    home_features = set(num_home) | set(cat_home)
+    assert "sr22_required" in auto_features
+    assert "sr22_required" not in home_features
 
 
 def test_mandatory_features_kept_when_no_optional():
     """With no optional features, only the auto mandatory core survives."""
     numeric, categorical = fe.model_feature_columns(
-        fe.LEAD_TYPE_AUTO, optional_enabled=set()
+        lead_type_id("auto"), optional_enabled=set()
     )
     selected = set(numeric) | set(categorical)
-    expected = fe.mandatory_features(fe.LEAD_TYPE_AUTO)
+    expected = fe.mandatory_features(lead_type_id("auto"))
     assert selected == expected
     # image criteria all present
     for col in (
@@ -259,7 +317,7 @@ def test_mandatory_features_kept_when_no_optional():
         "age",
     ):
         assert col in selected
-    assert fe.AGE_COHORT_COLUMN in selected
+    assert "age_cohort" in selected
     # optional features are gone
     for col in (
         "state",
@@ -276,18 +334,18 @@ def test_mandatory_features_kept_when_no_optional():
 def test_optional_subset_is_added_to_mandatory():
     """Requested optional features are added on top of the mandatory core."""
     numeric, categorical = fe.model_feature_columns(
-        fe.LEAD_TYPE_AUTO, optional_enabled={"state", "traffic_tier"}
+        lead_type_id("auto"), optional_enabled={"state", "traffic_tier"}
     )
     selected = set(numeric) | set(categorical)
     assert {"state", "traffic_tier"}.issubset(selected)  # requested optional
-    assert fe.mandatory_features(fe.LEAD_TYPE_AUTO) <= selected  # core still there
+    assert fe.mandatory_features(lead_type_id("auto")) <= selected  # core still there
     assert "gender" not in selected and "campaign_id" not in selected
 
 
 def test_optional_cannot_drop_mandatory():
     """Mandatory features survive even when the optional list omits them."""
     numeric, categorical = fe.model_feature_columns(
-        fe.LEAD_TYPE_AUTO, optional_enabled={"state"}
+        lead_type_id("auto"), optional_enabled={"state"}
     )
     selected = set(numeric) | set(categorical)
     assert "sr22_required" in selected and "home_owner" in selected
@@ -298,8 +356,10 @@ def test_config_none_selects_mandatory_only(monkeypatch):
     from smarthub.core import task_config
 
     monkeypatch.setattr(task_config, "get", lambda *a, **k: "none")
-    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
-    assert set(numeric) | set(categorical) == fe.mandatory_features(fe.LEAD_TYPE_AUTO)
+    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
+    assert set(numeric) | set(categorical) == fe.mandatory_features(
+        lead_type_id("auto")
+    )
 
 
 def test_config_comma_list_ignores_unknown(monkeypatch):
@@ -307,11 +367,11 @@ def test_config_comma_list_ignores_unknown(monkeypatch):
     from smarthub.core import task_config
 
     monkeypatch.setattr(task_config, "get", lambda *a, **k: "state, not_a_feature")
-    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
     selected = set(numeric) | set(categorical)
     assert "state" in selected
     assert "not_a_feature" not in selected
-    assert fe.mandatory_features(fe.LEAD_TYPE_AUTO) <= selected
+    assert fe.mandatory_features(lead_type_id("auto")) <= selected
 
 
 def test_unknown_lead_type_raises():
@@ -320,32 +380,34 @@ def test_unknown_lead_type_raises():
             fn(999)
 
 
-def test_new_lead_type_needs_only_one_registry_entry(monkeypatch):
-    # Registering a synthetic "commercial" type is a single LEAD_TYPES entry —
-    # no other code changes — and it flows through the normal selection path.
-    spec = fe.LeadTypeSpec(
-        name="commercial",
-        numeric=fe._SHARED_NUMERIC | {"num_employees"},
-        categorical=fe._SHARED_CATEGORICAL,
-        mandatory=frozenset({"bid"}),
+def test_new_feature_needs_only_one_registry_entry(monkeypatch):
+    """A new feature registry entry flows through normal model selection."""
+    monkeypatch.setitem(
+        FEATURES,
+        "synthetic_score",
+        FeatureSpec(
+            name="synthetic_score",
+            kind="numeric",
+            source="raw",
+            lead_types=frozenset({"auto"}),
+            api_input="synthetic_score",
+        ),
     )
-    monkeypatch.setitem(fe.LEAD_TYPES, 9, spec)
 
-    assert fe.lead_type_name(9) == "commercial"
-    numeric, categorical = fe.model_feature_columns(9, optional_enabled=set())
-    assert set(numeric) | set(categorical) == {"bid"}  # mandatory core only
-    numeric, categorical = fe.model_feature_columns(9)  # all optional (default)
-    selected = set(numeric) | set(categorical)
-    assert "num_employees" in selected and "state" in selected
-    # auto-only features never leak into commercial (inclusion, not exclusion)
-    assert "num_vehicles" not in selected and "home_property_type" not in selected
+    numeric, categorical = fe.model_feature_columns(
+        lead_type_id("auto"),
+        optional_enabled={"synthetic_score"},
+    )
+
+    assert "synthetic_score" in numeric
+    assert "synthetic_score" not in categorical
 
 
 def test_optional_and_mandatory_partition_the_feature_set():
     """Mandatory and optional sets are disjoint and cover the full auto set."""
-    num, cat = fe.model_feature_columns(fe.LEAD_TYPE_AUTO, optional_enabled=None)
-    mand = fe.mandatory_features(fe.LEAD_TYPE_AUTO)
-    opt = fe.optional_features(fe.LEAD_TYPE_AUTO)
+    num, cat = fe.model_feature_columns(lead_type_id("auto"), optional_enabled=None)
+    mand = fe.mandatory_features(lead_type_id("auto"))
+    opt = fe.optional_features(lead_type_id("auto"))
     assert mand.isdisjoint(opt)
     assert "sr22_required" in mand and "state" in opt
     # home-only features never leak into the auto optional set
@@ -357,7 +419,7 @@ def test_config_all_keeps_every_feature(monkeypatch):
     from smarthub.core import task_config
 
     monkeypatch.setattr(task_config, "get", lambda *a, **k: "all")
-    numeric, categorical = fe.model_feature_columns(fe.LEAD_TYPE_AUTO)
+    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
     selected = set(numeric) | set(categorical)
     # matches the un-filtered universe for auto (all optional + mandatory)
     for col in (

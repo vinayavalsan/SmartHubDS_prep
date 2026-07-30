@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from smarthub.feature_engineering import features as fe
+from smarthub.core.lead_types import lead_type_id
 from smarthub.server import predict
 from smarthub.train_and_predict import config, optimizer, registry
 
@@ -313,7 +313,7 @@ def test_load_model_and_manifest_cold_start(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "active_model_version", lambda: None)
     predict.clear_model_cache()
 
-    model, manifest = predict.load_model_and_manifest(fe.LEAD_TYPE_AUTO)
+    model, manifest = predict.load_model_and_manifest(lead_type_id("auto"))
     assert model is None
     assert manifest is None
 
@@ -333,6 +333,7 @@ def test_load_model_and_manifest_currently_serving(tmp_path, monkeypatch):
         optimizer_summary={},
         lineage={},
         model_params={},
+        training_config={},
         promotion_mode="manual",
         eligibility_status="eligible",
         promotion_status="awaiting_manual_promotion",
@@ -340,7 +341,7 @@ def test_load_model_and_manifest_currently_serving(tmp_path, monkeypatch):
     )
     registry.promote("auto", saved_manifest["version"])
 
-    model, manifest = predict.load_model_and_manifest(fe.LEAD_TYPE_AUTO)
+    model, manifest = predict.load_model_and_manifest(lead_type_id("auto"))
     assert isinstance(model, _ConstantWinRateModel)
     assert model.win_rate == pytest.approx(0.42)
     assert manifest["version"] == saved_manifest["version"]
@@ -360,6 +361,7 @@ def test_load_model_and_manifest_pinned_version(tmp_path, monkeypatch):
         optimizer_summary={},
         lineage={},
         model_params={},
+        training_config={},
         promotion_mode="manual",
         eligibility_status="eligible",
         promotion_status="awaiting_manual_promotion",
@@ -370,7 +372,7 @@ def test_load_model_and_manifest_pinned_version(tmp_path, monkeypatch):
         config, "active_model_version", lambda: saved_manifest["version"]
     )
 
-    model, manifest = predict.load_model_and_manifest(fe.LEAD_TYPE_AUTO)
+    model, manifest = predict.load_model_and_manifest(lead_type_id("auto"))
     assert model.win_rate == pytest.approx(0.11)
     assert manifest["version"] == saved_manifest["version"]
 
@@ -383,6 +385,6 @@ def test_load_model_and_manifest_env_override_has_no_manifest(tmp_path, monkeypa
     monkeypatch.setenv("MODEL_URI", str(model_path))
     predict.clear_model_cache()
 
-    model, manifest = predict.load_model_and_manifest(fe.LEAD_TYPE_AUTO)
+    model, manifest = predict.load_model_and_manifest(lead_type_id("auto"))
     assert model.win_rate == pytest.approx(0.7)
     assert manifest is None

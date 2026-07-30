@@ -1,3 +1,6 @@
+# Calibration is intentionally not configured for hyperparameter search.
+# Candidate models are evaluated without post-fit calibration.
+
 search:
   model_type: lightgbm
   scoring: neg_log_loss

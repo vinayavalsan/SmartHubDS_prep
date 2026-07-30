@@ -171,17 +171,18 @@ def build_lightgbm_model(
     return pipeline
 
 
-def _maybe_calibrate(pipeline, calibrate, calibration_method, calibration_cv):
+def _maybe_calibrate(pipeline, calibration_enabled, calibration_method, calibration_cv):
     """Apply the configured probability calibration when enabled.
 
     Inputs
     ------
     pipeline : Any
         Classifier pipeline to calibrate.
-    calibrate : bool
+    calibration_enabled : bool
         Whether to apply probability calibration.
     calibration_method : str
-        Calibration method passed to ``CalibratedClassifierCV``.
+        Calibration method passed to ``CalibratedClassifierCV``. Supported
+        values are ``sigmoid`` and ``isotonic``.
     calibration_cv : int
         Number of calibration cross-validation folds.
 
@@ -190,7 +191,7 @@ def _maybe_calibrate(pipeline, calibrate, calibration_method, calibration_cv):
     Any
         Original pipeline or calibrated classifier.
     """
-    if not calibrate:
+    if not calibration_enabled:
         return pipeline
     from sklearn.calibration import CalibratedClassifierCV
 
@@ -215,7 +216,7 @@ def build_model(
     categorical_features,
     model_params,
     *,
-    calibrate,
+    calibration_enabled,
     calibration_method,
     calibration_cv,
 ):
@@ -231,10 +232,11 @@ def build_model(
         Categorical feature names.
     model_params : dict
         Parameters passed to the classifier.
-    calibrate : bool
+    calibration_enabled : bool
         Whether to apply probability calibration.
     calibration_method : str
-        Calibration method passed to ``CalibratedClassifierCV``.
+        Calibration method passed to ``CalibratedClassifierCV``. Supported
+        values are ``sigmoid`` and ``isotonic``.
     calibration_cv : int
         Number of calibration cross-validation folds.
 
@@ -263,7 +265,7 @@ def build_model(
     )
     return _maybe_calibrate(
         pipeline,
-        calibrate=calibrate,
+        calibration_enabled=calibration_enabled,
         calibration_method=calibration_method,
         calibration_cv=calibration_cv,
     )

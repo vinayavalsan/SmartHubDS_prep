@@ -14,13 +14,14 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from smarthub.feature_engineering import features as fe
+from smarthub.core.lead_types import all_lead_type_ids
+from smarthub.core.lead_types import lead_type_id as get_lead_type_id
 from smarthub.train_and_predict import config, optimizer, preprocessing, registry
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_model_uri(lead_type_id: int = 6) -> str:
+def resolve_model_uri(lead_type_id: int = get_lead_type_id("auto")) -> str:
     """Resolve the model artifact used for serving.
 
     Inputs
@@ -135,7 +136,7 @@ def _cached_manifest(lead_type_name: str, version: str) -> dict | None:
     return manifest
 
 
-def is_model_cached(lead_type_id: int = 6) -> bool:
+def is_model_cached(lead_type_id: int = get_lead_type_id("auto")) -> bool:
     """Return whether a lead type's currently-resolved model is in memory.
 
     Cheap: only resolves the URI and checks the cache dict, never loads or
@@ -149,7 +150,10 @@ def is_model_cached(lead_type_id: int = 6) -> bool:
     return _model_cache_key(uri) in _MODEL_CACHE
 
 
-def load_model(model_uri: str | None = None, lead_type_id: int = 6):
+def load_model(
+    model_uri: str | None = None,
+    lead_type_id: int = get_lead_type_id("auto"),
+):
     """Load a local or MLflow model artifact, from cache when possible.
 
     Inputs
@@ -183,7 +187,7 @@ def load_model(model_uri: str | None = None, lead_type_id: int = 6):
     return model
 
 
-def load_model_and_manifest(lead_type_id: int = 6):
+def load_model_and_manifest(lead_type_id: int = get_lead_type_id("auto")):
     """Resolve + load the serving model and its manifest, cold-start-safe.
 
     Same three-tier resolution order as `resolve_model_uri` (`MODEL_URI` env
@@ -249,7 +253,7 @@ def _eager_load_models() -> None:
     the eventual exception surfaces on that request, same as before this
     existed).
     """
-    for lead_type_id in fe.LEAD_TYPES:
+    for lead_type_id in all_lead_type_ids():
         try:
             load_model(lead_type_id=lead_type_id)
         except FileNotFoundError:
@@ -604,7 +608,7 @@ if _FASTAPI_AVAILABLE:
         # for realized win-rate calibration. Never used in the bid decision
         # itself, purely a correlation key for logging.
         lead_ping_id: int | None = None
-        lead_type_id: int = 6
+        lead_type_id: int = get_lead_type_id("auto")
         created_hour: int = Field(..., ge=0, le=23)
         created_dayofweek: int = Field(..., ge=0, le=6)
 
@@ -645,7 +649,7 @@ if _FASTAPI_AVAILABLE:
     app = FastAPI(title="Anton Bid Prediction API", lifespan=_lifespan)
 
     @app.get("/health")
-    def health(lead_type_id: int = 6):
+    def health(lead_type_id: int = get_lead_type_id("auto")):
         """Return service health and the resolved model artifact.
 
         Inputs

@@ -404,7 +404,9 @@ def run_hyperparameter_search(
             numeric_features=numeric,
             categorical_features=categorical,
             model_params=model_parameters,
-            calibrate=False,
+            calibration_enabled=False,
+            calibration_method=None,
+            calibration_cv=None,
         )
         scores = cross_val_score(
             estimator,

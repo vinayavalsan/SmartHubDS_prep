@@ -145,6 +145,7 @@ pick `staging`/`prod`, Save — validated + history-tracked). Read in code:
 
 ```python
 from smarthub.core.config_store import ConfigStore
+
 ConfigStore().get("target_cm", env="prod")     # typed, validated, with fallback
 ```
 
