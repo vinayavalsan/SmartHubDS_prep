@@ -20,13 +20,13 @@ same pattern as `predict.py`'s lazy joblib/mlflow/fastapi imports.
 from __future__ import annotations
 
 import fcntl
-import logging
 import os
 import threading
 
 from smarthub.core import task_config
+from smarthub.core.logging_utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 

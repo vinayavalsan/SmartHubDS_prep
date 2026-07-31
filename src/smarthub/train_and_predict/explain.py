@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from smarthub.core.logging_utils import get_logger
 from smarthub.server import predict
 
 from . import preprocessing
@@ -49,7 +50,6 @@ from .llm_explain import (  # noqa: F401 -- re-exported, see module docstring
     ensure_model_pulled_async,
     format_llm_prompt,
     is_model_pulled,
-    logger,
     pull_model,
 )
 from .shap_explain import (  # noqa: F401 -- re-exported, see module docstring
@@ -58,6 +58,8 @@ from .shap_explain import (  # noqa: F401 -- re-exported, see module docstring
     _to_native,
     explain_row,
 )
+
+logger = get_logger(__name__)
 
 
 def explain_bid(

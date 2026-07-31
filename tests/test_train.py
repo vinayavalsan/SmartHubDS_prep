@@ -16,31 +16,24 @@ pytest.importorskip("sklearn")
 from smarthub.train_and_predict import registry, train  # noqa: E402
 
 
-class _StubLogger:
-    """Minimal stand-in for a Prefect/stdlib logger -- just records calls."""
-
-    def __init__(self):
-        self.infos = []
-        self.warnings = []
-
-    def info(self, msg, *args):
-        self.infos.append(msg % args if args else msg)
-
-    def warning(self, msg, *args):
-        self.warnings.append(msg % args if args else msg)
-
-
 def test_evaluate_currently_serving_model_none_when_nothing_serving(monkeypatch):
     """No promoted version yet -> (None, None), logged as the bootstrap case."""
     monkeypatch.setattr(
         registry, "currently_serving_version", lambda lead_type_name: None
     )
-    log = _StubLogger()
+    logged_messages = []
+    monkeypatch.setattr(
+        train.logger,
+        "info",
+        lambda message, *args: logged_messages.append(
+            message % args if args else message
+        ),
+    )
     result = train._evaluate_currently_serving_model(
-        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100, log
+        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100
     )
     assert result == (None, None)
-    assert any("first model" in m for m in log.infos)
+    assert any("first model" in message for message in logged_messages)
 
 
 def test_evaluate_currently_serving_model_propagates_registry_load_error(monkeypatch):
@@ -53,10 +46,9 @@ def test_evaluate_currently_serving_model_propagates_registry_load_error(monkeyp
         registry, "currently_serving_version", lambda lead_type_name: "v1_x"
     )
     monkeypatch.setattr(registry, "load_currently_serving_model", _boom)
-    log = _StubLogger()
     with pytest.raises(ValueError, match="Expecting value"):
         train._evaluate_currently_serving_model(
-            "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100, log
+            "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100
         )
 
 
@@ -78,18 +70,25 @@ def test_evaluate_currently_serving_model_skips_incompatible_schema(monkeypatch)
             {"version": "v1_x", "feature_cols": ["not_a_real_column"]},
         ),
     )
-    log = _StubLogger()
     test_df = pd.DataFrame({"bid": [1.0, 2.0]})
+    logged = []
+    monkeypatch.setattr(
+        train.logger,
+        "warning",
+        lambda message, *args: logged.append(message % args if args else message),
+    )
     result = train._evaluate_currently_serving_model(
-        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100, log
+        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100
     )
     assert result == (None, None)
-    assert any("not present in the current training data" in w for w in log.warnings)
+    assert any(
+        "not present in the current training data" in message
+        for message in logged
+    )
 
 
 def test_evaluate_currently_serving_model_skips_on_scoring_failure(monkeypatch):
-    """If the champion's fitted pipeline can't score the current columns, it's
-    treated as not comparable rather than failing the training run."""
+    """If the champion pipeline cannot score, treat it as not comparable."""
 
     class _Boom:
         def predict_proba(self, X):
@@ -109,10 +108,18 @@ def test_evaluate_currently_serving_model_skips_on_scoring_failure(monkeypatch):
             {"version": "v2_x", "feature_cols": ["bid"]},
         ),
     )
-    log = _StubLogger()
+
+    logged = []
+    monkeypatch.setattr(
+        train.logger,
+        "warning",
+        lambda message, *args: logged.append(message % args if args else message),
+    )
+
     test_df = pd.DataFrame({"bid": [1.0, 2.0]})
     result = train._evaluate_currently_serving_model(
-        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100, log
+        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100
     )
     assert result == (None, None)
-    assert any("not comparable" in w for w in log.warnings)
+    assert any("not comparable" in message for message in logged)
+

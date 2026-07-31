@@ -61,12 +61,10 @@ def _train_task(lead_type_id, version, register_mlflow):
     dict
         Training workflow result.
     """
-    logger = get_run_logger()
     return train.run_training(
         lead_type_id=lead_type_id,
         version=version,
         register_mlflow=register_mlflow,
-        log=logger,
     )
 
 

@@ -11,6 +11,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from smarthub.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 def build_logistic_regression_model(
     numeric_features,

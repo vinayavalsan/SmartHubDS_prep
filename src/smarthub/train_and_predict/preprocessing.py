@@ -8,9 +8,12 @@ from __future__ import annotations
 import pandas as pd
 
 from smarthub.core import io
+from smarthub.core.logging_utils import get_logger
 from smarthub.feature_engineering import features as fe
 
 from . import config
+
+logger = get_logger(__name__)
 
 
 def normalize_model_frame(df, numeric_features, categorical_features):

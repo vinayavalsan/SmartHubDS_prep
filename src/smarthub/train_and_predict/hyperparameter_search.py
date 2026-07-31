@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,9 +17,11 @@ import optuna
 import yaml
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 
+from smarthub.core.logging_utils import get_logger
+
 from . import config, models, preprocessing
 
-logger = logging.getLogger("smarthub.train_and_predict.hyperparameter_search")
+logger = get_logger(__name__)
 
 
 def _suggest_parameter(
@@ -163,7 +164,6 @@ def _write_optuna_plots(
     study: optuna.Study,
     parameter_names: list[str],
     scoring: str,
-    log: logging.Logger,
 ) -> dict[str, Path]:
     """Write interactive Optuna visualizations as HTML artifacts.
 
@@ -177,8 +177,6 @@ def _write_optuna_plots(
         Hyperparameters to include in the multi-parameter contour matrix.
     scoring : str
         Scikit-learn scoring name used by the Optuna objective.
-    log : logging.Logger
-        Logger used to report any visualization failures.
 
     Returns
     -------
@@ -225,7 +223,7 @@ def _write_optuna_plots(
             )
             plot_paths[plot_name] = plot_path
         except (ImportError, RuntimeError, ValueError, ZeroDivisionError) as exc:
-            log.warning("Unable to create %s plot: %s", plot_name, exc)
+            logger.warning("Unable to create %s plot: %s", plot_name, exc)
 
     return plot_paths
 
@@ -240,7 +238,6 @@ def _write_outputs(
     study: optuna.Study,
     best_parameters: dict[str, Any],
     parameter_names: list[str],
-    log: logging.Logger,
 ) -> tuple[Path, Path, dict[str, Path]]:
     """Write the minimal tuning summary and copy-paste YAML block.
 
@@ -264,8 +261,6 @@ def _write_outputs(
         Winning parameters including fixed values.
     parameter_names : list[str]
         Hyperparameters to include in the contour matrix.
-    log : logging.Logger
-        Logger used to report visualization output and failures.
 
     Returns
     -------
@@ -317,7 +312,6 @@ def _write_outputs(
         study=study,
         parameter_names=parameter_names,
         scoring=search_config.scoring,
-        log=log,
     )
 
     return summary_path, parameters_path, plot_paths
@@ -327,7 +321,6 @@ def run_hyperparameter_search(
     lead_type_id: int,
     version: str | None = None,
     config_path: str | Path | None = None,
-    log: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """Run manual Bayesian hyperparameter search for one model.
 
@@ -339,15 +332,12 @@ def run_hyperparameter_search(
         Optional training-table version. The latest is used when omitted.
     config_path : str | pathlib.Path | None
         Optional hyperparameter-search YAML path.
-    log : logging.Logger | None
-        Optional logger for structured output.
 
     Returns
     -------
     dict[str, Any]
         Search result and generated output paths.
     """
-    log = log or logger
     search_config = config.load_hyperparameter_search_config(config_path)
     normalized_model_type = search_config.model_type.strip().lower()
     model_config = search_config.model_config(normalized_model_type)
@@ -355,7 +345,7 @@ def run_hyperparameter_search(
 
     np.random.seed(search_config.random_seed)
 
-    log.info(
+    logger.info(
         "Loading training table for lead_type=%s (%s)",
         lead_type_name,
         lead_type_id,
@@ -376,7 +366,7 @@ def run_hyperparameter_search(
         categorical,
     )
     if dropped:
-        log.info("Dropped zero-variance features: %s", ", ".join(dropped))
+        logger.info("Dropped zero-variance features: %s", ", ".join(dropped))
 
     feature_cols = numeric + categorical
     X = frame[feature_cols]
@@ -419,12 +409,12 @@ def run_hyperparameter_search(
         )
         return float(np.mean(scores))
 
-    log.info("Hyperparameter Search")
-    log.info("  Model type                            : %s", normalized_model_type)
-    log.info("  Training rows                         : %s", f"{len(frame):,}")
-    log.info("  Trials                                : %s", search_config.n_trials)
-    log.info("  Cross-validation folds                : %s", search_config.cv_folds)
-    log.info("  Scoring                               : %s", search_config.scoring)
+    logger.info("Hyperparameter Search")
+    logger.info("  Model type                            : %s", normalized_model_type)
+    logger.info("  Training rows                         : %s", f"{len(frame):,}")
+    logger.info("  Trials                                : %s", search_config.n_trials)
+    logger.info("  Cross-validation folds                : %s", search_config.cv_folds)
+    logger.info("  Scoring                               : %s", search_config.scoring)
 
     study = optuna.create_study(
         study_name=f"{lead_type_name}_{normalized_model_type}",
@@ -459,17 +449,16 @@ def run_hyperparameter_search(
         study=study,
         best_parameters=best_parameters,
         parameter_names=list(search_space),
-        log=log,
     )
 
     yaml_text = parameters_path.read_text(encoding="utf-8").rstrip()
-    log.info("Best score: %.6f", study.best_value)
-    log.info("Best trial: %s", study.best_trial.number)
-    log.info("Copy the following into config/training.yaml:\n%s", yaml_text)
-    log.info("Saved summary: %s", summary_path)
-    log.info("Saved parameters: %s", parameters_path)
+    logger.info("Best score: %.6f", study.best_value)
+    logger.info("Best trial: %s", study.best_trial.number)
+    logger.info("Copy the following into config/training.yaml:\n%s", yaml_text)
+    logger.info("Saved summary: %s", summary_path)
+    logger.info("Saved parameters: %s", parameters_path)
     for plot_name, plot_path in plot_paths.items():
-        log.info("Saved %s plot: %s", plot_name, plot_path)
+        logger.info("Saved %s plot: %s", plot_name, plot_path)
 
     return {
         "lead_type_id": lead_type_id,
@@ -518,11 +507,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional hyperparameter-search YAML path.",
     )
     args = parser.parse_args(argv)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
     optuna.logging.set_verbosity(optuna.logging.INFO)
 
     run_hyperparameter_search(

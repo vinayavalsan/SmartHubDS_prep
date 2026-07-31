@@ -16,10 +16,10 @@ import yaml
 
 from smarthub.core import paths, task_config
 from smarthub.core.lead_types import lead_type_name as canonical_lead_type_name
+from smarthub.core.logging_utils import get_logger
 from smarthub.feature_engineering import features as fe
 
-logger = logging.getLogger("smarthub.train_and_predict.config")
-
+logger = get_logger(__name__)
 TARGET_COL = fe.TARGET_COLUMN
 REVENUE_COL = fe.REVENUE_COLUMN
 _SUPPORTED_MODELS = {"logistic_regression", "xgboost", "lightgbm"}
@@ -66,8 +66,8 @@ class TrainingConfig:
     random_seed: int
     drop_zero_variance: bool
     calibration_enabled: bool
-    calibration_method: str
-    calibration_cv: int
+    calibration_method: str | None
+    calibration_cv: int | None
     split: dict[str, Any]
     model_parameters: dict[str, Any]
     optimizer: OptimizerConfig
@@ -499,13 +499,30 @@ def load_training_config(
     if not isinstance(calibration_enabled, bool):
         raise TypeError("calibration.enabled must be a YAML boolean.")
 
-    calibration_method = str(calibration_root["method"]).strip().lower()
-    if calibration_method not in {"sigmoid", "isotonic"}:
-        raise ValueError("calibration.method must be one of 'sigmoid' or 'isotonic'.")
-    calibration_cv = _positive_int(
-        calibration_root["cv"],
-        "calibration.cv",
-    )
+    if calibration_enabled:
+        if "method" not in calibration_root:
+            raise ValueError(
+                "Missing required config: calibration.method "
+                "when calibration.enabled is true."
+            )
+        if "cv" not in calibration_root:
+            raise ValueError(
+                "Missing required config: calibration.cv "
+                "when calibration.enabled is true."
+            )
+
+        calibration_method = str(calibration_root["method"]).strip().lower()
+        if calibration_method not in {"sigmoid", "isotonic"}:
+            raise ValueError(
+                "calibration.method must be one of 'sigmoid' or 'isotonic'."
+            )
+        calibration_cv = _positive_int(
+            calibration_root["cv"],
+            "calibration.cv",
+        )
+    else:
+        calibration_method = None
+        calibration_cv = None
     model_parameters = copy.deepcopy(
         _mapping(
             models_root[model_type],

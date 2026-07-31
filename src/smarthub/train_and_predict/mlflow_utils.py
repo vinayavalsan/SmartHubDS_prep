@@ -10,6 +10,9 @@ import mlflow.sklearn
 from mlflow import MlflowClient
 
 from smarthub.core import paths
+from smarthub.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 logger = logging.getLogger("smarthub.train_and_predict.mlflow_utils")
 

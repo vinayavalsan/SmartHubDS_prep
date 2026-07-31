@@ -4,7 +4,6 @@ This module summarizes data and writes model and optimizer report artifacts.
 """
 
 import json
-import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -12,7 +11,9 @@ import pandas as pd
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve
 
-logger = logging.getLogger("smarthub.train_and_predict.plots_and_reports")
+from smarthub.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def build_feature_summary_dataframe(
@@ -192,7 +193,6 @@ def log_training_data_summary(
     feature_summary_df,
     feature_counts_df,
     target_col=None,
-    log=None,
 ):
     """Log a compact summary of the prepared training data.
 
@@ -206,30 +206,27 @@ def log_training_data_summary(
         Feature-value count dataframe.
     target_col : str | None
         Optional target column name.
-    log : logging.Logger | None
-        Optional logger for structured output.
     """
-    log = log or logger
-    log.info("Dataset Summary")
-    log.info("  Total rows                            : %s", f"{len(df):,}")
+    logger.info("Dataset Summary")
+    logger.info("  Total rows                            : %s", f"{len(df):,}")
 
     if target_col is not None and target_col in df.columns:
         target = pd.to_numeric(df[target_col], errors="coerce")
         if target.notna().any():
-            log.info("  Target win rate                       : %.4f", target.mean())
+            logger.info("  Target win rate                       : %.4f", target.mean())
 
     if not feature_summary_df.empty:
         total_missing = int(feature_summary_df["missing_count"].sum())
         missing_features = int((feature_summary_df["missing_count"] > 0).sum())
-        log.info(
+        logger.info(
             "  Features summarized                   : %s",
             f"{len(feature_summary_df):,}",
         )
-        log.info(
+        logger.info(
             "  Features with missing values          : %s",
             f"{missing_features:,}",
         )
-        log.info(
+        logger.info(
             "  Total missing feature values          : %s",
             f"{total_missing:,}",
         )
@@ -239,9 +236,9 @@ def log_training_data_summary(
         ).head(8)
         top_missing = top_missing[top_missing["missing_count"] > 0]
         if not top_missing.empty:
-            log.info("  Top missing features")
+            logger.info("  Top missing features")
             for row in top_missing.itertuples(index=False):
-                log.info(
+                logger.info(
                     "    %-35s %8s (%6.2f%%)",
                     row.feature,
                     f"{int(row.missing_count):,}",
@@ -249,7 +246,7 @@ def log_training_data_summary(
                 )
 
     if feature_counts_df is not None and not feature_counts_df.empty:
-        log.info(
+        logger.info(
             "  Feature-value count rows saved        : %s",
             f"{len(feature_counts_df):,}",
         )
@@ -631,7 +628,7 @@ def save_evaluation_summary(
     return summary_json_path
 
 
-def log_saved_report_files(report_dir, optimizer_eval_df=None, log=None):
+def log_saved_report_files(report_dir, optimizer_eval_df=None):
     """Log the report artifacts written by the training run.
 
     Inputs
@@ -640,10 +637,7 @@ def log_saved_report_files(report_dir, optimizer_eval_df=None, log=None):
         Directory for report artifacts.
     optimizer_eval_df : pandas.DataFrame | None
         Row-level optimizer evaluation results.
-    log : logging.Logger | None
-        Optional logger for structured output.
     """
-    log = log or logger
     report_dir = Path(report_dir)
 
     files = [
@@ -669,11 +663,11 @@ def log_saved_report_files(report_dir, optimizer_eval_df=None, log=None):
         )
 
     existing = [filename for filename in files if (report_dir / filename).exists()]
-    log.info("Saved Training Reports")
-    log.info("  Report directory                      : %s", report_dir)
-    log.info("  Files generated                       : %s", f"{len(existing):,}")
+    logger.info("Saved Training Reports")
+    logger.info("  Report directory                      : %s", report_dir)
+    logger.info("  Files generated                       : %s", f"{len(existing):,}")
     for filename in existing:
-        log.info("    %s", report_dir / filename)
+        logger.info("    %s", report_dir / filename)
 
 
 def print_saved_report_files(report_dir, optimizer_eval_df=None):

@@ -5,7 +5,6 @@ This module computes, stores, and logs classifier and calibration metrics.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import asdict, dataclass
 
 from sklearn.metrics import (
@@ -20,7 +19,9 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-logger = logging.getLogger("smarthub.train_and_predict.metrics")
+from smarthub.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,6 @@ def log_model_evaluation(
     rows_trained: int,
     train_rows: int,
     test_rows: int,
-    log=None,
 ):
     """Log classifier and business-facing evaluation metrics.
 
@@ -126,25 +126,22 @@ def log_model_evaluation(
         Number of model-fitting rows.
     test_rows : int
         Number of held-out rows.
-    log : logging.Logger | None
-        Optional logger for structured output.
     """
-    log = log or logger
-    log.info("Model Evaluation")
-    log.info("  Rows trained                       : %s", f"{rows_trained:,}")
-    log.info(
+    logger.info("Model Evaluation")
+    logger.info("  Rows trained                       : %s", f"{rows_trained:,}")
+    logger.info(
         "  Train / test rows                  : %s / %s",
         f"{train_rows:,}",
         f"{test_rows:,}",
     )
-    log.info("  ROC AUC                            : %.4f", model_metrics.roc_auc)
-    log.info("  PR AUC                             : %.4f", model_metrics.pr_auc)
-    log.info("  Log loss                           : %.4f", model_metrics.log_loss)
-    log.info(
+    logger.info("  ROC AUC                            : %.4f", model_metrics.roc_auc)
+    logger.info("  PR AUC                             : %.4f", model_metrics.pr_auc)
+    logger.info("  Log loss                           : %.4f", model_metrics.log_loss)
+    logger.info(
         "  Brier score                        : %.4f",
         model_metrics.brier_score,
     )
-    log.info(
+    logger.info(
         "  Accuracy / precision / recall / F1 / F2: %.4f / %.4f / %.4f / %.4f / %.4f",
         model_metrics.accuracy,
         model_metrics.precision,
@@ -152,20 +149,20 @@ def log_model_evaluation(
         model_metrics.f1,
         model_metrics.f2,
     )
-    log.info(
+    logger.info(
         "  Calibration error                  : %.4f",
         model_metrics.calibration_error,
     )
-    log.info("Business Metrics")
-    log.info(
+    logger.info("Business Metrics")
+    logger.info(
         "  Observed win rate                  : %.4f",
         model_metrics.observed_win_rate,
     )
-    log.info(
+    logger.info(
         "  Predicted win rate, current bids   : %.4f",
         model_metrics.predicted_current_bid_win_rate,
     )
-    log.info(
+    logger.info(
         "  Predicted win rate, recommended    : %.4f",
         model_metrics.predicted_recommended_bid_win_rate,
     )

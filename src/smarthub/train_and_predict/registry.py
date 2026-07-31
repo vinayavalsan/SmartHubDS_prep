@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -18,9 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from smarthub.core import paths
+from smarthub.core.logging_utils import get_logger
 
-logger = logging.getLogger(__name__)
-
+logger = get_logger(__name__)
 MODEL_DIR_ROOT = paths.data_dir() / "models"
 _PRODUCTION_VERSION_RE = re.compile(r"^(?P<lead>[a-z0-9_]+)_v(?P<number>\d+)$")
 
@@ -738,10 +737,6 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
 
     if args.command == "promote":
         from . import config, mlflow_utils
@@ -772,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
             args.version,
             **mlflow_metadata,
         )
-        logging.getLogger(__name__).info(
+        logger.info(
             "Promoted %s for %s (training_run_id=%s, previous=%s, "
             "mlflow_model=%s v%s).",
             pointer["production_model_version"],
