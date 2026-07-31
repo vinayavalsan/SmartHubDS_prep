@@ -55,10 +55,13 @@ def test_model_feature_columns_auto_vs_home():
         assert col in auto_features
         assert col in home_features
 
-    # high-cardinality / redundant identifiers are excluded
-    for col in ("source_type_id", "account_id"):
-        assert col not in auto_features
-        assert col not in home_features
+    # source_type_id is an enabled shared categorical model feature
+    assert "source_type_id" in auto_features
+    assert "source_type_id" in home_features
+
+    # account_id is retained metadata, not a model feature
+    assert "account_id" not in auto_features
+    assert "account_id" not in home_features
 
 
 def test_derive_serving_features_parity(monkeypatch):
@@ -83,7 +86,7 @@ def test_derive_serving_features_parity(monkeypatch):
         assert out.loc[0, "multi_vehicle"] == 1
     assert "is_married" not in out.columns
     assert out.loc[0, "age"] == 40
-    assert out.loc[0, "created_hour"] == 9
+    assert out.loc[0, "created_hour"] == "9"
 
 
 # --- Serving frame -----------------------------------------------------------
@@ -180,14 +183,23 @@ def test_prepare_training_data(monkeypatch):
     assert frame["created_at"].is_monotonic_increasing
 
 
-def test_drop_zero_variance():
+def test_find_zero_variance_features_reports_without_dropping():
     frame = pd.DataFrame(
-        {"a": [1, 2, 3], "b": [5, 5, 5], "c": ["x", "y", "x"], "d": ["k", "k", "k"]}
+        {
+            "a": [1, 2, 3],
+            "b": [5, 5, 5],
+            "c": ["x", "y", "x"],
+            "d": ["k", "k", "k"],
+        }
     )
-    num, cat, dropped = preprocessing.drop_zero_variance(frame, ["a", "b"], ["c", "d"])
-    assert num == ["a"]
-    assert cat == ["c"]
-    assert set(dropped) == {"b", "d"}
+
+    zero_variance = preprocessing.find_zero_variance_features(
+        frame,
+        ["a", "b"],
+        ["c", "d"],
+    )
+
+    assert set(zero_variance) == {"b", "d"}
 
 
 def test_assert_trainable_rejects_single_class():
@@ -200,6 +212,27 @@ def test_assert_trainable_rejects_single_class():
 def test_assert_trainable_accepts_two_classes():
     frame = pd.DataFrame({config.TARGET_COL: [1, 0, 1, 0]})
     assert preprocessing.assert_trainable(frame, "auto") == [0, 1]
+
+
+def test_assert_partition_has_both_classes_rejects_single_class():
+    frame = pd.DataFrame({config.TARGET_COL: [0, 0, 0]})
+
+    with pytest.raises(ValueError, match="Training partition.*only one target class"):
+        preprocessing.assert_partition_has_both_classes(
+            frame,
+            "auto",
+            "Training partition",
+        )
+
+
+def test_assert_partition_has_both_classes_accepts_two_classes():
+    frame = pd.DataFrame({config.TARGET_COL: [0, 1, 0, 1]})
+
+    preprocessing.assert_partition_has_both_classes(
+        frame,
+        "auto",
+        "Test partition",
+    )
 
 
 def test_prepare_training_data_missing_target(monkeypatch):
@@ -357,6 +390,9 @@ def test_run_bid_optimizer_evaluation_summary():
         min_bid=0.25,
         bid_step=0.25,
         chunk_size=100,
+        monotonicity_enabled=True,
+        monotonicity_tolerance=1e-8,
+        monotonicity_max_violation_rate=0.0,
     )
     assert out is not None
     eval_df, summary = out

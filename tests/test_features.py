@@ -197,8 +197,10 @@ def test_time_features_prefer_pacific():
         ["2026-06-22", "2026-06-20", "2026-06-20", "2026-06-21", "2026-06-20"]
     )
     table = build_training_table(raw).set_index("id")
-    assert table.loc[1, "created_hour"] == 17  # from pst_hour, not UTC 1
-    assert table.loc[1, "created_dayofweek"] == 0  # 2026-06-22 = Monday (PT)
+    assert table.loc[1, "created_hour"] == "17"  # categorical; from pst_hour, not UTC 1
+    assert (
+        table.loc[1, "created_dayofweek"] == "0"
+    )  # categorical; 2026-06-22 = Monday (PT)
 
 
 def test_training_table_is_lead_type_clean():

@@ -38,10 +38,20 @@ def _find(report, column, needle):
 
 
 def test_flags_range_domain_and_uniqueness():
-    """Range, domain, and uniqueness violations are flagged."""
+    """Range/domain/uniqueness violations are flagged on eligible rows."""
     pytest.importorskip("pandera")  # schema layer needs pandera
-    rep = validate_leads(_raw())
+    raw = _raw()
+
+    # Ordinary validation now runs only after erred and auction-ineligible rows
+    # are excluded. Keep all three rows in the validation population while
+    # preserving the seeded age/state/bid/id violations.
+    raw["erred"] = ["false", "false", "false"]
+    raw["bid"] = [5.0, 2.0, -1.0]
+    raw["won"] = ["true", "", "true"]  # row 3 stays eligible despite bid < 0
+
+    rep = validate_leads(raw)
     assert rep.schema_checked is True  # pandera installed in CI/dev
+    assert rep.validated_rows == 3
     assert _find(rep, "age", "out of range")
     assert _find(rep, "bid", "negative")
     assert _find(rep, "state", "not in allowed")
@@ -57,9 +67,13 @@ def test_check_labels_are_clean_and_stable():
 
 
 def test_cross_field_current_carrier_when_not_insured():
-    """Cross-field check flags carriers present while not insured."""
+    """Ordinary cross-field checks use only training-eligible rows."""
     rep = validate_leads(_raw())
-    assert rep.cross_field["current_carrier_when_not_insured"] == 2
+
+    # Row 1 is training-eligible and has carrier + insured=false.
+    # Row 3 has the same raw inconsistency but is auction-ineligible, so it is
+    # intentionally excluded before ordinary cross-field validation.
+    assert rep.cross_field["current_carrier_when_not_insured"] == 1
 
 
 def test_cross_field_won_true_without_bid():
@@ -80,14 +94,20 @@ def test_missing_catalogue_and_high_missing():
 
 
 def test_batch_metrics():
-    """Batch metrics count rows, illegal 'false', and coverage rates."""
+    """Batch metrics describe only the training-eligible population."""
     rep = validate_leads(_raw())
     m = rep.metrics
-    assert m["rows"] == 3
-    assert m["won_false_count"] == 1  # the illegal 'false'
+
+    assert rep.total_rows == 3
+    assert rep.erred_rows == 1
+    assert rep.auction_excluded_rows == 1
+    assert rep.validated_rows == 1
+
+    assert m["rows"] == 1
+    assert m["won_false_count"] == 0
     assert m["pst_hour_populated"] == 0.0
-    assert abs(m["age_implausible_rate"] - 1 / 3) < 1e-9
-    assert abs(m["exp_rev_coverage"] - 2 / 3) < 1e-9
+    assert m["age_implausible_rate"] == 0.0
+    assert m["exp_rev_coverage"] == 1.0
 
 
 def test_schema_drift_detects_missing_expected_column():

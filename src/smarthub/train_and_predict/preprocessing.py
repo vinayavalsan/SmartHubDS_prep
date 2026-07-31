@@ -16,33 +16,43 @@ from . import config
 logger = get_logger(__name__)
 
 
-def normalize_model_frame(df, numeric_features, categorical_features):
-    """Normalize numeric and categorical model feature types.
+def normalize_model_frame(
+    df: pd.DataFrame,
+    numeric_features,
+    categorical_features,
+) -> pd.DataFrame:
+    """Normalize an already feature-engineered model frame.
+
+    Training tables are produced by STEP 2 and already contain all registered
+    derived features. This function therefore performs dtype normalization
+    only; it must not derive features again.
 
     Inputs
     ------
     df : pandas.DataFrame
-        Input dataframe.
+        Feature-engineered dataframe.
     numeric_features : list[str]
-        Numeric feature names.
+        Numeric model feature names.
     categorical_features : list[str]
-        Categorical feature names.
+        Categorical model feature names.
 
     Returns
     -------
     pandas.DataFrame
-        Copy with normalized model feature types.
+        Copy with model feature dtypes normalized for fitting/scoring.
     """
-    df = df.copy()
-    for col in numeric_features:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    for col in categorical_features:
-        if col in df.columns:
-            df[col] = df[col].astype("string").str.strip()
+    out = df.copy()
 
-    fe.apply_registered_missing_values(df)
-    return df
+    for column in numeric_features:
+        if column in out.columns:
+            out[column] = pd.to_numeric(out[column], errors="coerce")
+
+    for column in categorical_features:
+        if column in out.columns:
+            values = out[column].astype("string").str.strip()
+            out[column] = values
+
+    return out
 
 
 def prepare_training_data(lead_type_id, lead_type_name, version=None):
@@ -106,7 +116,11 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
     for col in missing:
         table[col] = pd.NA
 
-    frame = normalize_model_frame(table, numeric, categorical)
+    frame = normalize_model_frame(
+        table,
+        numeric,
+        categorical,
+    )
     frame[config.TARGET_COL] = pd.to_numeric(frame[config.TARGET_COL], errors="coerce")
 
     keep = list(feature_cols) + [config.TARGET_COL]
@@ -137,13 +151,21 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
     return frame, numeric, categorical, summary
 
 
-def drop_zero_variance(frame, numeric_features, categorical_features):
-    """Remove features with no observed variation.
+def find_zero_variance_features(
+    frame,
+    numeric_features,
+    categorical_features,
+) -> list[str]:
+    """Return model features with no observed variation.
+
+    Zero-variance features are diagnostic information only. They remain in
+    the model feature schema so temporary lack of variation in a training
+    window does not change the model contract.
 
     Inputs
     ------
     frame : pandas.DataFrame
-        Input dataframe.
+        Input dataframe used to fit models.
     numeric_features : list[str]
         Numeric feature names.
     categorical_features : list[str]
@@ -151,18 +173,50 @@ def drop_zero_variance(frame, numeric_features, categorical_features):
 
     Returns
     -------
-    tuple[list[str], list[str], list[str]]
-        Filtered numeric features, filtered categorical features, and
-    removed feature names.
+    list[str]
+        Feature names with at most one observed non-null value.
     """
-    dropped = [
-        c
-        for c in list(numeric_features) + list(categorical_features)
-        if c in frame.columns and frame[c].nunique(dropna=True) <= 1
+    return [
+        column
+        for column in list(numeric_features) + list(categorical_features)
+        if column in frame.columns and frame[column].nunique(dropna=True) <= 1
     ]
-    numeric = [c for c in numeric_features if c not in dropped]
-    categorical = [c for c in categorical_features if c not in dropped]
-    return numeric, categorical, dropped
+
+
+def assert_partition_has_both_classes(
+    frame,
+    lead_type_name,
+    partition_name,
+):
+    """Require both target classes in one train/test partition.
+
+    Inputs
+    ------
+    frame : pandas.DataFrame
+        Train or test partition to validate.
+    lead_type_name : str
+        Human-readable lead type name.
+    partition_name : str
+        Human-readable partition label used in the error message.
+
+    Raises
+    ------
+    ValueError
+        If the partition does not contain both target classes.
+    """
+    classes = sorted(frame[config.TARGET_COL].dropna().unique().tolist())
+    if len(classes) >= 2:
+        return
+
+    only = classes[0] if classes else "none"
+    win_rate = float(frame[config.TARGET_COL].mean()) if len(frame) else None
+    raise ValueError(
+        f"{partition_name} for '{lead_type_name}' has only one target class "
+        f"({config.TARGET_COL}={only}, win_rate={win_rate}). The configured "
+        "split cannot support the requested classifier evaluation. Increase "
+        "the data window, adjust split.test_size, or use a different split "
+        "strategy."
+    )
 
 
 def assert_trainable(frame, lead_type_name):
@@ -216,13 +270,11 @@ def serving_frame(records, lead_type_id):
         Model-ready serving dataframe.
     """
     raw = records.copy() if isinstance(records, pd.DataFrame) else pd.DataFrame(records)
-    derived = fe.derive_serving_features(raw, lead_type_id=lead_type_id)
 
     numeric, categorical = config.feature_columns(lead_type_id)
     feature_cols = numeric + categorical
-    for col in feature_cols:
-        if col not in derived.columns:
-            derived[col] = pd.NA
 
-    normalized = normalize_model_frame(derived, numeric, categorical)
+    # Serving starts from raw request data, so it must run the shared
+    # feature-engineering transformation before selecting model columns.
+    normalized = fe.transform_model_features(raw, lead_type_id=lead_type_id)
     return normalized[feature_cols].copy()

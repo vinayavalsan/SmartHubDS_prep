@@ -18,6 +18,34 @@ from . import config
 logger = get_logger(__name__)
 
 
+def _empty_monotonicity_diagnostics() -> dict:
+    """Return zeroed diagnostics for bid-response monotonicity."""
+    return {
+        "checked_rows": 0,
+        "checked_steps": 0,
+        "violation_count": 0,
+        "rows_with_violation": 0,
+        "violation_magnitude_sum": 0.0,
+        "max_violation_magnitude": 0.0,
+    }
+
+
+def _merge_monotonicity_diagnostics(target: dict, source: dict) -> None:
+    """Accumulate chunk-level monotonicity diagnostics in place."""
+    for key in (
+        "checked_rows",
+        "checked_steps",
+        "violation_count",
+        "rows_with_violation",
+    ):
+        target[key] += int(source[key])
+    target["violation_magnitude_sum"] += float(source["violation_magnitude_sum"])
+    target["max_violation_magnitude"] = max(
+        float(target["max_violation_magnitude"]),
+        float(source["max_violation_magnitude"]),
+    )
+
+
 @contextmanager
 def quiet_feature_name_warning():
     """Temporarily suppress harmless sklearn feature-name warnings."""
@@ -175,7 +203,8 @@ def _score_chunk(
     target_cm: float,
     min_bid: float,
     bid_step: float,
-) -> pd.DataFrame:
+    monotonicity_tolerance: float | None = None,
+) -> tuple[pd.DataFrame, dict]:
     """Optimize one chunk using a single batched model call.
 
     Inputs
@@ -193,10 +222,14 @@ def _score_chunk(
     bid_step : float
         Increment between candidate bids.
 
+    monotonicity_tolerance : float | None
+        Maximum probability decrease treated as numerical noise. When
+        ``None``, monotonicity diagnostics are not collected.
+
     Returns
     -------
-    pandas.DataFrame
-        Recommended-bid results indexed by source row.
+    tuple[pandas.DataFrame, dict]
+        Recommended-bid results followed by monotonicity diagnostics.
     """
     candidate_frames = []
     empty_results = []
@@ -227,8 +260,10 @@ def _score_chunk(
         candidate_rows["_n_candidate_bids"] = len(candidate_bids)
         candidate_frames.append(candidate_rows)
 
+    diagnostics = _empty_monotonicity_diagnostics()
     if not candidate_frames:
-        return pd.DataFrame(empty_results).set_index("_source_index")
+        result = pd.DataFrame(empty_results).set_index("_source_index")
+        return result, diagnostics
 
     candidates = pd.concat(candidate_frames, ignore_index=True)
     with quiet_feature_name_warning():
@@ -238,6 +273,29 @@ def _score_chunk(
     candidates["_expected_profit"] = candidates["_predicted_win_rate"] * (
         candidates["_expected_revenue"] - candidates["_candidate_bid"]
     )
+
+    if monotonicity_tolerance is not None:
+        for _, group in candidates.groupby("_source_index", sort=False):
+            probabilities = group["_predicted_win_rate"].to_numpy(dtype=float)
+            if len(probabilities) < 2:
+                continue
+            differences = np.diff(probabilities)
+            diagnostics["checked_rows"] += 1
+            diagnostics["checked_steps"] += int(len(differences))
+
+            violation_mask = differences < -float(monotonicity_tolerance)
+            violation_count = int(np.sum(violation_mask))
+            if not violation_count:
+                continue
+
+            magnitudes = -differences[violation_mask]
+            diagnostics["violation_count"] += violation_count
+            diagnostics["rows_with_violation"] += 1
+            diagnostics["violation_magnitude_sum"] += float(np.sum(magnitudes))
+            diagnostics["max_violation_magnitude"] = max(
+                float(diagnostics["max_violation_magnitude"]),
+                float(np.max(magnitudes)),
+            )
 
     best_positions = candidates.groupby("_source_index")["_expected_profit"].idxmax()
     best = candidates.loc[best_positions].copy()
@@ -261,7 +319,7 @@ def _score_chunk(
     if empty_results:
         empty_df = pd.DataFrame(empty_results).set_index("_source_index")
         result = pd.concat([result, empty_df], axis=0)
-    return result.sort_index()
+    return result.sort_index(), diagnostics
 
 
 def score_recommended_bids(
@@ -272,6 +330,7 @@ def score_recommended_bids(
     min_bid: float,
     bid_step: float,
     chunk_size: int,
+    monotonicity_tolerance: float | None = None,
 ) -> pd.DataFrame | None:
     """Attach recommended-bid outputs using chunked scoring.
 
@@ -291,6 +350,10 @@ def score_recommended_bids(
         Increment between candidate bids.
     chunk_size : int
         Maximum rows processed per scoring chunk.
+    monotonicity_tolerance : float | None
+        Maximum probability decrease treated as numerical noise. When set,
+        monotonicity is measured from the same candidate predictions used for
+        bid optimization.
 
     Returns
     -------
@@ -304,17 +367,22 @@ def score_recommended_bids(
         f"{chunk_size:,}",
     )
     result_chunks = []
+    monotonicity = _empty_monotonicity_diagnostics()
     for start in range(0, n_rows, chunk_size):
         stop = min(start + chunk_size, n_rows)
-        result_chunks.append(
-            _score_chunk(
-                eval_df.iloc[start:stop],
-                model,
-                feature_cols,
-                target_cm,
-                min_bid,
-                bid_step,
-            )
+        chunk_result, chunk_monotonicity = _score_chunk(
+            eval_df.iloc[start:stop],
+            model,
+            feature_cols,
+            target_cm,
+            min_bid,
+            bid_step,
+            monotonicity_tolerance=monotonicity_tolerance,
+        )
+        result_chunks.append(chunk_result)
+        _merge_monotonicity_diagnostics(
+            monotonicity,
+            chunk_monotonicity,
         )
         if stop == n_rows or stop % (chunk_size * 10) == 0:
             logger.info("Optimized %s / %s rows", f"{stop:,}", f"{n_rows:,}")
@@ -324,4 +392,5 @@ def score_recommended_bids(
     result = result.dropna(subset=["recommended_bid"]).copy()
     if result.empty:
         return None
+    result.attrs["monotonicity_diagnostics"] = monotonicity
     return result

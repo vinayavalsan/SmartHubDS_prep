@@ -8,12 +8,22 @@ lazy-import modules elsewhere in this package), so these tests need the
 `ml` extra and are skipped in the base test env.
 """
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
 pytest.importorskip("sklearn")
 
 from smarthub.train_and_predict import registry, train  # noqa: E402
+
+
+def _monotonicity_config():
+    """Return the minimal monotonicity config required by the helper."""
+    return SimpleNamespace(
+        tolerance=1e-8,
+        max_violation_rate=0.0,
+    )
 
 
 def test_evaluate_currently_serving_model_none_when_nothing_serving(monkeypatch):
@@ -30,7 +40,14 @@ def test_evaluate_currently_serving_model_none_when_nothing_serving(monkeypatch)
         ),
     )
     result = train._evaluate_currently_serving_model(
-        "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100
+        "auto",
+        pd.DataFrame(),
+        pd.Series(dtype=int),
+        0.25,
+        0.25,
+        0.25,
+        100,
+        _monotonicity_config(),
     )
     assert result == (None, None)
     assert any("first model" in message for message in logged_messages)
@@ -48,7 +65,14 @@ def test_evaluate_currently_serving_model_propagates_registry_load_error(monkeyp
     monkeypatch.setattr(registry, "load_currently_serving_model", _boom)
     with pytest.raises(ValueError, match="Expecting value"):
         train._evaluate_currently_serving_model(
-            "auto", pd.DataFrame(), pd.Series(dtype=int), 0.25, 0.25, 0.25, 100
+            "auto",
+            pd.DataFrame(),
+            pd.Series(dtype=int),
+            0.25,
+            0.25,
+            0.25,
+            100,
+            _monotonicity_config(),
         )
 
 
@@ -78,7 +102,14 @@ def test_evaluate_currently_serving_model_skips_incompatible_schema(monkeypatch)
         lambda message, *args: logged.append(message % args if args else message),
     )
     result = train._evaluate_currently_serving_model(
-        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100
+        "auto",
+        test_df,
+        pd.Series([0, 1]),
+        0.25,
+        0.25,
+        0.25,
+        100,
+        _monotonicity_config(),
     )
     assert result == (None, None)
     assert any(
@@ -117,7 +148,14 @@ def test_evaluate_currently_serving_model_skips_on_scoring_failure(monkeypatch):
 
     test_df = pd.DataFrame({"bid": [1.0, 2.0]})
     result = train._evaluate_currently_serving_model(
-        "auto", test_df, pd.Series([0, 1]), 0.25, 0.25, 0.25, 100
+        "auto",
+        test_df,
+        pd.Series([0, 1]),
+        0.25,
+        0.25,
+        0.25,
+        100,
+        _monotonicity_config(),
     )
     assert result == (None, None)
     assert any("not comparable" in message for message in logged)

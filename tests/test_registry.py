@@ -225,7 +225,6 @@ POLICY = {
     "max_log_loss_regression": 0.01,
     "min_profit_ratio": 0.98,
     "max_absolute_profit_loss_tolerance": 5.0,
-    "target_cm": 0.20,
     "max_log_loss": 0.55,
     "min_expected_profit": 0.0,
 }
@@ -326,7 +325,6 @@ def test_decide_promotion_blocks_when_absolute_profit_loss_exceeds_tolerance():
         currently_serving_optimizer=_optimizer(100),
         min_profit_ratio=0.90,
         max_absolute_profit_loss_tolerance=5.0,
-        target_cm=0.20,
         max_log_loss=0.55,
         min_expected_profit=0.0,
         max_log_loss_regression=0.01,
@@ -340,7 +338,7 @@ def test_decide_promotion_blocks_when_absolute_profit_loss_exceeds_tolerance():
 
 
 def test_decide_promotion_promotes_on_clear_improvement():
-    """Profit, margin, and log-loss requirements all passing permits promotion."""
+    """Profit and log-loss requirements all passing permit promotion."""
     decision = registry.decide_promotion(
         challenger_metrics={"log_loss": 0.45},
         challenger_optimizer=_optimizer(150, cm=0.30),
@@ -363,19 +361,6 @@ def test_decide_promotion_blocks_when_challenger_profit_is_unavailable():
     )
     assert decision.promote is False
     assert "Challenger expected profit is unavailable" in decision.reason
-
-
-def test_decide_promotion_blocks_when_recommended_cm_is_below_floor():
-    """The challenger must satisfy the configured recommended-CM floor."""
-    decision = registry.decide_promotion(
-        challenger_metrics={"log_loss": 0.49},
-        challenger_optimizer=_optimizer(120, cm=0.15),
-        currently_serving_metrics={"log_loss": 0.50},
-        currently_serving_optimizer=_optimizer(100),
-        **POLICY,
-    )
-    assert decision.promote is False
-    assert "recommended CM" in decision.reason
 
 
 def test_decide_promotion_blocks_invalid_nonpositive_serving_profit():

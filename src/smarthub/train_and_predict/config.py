@@ -29,6 +29,20 @@ _DEFAULT_HYPERPARAMETER_SEARCH_CONFIG_REL_PATH = "config/hyperparameter_search.y
 _DEFAULT_PROMOTION_MAX_LOG_LOSS = 0.55
 _DEFAULT_PROMOTION_MIN_EXPECTED_PROFIT = 0.0
 _DEFAULT_PROMOTION_MAX_ABSOLUTE_PROFIT_LOSS_TOLERANCE = 5000.0
+_DEFAULT_PROMOTION_MONOTONICITY_ENABLED = False
+_DEFAULT_MONOTONICITY_TOLERANCE = 1e-8
+_DEFAULT_MONOTONICITY_MAX_VIOLATION_RATE = 0.0
+_DEFAULT_OPTIMIZER_CHUNK_SIZE = 500
+_DEFAULT_HPO_VALIDATION_STRATEGY = "time"
+_DEFAULT_HPO_FINALIST_HOLDOUT_FRACTION = 0.20
+_DEFAULT_HPO_PROBABILITY_SHORTLIST_TOP_N = 10
+_DEFAULT_HPO_OPTIMIZER_TOP_N = 5
+_DEFAULT_HPO_MAX_LOG_LOSS_REGRESSION = 0.02
+_DEFAULT_HPO_CALIBRATION_ENABLED = True
+_DEFAULT_HPO_CALIBRATION_METHODS = ("none", "sigmoid", "isotonic")
+_DEFAULT_HPO_CALIBRATION_CV = 3
+_DEFAULT_HPO_OPTIMIZER_ENABLED = True
+_DEFAULT_HPO_MONOTONICITY_ENABLED = True
 
 
 @dataclass(frozen=True)
@@ -57,19 +71,36 @@ class OptimizerConfig:
 
 
 @dataclass(frozen=True)
+class PromotionMonotonicityConfig:
+    """Store resolved promotion monotonicity policy settings."""
+
+    enabled: bool
+    tolerance: float
+    max_violation_rate: float
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the configuration values as a dictionary."""
+        return {
+            "enabled": self.enabled,
+            "tolerance": self.tolerance,
+            "max_violation_rate": self.max_violation_rate,
+        }
+
+
+@dataclass(frozen=True)
 class TrainingConfig:
     """Store resolved settings for one model-training run."""
 
     raw: dict[str, Any]
     model_type: str
     random_seed: int
-    drop_zero_variance: bool
     calibration_enabled: bool
     calibration_method: str | None
     calibration_cv: int | None
     split: dict[str, Any]
     model_parameters: dict[str, Any]
     optimizer: OptimizerConfig
+    promotion_monotonicity: PromotionMonotonicityConfig
     comparison_artifacts: bool
     promotion_mode: str
     promotion_max_log_loss_regression: float
@@ -458,6 +489,11 @@ def load_training_config(
         promotion.get("criteria"),
         "promotion.criteria",
     )
+    promotion_monotonicity_root = promotion_criteria.get("monotonicity") or {}
+    promotion_monotonicity_root = _mapping(
+        promotion_monotonicity_root,
+        "promotion.criteria.monotonicity",
+    )
     output = _mapping(root.get("output"), "output")
     mlflow = _mapping(root.get("mlflow"), "mlflow")
     storage_root = root.get("storage") or {}
@@ -545,9 +581,44 @@ def load_training_config(
             "optimizer.bid_step",
         ),
         chunk_size=_positive_int(
-            optimizer_root.get("chunk_size"),
+            optimizer_root.get("chunk_size", _DEFAULT_OPTIMIZER_CHUNK_SIZE),
             "optimizer.chunk_size",
         ),
+    )
+
+    promotion_monotonicity_enabled = promotion_monotonicity_root.get(
+        "enabled",
+        _DEFAULT_PROMOTION_MONOTONICITY_ENABLED,
+    )
+    if not isinstance(promotion_monotonicity_enabled, bool):
+        raise TypeError(
+            "promotion.criteria.monotonicity.enabled must be a YAML boolean."
+        )
+
+    promotion_monotonicity_tolerance = _non_negative_float(
+        promotion_monotonicity_root.get(
+            "tolerance",
+            _DEFAULT_MONOTONICITY_TOLERANCE,
+        ),
+        "promotion.criteria.monotonicity.tolerance",
+    )
+    promotion_monotonicity_max_violation_rate = _non_negative_float(
+        promotion_monotonicity_root.get(
+            "max_violation_rate",
+            _DEFAULT_MONOTONICITY_MAX_VIOLATION_RATE,
+        ),
+        "promotion.criteria.monotonicity.max_violation_rate",
+    )
+    if promotion_monotonicity_max_violation_rate > 1.0:
+        raise ValueError(
+            "promotion.criteria.monotonicity.max_violation_rate "
+            "must be between 0 and 1."
+        )
+
+    promotion_monotonicity = PromotionMonotonicityConfig(
+        enabled=promotion_monotonicity_enabled,
+        tolerance=promotion_monotonicity_tolerance,
+        max_violation_rate=(promotion_monotonicity_max_violation_rate),
     )
 
     if "comparison_artifacts" not in output:
@@ -592,7 +663,6 @@ def load_training_config(
         ),
         "promotion.criteria.max_absolute_profit_loss_tolerance",
     )
-
     resolved_raw["resolved"] = {
         "config_path": str(resolved_path),
         "selected_model": model_type,
@@ -619,6 +689,7 @@ def load_training_config(
                 "max_absolute_profit_loss_tolerance": (
                     promotion_max_absolute_profit_loss_tolerance
                 ),
+                "monotonicity": promotion_monotonicity.as_dict(),
             },
         },
     }
@@ -627,13 +698,13 @@ def load_training_config(
         raw=resolved_raw,
         model_type=model_type,
         random_seed=random_seed,
-        drop_zero_variance=bool(training["drop_zero_variance"]),
         calibration_enabled=calibration_enabled,
         calibration_method=calibration_method,
         calibration_cv=calibration_cv,
         split=selected_split,
         model_parameters=model_parameters,
         optimizer=optimizer,
+        promotion_monotonicity=promotion_monotonicity,
         comparison_artifacts=comparison_artifacts,
         promotion_mode=promotion_mode,
         promotion_max_log_loss_regression=(promotion_max_log_loss_regression),
@@ -810,6 +881,17 @@ class HyperparameterSearchConfig:
     timeout_seconds: int | None
     random_seed: int
     n_jobs: int
+    validation_strategy: str
+    holdout_fraction: float
+    probability_shortlist_top_n: int
+    optimizer_top_n: int
+    max_log_loss_regression: float
+    calibration_enabled: bool
+    calibration_methods: tuple[str, ...]
+    calibration_cv: int
+    optimizer_enabled: bool
+    optimizer: OptimizerConfig | None
+    monotonicity: PromotionMonotonicityConfig
     output_root: str
     model_configs: dict[str, dict[str, Any]]
 
@@ -1040,6 +1122,138 @@ def load_hyperparameter_search_config(
     search = _mapping(root.get("search"), "search")
     output = _mapping(root.get("output"), "output")
     models_root = _mapping(root.get("models"), "models")
+    validation = _mapping(root.get("validation"), "validation")
+    finalists = _mapping(root.get("finalists"), "finalists")
+    optimizer_cfg = _mapping(root.get("optimizer") or {}, "optimizer")
+    calibration_cfg = _mapping(root.get("calibration") or {}, "calibration")
+    monotonicity_cfg = _mapping(
+        finalists.get("monotonicity"),
+        "finalists.monotonicity",
+    )
+
+    validation_strategy = (
+        str(validation.get("strategy", _DEFAULT_HPO_VALIDATION_STRATEGY))
+        .strip()
+        .lower()
+    )
+    if validation_strategy not in {"time", "stratified_random"}:
+        raise ValueError("validation.strategy must be 'time' or 'stratified_random'.")
+
+    holdout_fraction = float(
+        finalists.get(
+            "holdout_fraction",
+            _DEFAULT_HPO_FINALIST_HOLDOUT_FRACTION,
+        )
+    )
+    if not 0.0 < holdout_fraction < 0.5:
+        raise ValueError("finalists.holdout_fraction must be between 0 and 0.5.")
+
+    probability_shortlist_top_n = _positive_int(
+        finalists.get(
+            "probability_shortlist_top_n",
+            _DEFAULT_HPO_PROBABILITY_SHORTLIST_TOP_N,
+        ),
+        "finalists.probability_shortlist_top_n",
+    )
+    optimizer_top_n = _positive_int(
+        finalists.get("optimizer_top_n", _DEFAULT_HPO_OPTIMIZER_TOP_N),
+        "finalists.optimizer_top_n",
+    )
+    max_log_loss_regression = _non_negative_float(
+        finalists.get(
+            "max_log_loss_regression_from_best",
+            _DEFAULT_HPO_MAX_LOG_LOSS_REGRESSION,
+        ),
+        "finalists.max_log_loss_regression_from_best",
+    )
+
+    calibration_enabled = bool(
+        calibration_cfg.get("enabled", _DEFAULT_HPO_CALIBRATION_ENABLED)
+    )
+    if calibration_enabled:
+        methods = calibration_cfg.get(
+            "methods",
+            list(_DEFAULT_HPO_CALIBRATION_METHODS),
+        )
+        if not isinstance(methods, list) or not methods:
+            raise ValueError("calibration.methods must be a non-empty list.")
+        calibration_methods = tuple(str(method).strip().lower() for method in methods)
+        invalid_methods = sorted(
+            set(calibration_methods).difference({"none", "sigmoid", "isotonic"})
+        )
+        if invalid_methods:
+            raise ValueError(
+                "Unsupported calibration methods: " + ", ".join(invalid_methods)
+            )
+        calibration_cv = _positive_int(
+            calibration_cfg.get("cv", _DEFAULT_HPO_CALIBRATION_CV),
+            "calibration.cv",
+        )
+        if calibration_cv < 2:
+            raise ValueError("calibration.cv must be at least 2.")
+    else:
+        calibration_methods = ("none",)
+        calibration_cv = _DEFAULT_HPO_CALIBRATION_CV
+
+    optimizer_enabled = bool(
+        optimizer_cfg.get("enabled", _DEFAULT_HPO_OPTIMIZER_ENABLED)
+    )
+    optimizer = None
+    if optimizer_enabled:
+        required_optimizer_fields = ("target_cm", "minimum_bid", "bid_step")
+        missing_optimizer_fields = [
+            name for name in required_optimizer_fields if name not in optimizer_cfg
+        ]
+        if missing_optimizer_fields:
+            missing = ", ".join(missing_optimizer_fields)
+            raise ValueError(
+                "Enabled SmartHub optimizer evaluation requires settings in "
+                f"hyperparameter_search.yaml. Missing: {missing}."
+            )
+        target_cm = float(optimizer_cfg["target_cm"])
+        minimum_bid = float(optimizer_cfg["minimum_bid"])
+        bid_step = float(optimizer_cfg["bid_step"])
+        chunk_size = _positive_int(
+            optimizer_cfg.get("chunk_size", _DEFAULT_OPTIMIZER_CHUNK_SIZE),
+            "optimizer.chunk_size",
+        )
+        if not 0.0 <= target_cm < 1.0:
+            raise ValueError("optimizer.target_cm must be in [0, 1).")
+        if minimum_bid < 0.0:
+            raise ValueError("optimizer.minimum_bid cannot be negative.")
+        if bid_step <= 0.0:
+            raise ValueError("optimizer.bid_step must be positive.")
+        optimizer = OptimizerConfig(
+            target_cm=target_cm,
+            minimum_bid=minimum_bid,
+            bid_step=bid_step,
+            chunk_size=chunk_size,
+        )
+
+    monotonicity = PromotionMonotonicityConfig(
+        enabled=bool(
+            monotonicity_cfg.get(
+                "enabled",
+                _DEFAULT_HPO_MONOTONICITY_ENABLED,
+            )
+        ),
+        tolerance=_non_negative_float(
+            monotonicity_cfg.get(
+                "tolerance",
+                _DEFAULT_MONOTONICITY_TOLERANCE,
+            ),
+            "finalists.monotonicity.tolerance",
+        ),
+        max_violation_rate=_non_negative_float(
+            monotonicity_cfg.get(
+                "max_violation_rate",
+                _DEFAULT_MONOTONICITY_MAX_VIOLATION_RATE,
+            ),
+            "finalists.monotonicity.max_violation_rate",
+        ),
+    )
+    if monotonicity.max_violation_rate > 1.0:
+        raise ValueError("finalists.monotonicity.max_violation_rate must be <= 1.")
 
     selected_model_type = str(search.get("model_type", "")).strip().lower()
     if selected_model_type not in _SUPPORTED_MODELS:
@@ -1123,6 +1337,17 @@ def load_hyperparameter_search_config(
         timeout_seconds=timeout_seconds,
         random_seed=int(search["random_seed"]),
         n_jobs=int(search["n_jobs"]),
+        validation_strategy=validation_strategy,
+        holdout_fraction=holdout_fraction,
+        probability_shortlist_top_n=probability_shortlist_top_n,
+        optimizer_top_n=optimizer_top_n,
+        max_log_loss_regression=max_log_loss_regression,
+        calibration_enabled=calibration_enabled,
+        calibration_methods=calibration_methods,
+        calibration_cv=calibration_cv,
+        optimizer_enabled=optimizer_enabled,
+        optimizer=optimizer,
+        monotonicity=monotonicity,
         output_root=output_root,
         model_configs=model_configs,
     )

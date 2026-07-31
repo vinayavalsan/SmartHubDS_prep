@@ -72,8 +72,10 @@ def build_pull_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lead-type-id",
         type=int,
-        default=None,
-        help="Restrict to one lead type (e.g. 6=auto, 1=home). Default: all.",
+        action="append",
+        dest="lead_type_ids",
+        required=True,
+        help="Lead type ID to pull. Repeat to pull multiple lead types.",
     )
     parser.add_argument(
         "--log-level",

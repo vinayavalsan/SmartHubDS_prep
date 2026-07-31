@@ -21,7 +21,6 @@ from . import (
     metrics,
     models,
     optimizer_evaluation,
-    plots_and_reports,
     preprocessing,
     registry,
     training_artifacts,
@@ -144,6 +143,24 @@ def _optimizer_metrics_for_mlflow(
     }
 
 
+def _monotonicity_metrics_for_mlflow(
+    monotonicity_summary: dict | None,
+) -> dict[str, float | int]:
+    """Select numeric monotonicity metrics for MLflow."""
+    if not monotonicity_summary:
+        return {}
+
+    result = {}
+    for key, value in monotonicity_summary.items():
+        if key == "enabled" or value is None:
+            continue
+        if isinstance(value, bool):
+            result[f"monotonicity_{key}"] = int(value)
+        elif isinstance(value, (int, float)):
+            result[f"monotonicity_{key}"] = value
+    return result
+
+
 def run_training(
     lead_type_id: int,
     version: str | None = None,
@@ -224,29 +241,37 @@ def run_training(
         split_settings=split_settings,
         random_seed=training_config.random_seed,
     )
+    preprocessing.assert_partition_has_both_classes(
+        train_df,
+        lead_type_name,
+        "Training partition",
+    )
+    preprocessing.assert_partition_has_both_classes(
+        test_df,
+        lead_type_name,
+        "Test partition",
+    )
 
-    if training_config.drop_zero_variance:
-        numeric, categorical, dropped = preprocessing.drop_zero_variance(
-            train_df,
-            numeric,
-            categorical,
-        )
-        if dropped:
-            logger.info("Cleaning Data")
-            logger.info(
-                "  Dropped zero-variance features        : %s",
-                f"{len(dropped):,}",
-            )
-            logger.info(
-                "  Zero-variance feature names           : %s",
-                ", ".join(dropped),
-            )
-        feature_cols = numeric + categorical
+    zero_variance_features = preprocessing.find_zero_variance_features(
+        train_df,
+        numeric,
+        categorical,
+    )
+    logger.info("Feature Diagnostics")
+    logger.info(
+        "  Zero-variance features                : %s",
+        f"{len(zero_variance_features):,}",
+    )
+    logger.info(
+        "  Zero-variance feature names           : %s",
+        ", ".join(zero_variance_features) or "none",
+    )
+    logger.info("  Zero-variance features retained       : yes")
 
     logger.info("Feature columns: %s", feature_cols)
 
     feature_summary_df, feature_counts_df = (
-        plots_and_reports.build_training_data_summary(
+        training_artifacts.build_training_data_summary(
             df=frame,
             continuous_features=[
                 column for column in numeric if column in ("bid", "age")
@@ -257,7 +282,7 @@ def run_training(
             categorical_features=categorical,
         )
     )
-    plots_and_reports.log_training_data_summary(
+    training_artifacts.log_training_data_summary(
         df=frame,
         feature_summary_df=feature_summary_df,
         feature_counts_df=feature_counts_df,
@@ -345,6 +370,7 @@ def run_training(
     min_bid = optimizer_config.minimum_bid
     bid_step = optimizer_config.bid_step
     optimizer_chunk_size = optimizer_config.chunk_size
+    monotonicity_config = training_config.promotion_monotonicity
 
     optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
         test_eval_df=test_df,
@@ -354,6 +380,9 @@ def run_training(
         min_bid=min_bid,
         bid_step=bid_step,
         chunk_size=optimizer_chunk_size,
+        monotonicity_enabled=True,
+        monotonicity_tolerance=monotonicity_config.tolerance,
+        monotonicity_max_violation_rate=(monotonicity_config.max_violation_rate),
     )
 
     if optimizer_result is not None:
@@ -361,14 +390,22 @@ def run_training(
         model_metrics = model_metrics.with_recommended_win_rate(
             optimizer_summary.avg_recommended_bid_predicted_win_rate
         )
+        monotonicity_summary_dict = optimizer_eval_df.attrs.get(
+            "monotonicity_summary",
+            {},
+        )
     else:
         optimizer_eval_df = None
         optimizer_summary = None
+        monotonicity_summary_dict = {}
 
     optimizer_summary_dict = (
         optimizer_summary.to_dict() if optimizer_summary is not None else {}
     )
     optimizer_mlflow_metrics = _optimizer_metrics_for_mlflow(optimizer_summary_dict)
+    optimizer_mlflow_metrics.update(
+        _monotonicity_metrics_for_mlflow(monotonicity_summary_dict)
+    )
 
     metrics.log_model_evaluation(
         model_metrics=model_metrics,
@@ -381,12 +418,12 @@ def run_training(
     report_dir = training_config.report_dir(lead_type_name)
     Path(report_dir).mkdir(parents=True, exist_ok=True)
 
-    plots_and_reports.save_feature_summary_files(
+    training_artifacts.save_feature_summary_files(
         report_dir,
         feature_summary_df,
         feature_counts_df,
     )
-    plots_and_reports.save_performance_plots(
+    training_artifacts.save_performance_plots(
         report_dir=report_dir,
         y_test=y_test,
         pred=pred,
@@ -410,6 +447,7 @@ def run_training(
         "data_min_created_at": prep_summary["data_min_created_at"],
         "data_max_created_at": prep_summary["data_max_created_at"],
         "source_row_count": prep_summary["source_row_count"],
+        "zero_variance_features": list(zero_variance_features),
     }
 
     logger.info(
@@ -437,15 +475,16 @@ def run_training(
         "test_rows": int(len(X_test)),
         **lineage,
         **model_metrics.to_dict(),
+        "bid_monotonicity": monotonicity_summary_dict,
         "bid_optimizer": optimizer_summary_dict,
     }
 
-    plots_and_reports.save_evaluation_summary(
+    training_artifacts.save_evaluation_summary(
         report_dir,
         evaluation_summary,
         optimizer_eval_df,
     )
-    plots_and_reports.log_saved_report_files(
+    training_artifacts.log_saved_report_files(
         report_dir,
         optimizer_eval_df,
     )
@@ -462,29 +501,58 @@ def run_training(
         logger.info("  Status                                : SKIPPED")
         logger.info("  Reason                                : %s", promotion_reason)
     else:
-        serving_metrics, serving_optimizer_summary = _evaluate_currently_serving_model(
-            lead_type_name,
-            test_df,
-            y_test,
-            target_cm,
-            min_bid,
-            bid_step,
-            optimizer_chunk_size,
-        )
-        decision = registry.decide_promotion(
-            challenger_metrics=model_metrics.to_dict(),
-            challenger_optimizer=optimizer_summary_dict,
-            currently_serving_metrics=serving_metrics,
-            currently_serving_optimizer=serving_optimizer_summary,
-            max_log_loss_regression=(training_config.promotion_max_log_loss_regression),
-            min_profit_ratio=training_config.promotion_min_profit_ratio,
-            max_absolute_profit_loss_tolerance=(
-                training_config.promotion_max_absolute_profit_loss_tolerance
+        monotonicity_required = monotonicity_config.enabled
+        monotonicity_passed = monotonicity_summary_dict.get("passed")
+        monotonicity_comparison = {
+            "monotonicity_required": monotonicity_required,
+            "challenger_monotonicity_passed": monotonicity_passed,
+            "challenger_monotonicity_violation_rate": (
+                monotonicity_summary_dict.get("violation_rate")
             ),
-            target_cm=target_cm,
-            max_log_loss=training_config.promotion_max_log_loss,
-            min_expected_profit=training_config.promotion_min_expected_profit,
-        )
+            "maximum_monotonicity_violation_rate": (
+                monotonicity_config.max_violation_rate
+            ),
+        }
+
+        if monotonicity_required and monotonicity_passed is not True:
+            decision = registry.PromotionDecision(
+                promote=False,
+                reason=(
+                    "Challenger failed the required bid-monotonicity "
+                    "promotion criterion."
+                ),
+                comparison=monotonicity_comparison,
+            )
+        else:
+            serving_metrics, serving_optimizer_summary = (
+                _evaluate_currently_serving_model(
+                    lead_type_name,
+                    test_df,
+                    y_test,
+                    target_cm,
+                    min_bid,
+                    bid_step,
+                    optimizer_chunk_size,
+                    monotonicity_config,
+                )
+            )
+            decision = registry.decide_promotion(
+                challenger_metrics=model_metrics.to_dict(),
+                challenger_optimizer=optimizer_summary_dict,
+                currently_serving_metrics=serving_metrics,
+                currently_serving_optimizer=serving_optimizer_summary,
+                max_log_loss_regression=(
+                    training_config.promotion_max_log_loss_regression
+                ),
+                min_profit_ratio=training_config.promotion_min_profit_ratio,
+                max_absolute_profit_loss_tolerance=(
+                    training_config.promotion_max_absolute_profit_loss_tolerance
+                ),
+                max_log_loss=training_config.promotion_max_log_loss,
+                min_expected_profit=(training_config.promotion_min_expected_profit),
+            )
+            decision.comparison.update(monotonicity_comparison)
+
         eligibility_status = "eligible" if decision.promote else "not_eligible"
         if promotion_mode == "automatic":
             promotion_status = "promoted" if decision.promote else "rejected"
@@ -496,6 +564,15 @@ def run_training(
         promotion_comparison = decision.comparison
         logger.info("Promotion Evaluation")
         logger.info("  Mode                                  : %s", promotion_mode)
+        logger.info(
+            "  Monotonicity criterion                : %s",
+            "REQUIRED" if monotonicity_required else "NOT REQUIRED",
+        )
+        if monotonicity_config.enabled:
+            logger.info(
+                "  Monotonicity result                   : %s",
+                "PASS" if monotonicity_passed else "FAIL",
+            )
         logger.info(
             "  Policy recommendation                 : %s",
             "ELIGIBLE" if decision.promote else "NOT ELIGIBLE",
@@ -536,9 +613,12 @@ def run_training(
             "cv": training_config.calibration_cv,
         },
         "feature_cols": list(feature_cols),
+        "zero_variance_features": list(zero_variance_features),
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
         "optimizer": optimizer_config.as_dict(),
+        "promotion_monotonicity": monotonicity_config.as_dict(),
+        "bid_monotonicity": monotonicity_summary_dict,
         "lineage": lineage,
     }
 
@@ -719,6 +799,7 @@ def run_training(
         "report_dir": report_dir,
         "metrics": model_metrics.to_dict(),
         "optimizer_summary": optimizer_summary_dict,
+        "monotonicity_summary": monotonicity_summary_dict,
         "prep_summary": prep_summary,
         "lineage": lineage,
         "feature_cols": list(feature_cols),
@@ -736,6 +817,7 @@ def _evaluate_currently_serving_model(
     min_bid: float,
     bid_step: float,
     chunk_size: int,
+    monotonicity_config,
 ) -> tuple[dict | None, dict | None]:
     """Evaluate the serving model on the challenger test rows.
 
@@ -755,6 +837,8 @@ def _evaluate_currently_serving_model(
         Increment between candidate bids.
     chunk_size : int
         Maximum rows processed per optimizer scoring chunk.
+    monotonicity_config : MonotonicityConfig
+        Resolved bid-response monotonicity settings.
 
     Returns
     -------
@@ -820,6 +904,9 @@ def _evaluate_currently_serving_model(
             min_bid=min_bid,
             bid_step=bid_step,
             chunk_size=chunk_size,
+            monotonicity_enabled=True,
+            monotonicity_tolerance=monotonicity_config.tolerance,
+            monotonicity_max_violation_rate=(monotonicity_config.max_violation_rate),
             log_summary_result=False,
         )
     except Exception as exc:  # noqa: BLE001

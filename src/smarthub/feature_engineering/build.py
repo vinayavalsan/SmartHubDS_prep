@@ -28,7 +28,10 @@ from smarthub.core.config import (
 from smarthub.core.lead_types import lead_type_name as _lead_type_name
 from smarthub.feature_engineering import features as fe
 from smarthub.feature_engineering.feature_registry import FEATURES, MISSING_CATEGORY
-from smarthub.feature_engineering.features import build_training_table
+from smarthub.feature_engineering.features import (
+    build_training_table,
+    registered_feature_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +218,12 @@ def build_metadata(
             else None
         ),
         "feature_columns": [
-            c for c in table.columns if c not in ("id", "created_at", "won_flag")
+            name
+            for name in registered_feature_names(_lead_type_name(lead_type_id))
+            if name in table.columns
+        ],
+        "retained_non_model_columns": [
+            name for name in fe.RETAINED_NON_MODEL_COLUMNS if name in table.columns
         ],
     }
 
@@ -330,9 +338,11 @@ def main(argv=None):
     except storage.StorageError as exc:
         logger.error("%s", exc)
         return 1
-    print(
-        f"Done. {result['rows']:,} rows, {result['columns']} cols "
-        f"-> {result['path']}"
+    logger.info(
+        "Done. %s rows, %s cols -> %s",
+        f"{result['rows']:,}",
+        result["columns"],
+        result["path"],
     )
     return 0
 

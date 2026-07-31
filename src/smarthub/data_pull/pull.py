@@ -16,6 +16,7 @@ See .env.example and CONTEXT.md.
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 
 import pandas as pd
 import redshift_connector
@@ -83,7 +84,7 @@ def fetch_leads(
     max_created_at: str,
     with_expected_revenue: bool = True,
     selected_only: bool = True,
-    lead_type_id: int | None = None,
+    lead_type_ids: Sequence[int] | None = None,
 ) -> pd.DataFrame:
     """Open the tunnel, run the ORM query, and return the result as a frame.
 
@@ -102,8 +103,8 @@ def fetch_leads(
         Join per-ping expected revenue from the listings when ``True``.
     selected_only : bool
         Aggregate expected revenue over selected listings only.
-    lead_type_id : int | None
-        Restrict to one lead type; ``None`` pulls all types.
+    lead_type_ids : Sequence[int] | None
+        Restrict to one or more lead types.
 
     Returns
     -------
@@ -116,10 +117,10 @@ def fetch_leads(
             min_created_at,
             max_created_at,
             selected_only=selected_only,
-            lead_type_id=lead_type_id,
+            lead_type_ids=lead_type_ids,
         )
     else:
-        stmt = leads_select(min_created_at, max_created_at, lead_type_id=lead_type_id)
+        stmt = leads_select(min_created_at, max_created_at, lead_type_ids=lead_type_ids)
 
     def _run(engine: Engine) -> pd.DataFrame:
         try:
@@ -160,7 +161,7 @@ def run(
     max_created_at: str,
     with_expected_revenue: bool = True,
     selected_only: bool = True,
-    lead_type_id: int | None = None,
+    lead_type_ids: Sequence[int] | None = None,
 ) -> pd.DataFrame:
     """End-to-end pull: load config, fetch, validate, persist.
 
@@ -178,8 +179,8 @@ def run(
         Join per-ping expected revenue from the listings when ``True``.
     selected_only : bool
         Aggregate expected revenue over selected listings only.
-    lead_type_id : int | None
-        Restrict to one lead type; ``None`` pulls all types.
+    lead_type_ids : Sequence[int] | None
+        Restrict to one or more lead types.
 
     Returns
     -------
@@ -192,26 +193,23 @@ def run(
         max_created_at,
         with_expected_revenue=with_expected_revenue,
         selected_only=selected_only,
-        lead_type_id=lead_type_id,
+        lead_type_ids=lead_type_ids,
     )
-    _validate(leads_df, lead_type_id=lead_type_id)
+    _validate(leads_df, lead_type_ids=lead_type_ids)
     results = storage.save_pull(leads_df, StorageSettings.from_env())
     logger.info("Persisted pull: %s", results)
     return leads_df
 
 
-def _validate(leads_df: pd.DataFrame, lead_type_id: int | None = None) -> None:
+def _validate(
+    leads_df: pd.DataFrame,
+    lead_type_ids: Sequence[int] | None = None,
+) -> None:
     """Run data validation on the fetched batch (warn + report only).
 
-    Detect-only: logs a summary and never drops rows or fails the pull.
-
-    Inputs
-    ------
-    leads_df : pandas.DataFrame
-        The freshly-fetched leads batch.
-    lead_type_id : int | None
-        Lead type of the batch; scopes the high-missing catalogue so other
-        products' columns aren't flagged (``None`` for an all-types pull).
+    When multiple lead types are pulled together, validation is run separately
+    for each lead type so missingness and lead-type-specific rules remain
+    interpretable.
     """
     try:
         from smarthub.core import task_config
@@ -219,9 +217,28 @@ def _validate(leads_df: pd.DataFrame, lead_type_id: int | None = None) -> None:
         from smarthub.data_pull.validation_runner import validate_leads
 
         threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
-        vreport.log_summary(
-            validate_leads(leads_df, threshold, lead_type_id=lead_type_id), logger
-        )
+
+        ids = list(lead_type_ids or [])
+        if not ids:
+            report = validate_leads(leads_df, threshold, lead_type_id=None)
+            vreport.log_detailed(report, logger)
+            return
+
+        for lead_type_id in ids:
+            subset = leads_df[
+                pd.to_numeric(leads_df["lead_type_id"], errors="coerce") == lead_type_id
+            ].copy()
+            logger.info(
+                "Validating lead_type_id=%s (%s rows)",
+                lead_type_id,
+                f"{len(subset):,}",
+            )
+            report = validate_leads(
+                subset,
+                threshold,
+                lead_type_id=lead_type_id,
+            )
+            vreport.log_detailed(report, logger)
     except Exception as exc:  # noqa: BLE001 - validation must never break a pull
         logger.warning("Data validation skipped (error): %s", exc)
 
@@ -247,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
             args.max_created_at,
             with_expected_revenue=not args.no_expected_revenue,
             selected_only=not args.all_listings,
-            lead_type_id=args.lead_type_id,
+            lead_type_ids=args.lead_type_ids,
         )
     except ConfigError as exc:
         logger.error("Configuration error: %s", exc)
@@ -273,7 +290,7 @@ def _notify_cli_failure(args, exc: Exception) -> None:
     notifications.notify_failure(
         "data-pull (manual/CLI)",
         {
-            "Lead type": args.lead_type_id if args.lead_type_id is not None else "all",
+            "Lead type(s)": ", ".join(str(x) for x in args.lead_type_ids),
             "Data window (created_at)": (
                 f"`{args.min_created_at}` → `{args.max_created_at}`"
             ),

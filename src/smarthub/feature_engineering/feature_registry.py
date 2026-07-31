@@ -14,6 +14,9 @@ from typing import Callable
 
 import pandas as pd
 
+from smarthub.data_pull.field_registry import numeric_validation_bounds
+from smarthub.data_pull.validation_custom import US_STATES
+
 FeatureDeriver = Callable[[pd.DataFrame], pd.Series]
 
 MISSING_CATEGORY = "__MISSING__"
@@ -32,6 +35,7 @@ class FeatureSpec:
     api_input: str | None = None
     derive: FeatureDeriver | None = None
     training_include_values: frozenset[object] | None = None
+    mandatory: bool = False
     missing_value: object | None = None
 
     def resolved_missing_value(self) -> object:
@@ -111,7 +115,11 @@ def _derive_multi_vehicle(frame: pd.DataFrame) -> pd.Series:
 def _derive_age_cohort(frame: pd.DataFrame) -> pd.Series:
     """Clean age and return its categorical age cohort."""
     age = pd.to_numeric(frame["age"], errors="coerce")
-    plausible_age = age.between(1, 200)
+    min_age, max_age = numeric_validation_bounds("age")
+    if min_age is None or max_age is None:
+        raise ValueError("Age validation bounds must define both min and max.")
+
+    plausible_age = age.between(min_age, max_age)
     cleaned_age = age.where(plausible_age)
 
     # Keep age cleaning identical for training and serving.
@@ -120,7 +128,7 @@ def _derive_age_cohort(frame: pd.DataFrame) -> pd.Series:
     return (
         pd.cut(
             cleaned_age,
-            bins=[0, 18, 25, 35, 45, 55, 65, 200],
+            bins=[0, 18, 25, 35, 45, 55, 65, 75, 85, 100, max_age + 1],
             labels=[
                 "under_18",
                 "18_24",
@@ -128,7 +136,10 @@ def _derive_age_cohort(frame: pd.DataFrame) -> pd.Series:
                 "35_44",
                 "45_54",
                 "55_64",
-                "65_plus",
+                "65_74",
+                "75_84",
+                "85_99",
+                "100_plus",
             ],
             right=False,
         )
@@ -155,6 +166,7 @@ FEATURES: dict[str, FeatureSpec] = {
         source="raw",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
+        mandatory=True,
         api_input="bid",
     ),
     "age": FeatureSpec(
@@ -173,21 +185,32 @@ FEATURES: dict[str, FeatureSpec] = {
         enabled=True,
         api_input="continuous_coverage_months",
     ),
+    "created_at": FeatureSpec(
+        name="created_at",
+        kind="datetime",
+        source="raw",
+        lead_types=frozenset({"auto", "home"}),
+        enabled=False,
+        mandatory=True,
+        api_input="created_at",
+    ),
     "created_hour": FeatureSpec(
         name="created_hour",
-        kind="numeric",
+        kind="categorical",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
+        mandatory=True,
         api_input="created_at",
         derive=_derive_created_hour,
     ),
     "created_dayofweek": FeatureSpec(
         name="created_dayofweek",
-        kind="numeric",
+        kind="categorical",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
+        mandatory=True,
         api_input="created_at",
         derive=_derive_created_dayofweek,
     ),
@@ -197,6 +220,7 @@ FEATURES: dict[str, FeatureSpec] = {
         source="derived",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
+        mandatory=True,
         api_input="created_at",
         derive=_derive_is_workday,
     ),
@@ -205,7 +229,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
-        enabled=True,
+        enabled=False,
         api_input="marital_status",
         derive=_derive_is_married,
     ),
@@ -214,7 +238,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="categorical",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
-        enabled=True,
+        enabled=False,
         api_input="age",
         derive=_derive_age_cohort,
     ),
@@ -224,7 +248,9 @@ FEATURES: dict[str, FeatureSpec] = {
         source="raw",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
+        mandatory=True,
         api_input="state",
+        training_include_values=US_STATES,
     ),
     "gender": FeatureSpec(
         name="gender",
@@ -265,9 +291,7 @@ FEATURES: dict[str, FeatureSpec] = {
         lead_types=frozenset({"auto", "home"}),
         api_input="campaign_id",
         enabled=True,
-        # Campaign scoping now lives in config (feature_engineering.
-        # training_campaign_ids) so it can differ per environment and doesn't
-        # silently drop a lead type's data. Empty config = all campaigns.
+        mandatory=True,
     ),
     "traffic_tier": FeatureSpec(
         name="traffic_tier",
@@ -275,7 +299,25 @@ FEATURES: dict[str, FeatureSpec] = {
         source="raw",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
+        mandatory=True,
         api_input="traffic_tier",
+    ),
+    "source_type_id": FeatureSpec(
+        name="source_type_id",
+        kind="categorical",
+        source="raw",
+        lead_types=frozenset({"auto", "home"}),
+        enabled=True,
+        mandatory=True,
+        api_input="source_type_id",
+    ),
+    "current_carrier": FeatureSpec(
+        name="current_carrier",
+        kind="categorical",
+        source="raw",
+        lead_types=frozenset({"auto", "home"}),
+        enabled=True,
+        api_input="current_carrier",
     ),
     # -----------------------------------------------------------------------
     # Auto-only features
