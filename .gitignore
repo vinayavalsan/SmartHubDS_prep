@@ -65,6 +65,7 @@ data/models/auto/*.json
 data/models/auto/*.pkl
 data/leads
 mlruns
+scripts
 
 # Ignore all data
 data/**
