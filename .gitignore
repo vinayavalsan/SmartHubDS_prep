@@ -75,3 +75,9 @@ data/**
 
 docs/SmartHub_Architecture.drawio
 docs/SmartHub_Overview.drawio
+
+# macOS
+.DS_Store
+
+# Local Docker Compose override
+docker-compose.local.yml
