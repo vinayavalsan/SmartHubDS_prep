@@ -51,4 +51,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # each worker's own startup eager-load; there's no shared state to coordinate.
 # All workers bind the same port (SO_REUSEPORT-style preforking), so nginx's
 # single `server serve:8000` upstream entry doesn't need to change.
-CMD ["sh", "-c", "uvicorn smarthub.server.predict:app --host 0.0.0.0 --port 8000 --workers ${SERVE_WORKERS:-4}"]
+CMD ["sh", "-c", "uvicorn smarthub.server.app:app --host 0.0.0.0 --port 8000 --workers ${SERVE_WORKERS:-4}"]

@@ -1,7 +1,118 @@
 # Changelog
 
 
+## 2026-08-03 (later)
+
+### Local vs production model storage + MLflow separation
+- **New `model_storage.py`** — a `ModelStore` abstraction with two backends:
+  `FilesystemModelStore` (local dev/training, the default) and `S3ModelStore`
+  (S3 or any S3-compatible endpoint via boto3, `endpoint_url`-configurable for
+  MinIO, with a download+cache `local_path` for serving). boto3 is imported
+  lazily so local/CI never needs it.
+- **Config schema** — `training.yaml` gains `storage.production`
+  (`backend`/`bucket`/`prefix`/`endpoint_url`/`region`/`root`) and
+  `mlflow.production` (`tracking_uri`/`experiment_name`/`registered_model_name`).
+  `TrainingConfig` parses them (env overrides: `SMARTHUB_S3_ENDPOINT_URL`,
+  `SMARTHUB_PRODUCTION_STORAGE_BACKEND`, `SMARTHUB_MLFLOW_PROD_TRACKING_URI`)
+  and exposes `local_model_store()` / `production_model_store()`. **Defaults
+  keep today's local-only behaviour** — production is opt-in.
+- **Registry routing** — training still writes every run to local storage;
+  `promote()` now *publishes only the promoted model* (artifact + manifest +
+  serving pointer) to production storage, and (when a production MLflow
+  `tracking_uri` is set) logs + registers it in production MLflow. Production
+  MLflow is best-effort (a promotion isn't failed by an audit-registry outage);
+  a failed production-storage publish does raise, since that's serving-critical.
+- **Production-aware serving** — the serving-read helpers
+  (`currently_serving_version`, `load_manifest`, `serving_model_path`,
+  `load_currently_serving_model`) prefer the production store's pointer /
+  manifest / artifact when configured, and fall back to local otherwise.
+  `predict.py` loads the serving model through `serving_model_path`, so it
+  transparently pulls from S3/MinIO (cached) in production.
+- **AWS S3 or MinIO, env-selectable (default MinIO).** The same `S3ModelStore`
+  serves both: a non-empty `SMARTHUB_S3_ENDPOINT_URL` targets an S3-compatible
+  service (MinIO, default in Docker), an **empty** endpoint targets real AWS S3
+  (boto3 talks to AWS directly). Bucket/prefix/region are env-overridable
+  (`SMARTHUB_S3_BUCKET`, `SMARTHUB_S3_PREFIX`, `SMARTHUB_S3_REGION` /
+  `AWS_DEFAULT_REGION`); creds via the standard `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` (or an instance role on AWS). Switch to AWS with no
+  code change: set `SMARTHUB_S3_ENDPOINT_URL=`, real creds, and the bucket.
+- **Infra** — `boto3` added to the `ml` extra; docker-compose gains a `minio`
+  service (+ one-shot `minio-init` to create the bucket) and threads the S3 env
+  (`SMARTHUB_PRODUCTION_STORAGE_BACKEND`, `SMARTHUB_S3_ENDPOINT_URL`, AWS creds)
+  into `worker` and `serve`. Flip `SMARTHUB_PRODUCTION_STORAGE_BACKEND=s3` to
+  enable production publishing/serving.
+- The three promotion modes (automatic/manual/disabled) and the two-tier
+  versioning (immutable `run_<ts>` ids + `auto_vN` assigned only on promotion)
+  are unchanged — this change is purely about *where* promoted models and their
+  MLflow lineage are stored.
+
+
+## 2026-08-03
+
+### Structured SHAP payload for every prediction — full feature contributions, no LLM
+- The stored `shap_explanation` payload now carries the SHAP spec shape:
+  `base_prediction` (average win rate), `prediction` (the predicted win rate
+  for the lead), and `feature_contributions` — **every** model feature's
+  contribution as `{feature, value, contribution}`, sorted by `|contribution|`
+  — instead of only the top-N. The existing `top_factors`/`base_win_rate`
+  top-N view is retained for backward compatibility.
+- `prediction` is **reconciled to the calibrated served win rate** (equals the
+  `recommended_bid_predicted_win_rate` column), so the payload and the log
+  column agree; the served value is threaded into the background explain task.
+  The SHAP-reconstructed (uncalibrated) win rate is a fallback only for the
+  raw-lead dev path. Contributions therefore describe the uncalibrated model
+  output and won't exactly reconstruct a calibrated `prediction` — documented
+  in `PREDICTION_LOG_SCHEMA.md` §4.
+- `shap_explain._shap_for_row` now also returns the reconstructed predicted win
+  rate (base margin + summed contributions → sigmoid); new `_all_contributions`
+  emits the untruncated per-feature list. `explain_row` /
+  `explain_prepared_row` return the superset payload.
+- The automatic production path stays async and LLM-free: `/recommend_bid`
+  computes and stores the payload in a post-response background task
+  (`with_llm=False`), so prediction latency is unaffected. An LLM narrative is
+  only ever produced on explicit `/explain_bid` request — and because the full
+  contribution set is persisted, a natural-language explanation can be
+  generated later from the stored payload without recomputing SHAP.
+- Cold-start / no-viable-bid / non-LightGBM results now still write the spec
+  shape (empty `feature_contributions` + a reason), so every logged prediction
+  carries the payload keys. Non-finite SHAP floats are sanitized to `null`
+  before serialization/persistence (`_json_safe`).
+- Docs: `PREDICTION_LOG_SCHEMA.md` §4 updated to the new payload shape.
+
+
 ## 2026-07-30
+
+### Separated prediction and explanation: `/explain_bid` consumes a logged prediction (no bid recompute)
+- `/explain_bid` used to re-run the whole bidding policy (`explain.explain_bid`
+  → `predict.decide_bid` → the candidate-bid optimizer sweep) just to re-derive
+  a bid it usually already had -- duplicated logic, extra model execution, and a
+  risk that the explanation didn't match the logged prediction (e.g. if a newer
+  model got promoted in between).
+- **New production explanation flow — consume, don't recompute.** `/explain_bid`
+  now takes `{prediction_id}`, loads the persisted prediction, loads the **exact
+  model version that served it** (by the logged `model_uri`), runs SHAP (+
+  optional LLM narrative / nearby-bid curve) on the feature row it actually
+  scored, and **persists the explanation back onto that same log row** -- it
+  never re-decides the bid. So the explanation always corresponds to the logged
+  bid and the model that produced it. Returns 404 for an unknown id and degrades
+  gracefully (200 + fallback message) for a non-LightGBM model instead of 500.
+- **New `server/explain.py`** — `PredictionOutput` + `explain_from_prediction()`,
+  the reusable "explain an already-computed prediction" entry point. The SHAP /
+  LLM logic itself stays in `train_and_predict` (`shap_explain` / `llm_explain`);
+  added `shap_explain.explain_prepared_row()` to SHAP an already-prepared feature
+  row (coercing numerics, since a log-reloaded row is JSON-serialized).
+- `/recommend_bid`'s background SHAP enrichment now flows through the same
+  `explain_from_prediction` path (still `with_llm=False`, still after the
+  response is sent) -- one shared consume path for both endpoints.
+- **API code consolidated in `server`.** `manual_api_check.py` moved into
+  `server/` (now demonstrates the recommend → explain-by-id flow); new
+  `server/app.py` is the stable serving entrypoint
+  (`uvicorn smarthub.server.app:app`), and `Dockerfile.serve` + the run docs were
+  updated to it. The raw-lead `explain.explain_bid` orchestrator stays in
+  `train_and_predict` as the reusable local/dev path (the deferred "local mode").
+- **Contract change:** `/explain_bid` now expects `prediction_id`, not a full
+  lead payload -- callers must be updated. A raw-lead "predict then explain"
+  local mode is deferred to a follow-up.
 
 ### Consolidated raw-data validation into `data_pull` + a centralized raw-field registry
 - The validation layer moved out of its own `smarthub/validation` package into

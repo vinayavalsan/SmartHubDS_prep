@@ -170,6 +170,16 @@ def main():
     """Run the Monitoring dashboard page (load, filter, aggregate, plot)."""
     st.title("SmartHub Monitoring")
 
+    # Inference-log section (model / payload / prediction / TAT, sortable by
+    # TAT) embedded on this same page. Rendered up top and independently so it
+    # always shows even when there's no monitoring lead data yet (the charts
+    # below may `st.stop()` in that case). Same viewer as the Predictions page.
+    from smarthub.monitoring import predictions_app
+
+    predictions_app.render_inference_log(as_section=True, kp="mon_il")
+    st.markdown("---")
+    st.subheader("Performance over time")
+
     try:
         df = load_data()
     except io.DataNotFoundError as exc:

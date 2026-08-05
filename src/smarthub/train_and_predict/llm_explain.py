@@ -32,7 +32,12 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
 # Task config: smarthub.yaml `explain` section — used only by this module, not live
 # bidding path, so it's kept local rather than in train_and_predict/config.py.
-LLM_MODEL = task_config.get("explain", "llm_model", "qwen2.5:1.5b-instruct")
+# $SMARTHUB_LLM_MODEL wins over the file config (same env-over-file convention as
+# OLLAMA_HOST below), so compose can keep the serve container and the
+# `ollama-init` pull step pointed at exactly the same model with one env var.
+LLM_MODEL = os.getenv("SMARTHUB_LLM_MODEL") or task_config.get(
+    "explain", "llm_model", "qwen2.5:1.5b-instruct"
+)
 # $SMARTHUB_OLLAMA_HOST wins over the file config when set -- same
 # env-wins-over-file convention as SMARTHUB_PREDICTION_LOG_DB_URL/
 # SMARTHUB_CONFIG_DB_URL. Lets docker-compose point this at the `ollama`
@@ -122,6 +127,31 @@ def call_ollama(prompt, model=None, host=None, timeout=None):
         )
         resp.raise_for_status()
         return resp.json()["response"].strip()
+    except requests.HTTPError as exc:
+        # Ollama reachable but the request failed (commonly a 404/500 because the
+        # model isn't pulled yet). Surface Ollama's own error text, and if the
+        # model is missing, kick off a background pull so it self-heals for the
+        # next call instead of erroring forever.
+        body = ""
+        try:
+            body = (exc.response.text or "")[:300]
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            "Ollama /api/generate failed for model %r at %s: %s %s",
+            model, host, exc, body,
+        )
+        if not is_model_pulled(model, host):
+            ensure_model_pulled_async(model, host)
+            return (
+                f"(Explanation temporarily unavailable: the local model "
+                f"{model!r} isn't ready yet — a download was just started. "
+                "The numeric factors above are accurate; try again in a minute.)"
+            )
+        return (
+            f"(Explanation unavailable: local LLM error at {host} — {exc}. "
+            f"{body} The numeric factors above are still accurate.)"
+        )
     except Exception as exc:  # noqa: BLE001 - best-effort, never break the caller
         return (
             "(Explanation unavailable: could not reach the local LLM at "

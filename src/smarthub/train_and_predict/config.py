@@ -6,6 +6,7 @@ This module loads and validates YAML settings for training and serving.
 from __future__ import annotations
 
 import copy
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,8 @@ import yaml
 from smarthub.core import paths, task_config
 from smarthub.core.lead_types import lead_type_name as canonical_lead_type_name
 from smarthub.feature_engineering import features as fe
+
+logger = logging.getLogger("smarthub.train_and_predict.config")
 
 TARGET_COL = fe.TARGET_COLUMN
 REVENUE_COL = fe.REVENUE_COLUMN
@@ -80,6 +83,41 @@ class TrainingConfig:
     mlflow_artifact_root: str
     mlflow_experiment_name: str
     mlflow_registered_model_name: str
+    production_storage: dict[str, Any] | None = None
+    mlflow_production_tracking_uri: str = ""
+    mlflow_production_experiment_name: str = "SmartHub Production"
+    mlflow_production_registered_model_name: str = ""
+
+    def local_model_store(self):
+        """Filesystem store for local (all-runs) model artifacts."""
+        from smarthub.train_and_predict.model_storage import FilesystemModelStore
+
+        return FilesystemModelStore(str(paths.resolve(self.model_root)))
+
+    def production_model_store(self):
+        """Production model store (promoted models), or None when disabled."""
+        spec = self.production_storage
+        if not spec:
+            return None
+        from smarthub.train_and_predict import model_storage
+
+        backend = spec["backend"]
+        if backend == "s3":
+            return model_storage.S3ModelStore(
+                spec["bucket"],
+                prefix=spec.get("prefix", ""),
+                endpoint_url=spec.get("endpoint_url"),
+                region=spec.get("region"),
+            )
+        if backend == "filesystem":
+            root = spec.get("root") or "data/production_models"
+            return model_storage.FilesystemModelStore(str(paths.resolve(root)))
+        raise ValueError(f"Unsupported production storage backend: {backend!r}")
+
+    @property
+    def production_mlflow_enabled(self) -> bool:
+        """Whether a production MLflow tracking server is configured."""
+        return bool(self.mlflow_production_tracking_uri)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the configuration values as a dictionary.
@@ -314,6 +352,68 @@ def _positive_int(value: Any, field_name: str) -> int:
     return result
 
 
+def _resolve_production_storage(cfg: Any) -> dict[str, Any] | None:
+    """Resolve the production model-storage spec, or None when disabled.
+
+    An empty ``backend`` (or an absent ``storage.production`` section) means
+    local-only, preserving today's behaviour. ``SMARTHUB_S3_ENDPOINT_URL``
+    overrides the endpoint so the same config targets AWS or a MinIO/
+    S3-compatible service per environment.
+    """
+    cfg = cfg or {}
+    backend = (
+        os.getenv("SMARTHUB_PRODUCTION_STORAGE_BACKEND")
+        or str(cfg.get("backend", "") or "")
+    ).strip().lower()
+    if not backend:
+        return None
+    # Endpoint selects the S3 target: a value (default MinIO in Docker) points
+    # at an S3-compatible service; EMPTY means real AWS S3 (boto3 talks to AWS
+    # directly). `SMARTHUB_S3_ENDPOINT_URL` overrides -- set it empty for AWS.
+    endpoint = (
+        os.getenv("SMARTHUB_S3_ENDPOINT_URL")
+        or str(cfg.get("endpoint_url", "") or "")
+    ) or None
+    bucket = os.getenv("SMARTHUB_S3_BUCKET") or str(cfg.get("bucket", "") or "")
+    prefix = os.getenv("SMARTHUB_S3_PREFIX") or str(cfg.get("prefix", "") or "")
+    # Region: explicit override, else boto3's standard AWS_DEFAULT_REGION, else
+    # config. None lets boto3 resolve it (fine for MinIO and AWS with a region
+    # in the env/instance profile).
+    region = (
+        os.getenv("SMARTHUB_S3_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+        or str(cfg.get("region", "") or "")
+    ) or None
+    return {
+        "backend": backend,
+        "bucket": bucket,
+        "prefix": prefix,
+        "endpoint_url": endpoint,
+        "region": region,
+        "root": str(cfg.get("root", "") or ""),
+    }
+
+
+def _resolve_mlflow_production(cfg: Any) -> dict[str, str]:
+    """Resolve production MLflow settings; empty ``tracking_uri`` disables it.
+
+    ``SMARTHUB_MLFLOW_PROD_TRACKING_URI`` overrides the tracking URI.
+    """
+    cfg = cfg or {}
+    tracking_uri = (
+        os.getenv("SMARTHUB_MLFLOW_PROD_TRACKING_URI")
+        or str(cfg.get("tracking_uri", "") or "")
+    )
+    return {
+        "tracking_uri": tracking_uri,
+        "experiment_name": str(
+            cfg.get("experiment_name", "SmartHub Production")
+            or "SmartHub Production"
+        ),
+        "registered_model_name": str(cfg.get("registered_model_name", "") or ""),
+    }
+
+
 def load_training_config(
     config_path: str | Path | None = None,
 ) -> TrainingConfig:
@@ -359,6 +459,9 @@ def load_training_config(
     )
     output = _mapping(root.get("output"), "output")
     mlflow = _mapping(root.get("mlflow"), "mlflow")
+    storage_root = root.get("storage") or {}
+    production_storage = _resolve_production_storage(storage_root.get("production"))
+    mlflow_production = _resolve_mlflow_production(mlflow.get("production"))
 
     model_type = str(training.get("model_type", "")).strip().lower()
     if model_type not in _SUPPORTED_MODELS:
@@ -516,6 +619,12 @@ def load_training_config(
         mlflow_artifact_root=str(mlflow["artifact_root"]),
         mlflow_experiment_name=str(mlflow["experiment_name"]),
         mlflow_registered_model_name=str(mlflow["registered_model_name"]),
+        production_storage=production_storage,
+        mlflow_production_tracking_uri=mlflow_production["tracking_uri"],
+        mlflow_production_experiment_name=mlflow_production["experiment_name"],
+        mlflow_production_registered_model_name=(
+            mlflow_production["registered_model_name"]
+        ),
     )
 
 
@@ -578,6 +687,54 @@ def cold_start_fallback_bid_pct() -> float:
         Required ``[prediction] cold_start_fallback_bid_pct`` value.
     """
     return task_config.get_float("prediction", "cold_start_fallback_bid_pct", None)
+
+
+# Valid SHAP enrichment modes for /recommend_bid's post-response explanation.
+SHAP_MODE_INPROCESS = "inprocess"
+SHAP_MODE_OFFLOAD = "offload"
+SHAP_MODE_OFF = "off"
+_VALID_SHAP_MODES = {SHAP_MODE_INPROCESS, SHAP_MODE_OFFLOAD, SHAP_MODE_OFF}
+
+
+def shap_enrichment_mode() -> str:
+    """How ``/recommend_bid`` attaches SHAP factors to a prediction's log row.
+
+    Three modes, so the current behaviour and the offloaded behaviour can run
+    side by side and be compared before either is removed:
+
+    - ``"inprocess"`` (default -- unchanged legacy behaviour): the serving
+      process computes SHAP in a Starlette ``BackgroundTask`` right after the
+      response is sent. Correct, but the ~1.5 s of CPU-bound work runs on the
+      same worker and contends for the GIL with later requests.
+    - ``"offload"``: the serving process does NOT compute SHAP. The prediction
+      is logged with ``shap_explanation = NULL``; a separate ``shap-worker``
+      process (see ``server.shap_worker``) drains those rows and backfills the
+      explanation. Keeps serving CPU free for the 1 s bid TAT.
+    - ``"off"``: no SHAP enrichment at all (useful as a control when
+      benchmarking the pure bid path).
+
+    Resolution order: the ``SMARTHUB_SHAP_MODE`` env var wins (so a load test
+    can flip modes without editing YAML), then ``[prediction]
+    shap_enrichment_mode`` in ``config/smarthub.yaml``, then the default.
+
+    Returns
+    -------
+    str
+        One of ``"inprocess"``, ``"offload"``, ``"off"``.
+    """
+    raw = os.getenv("SMARTHUB_SHAP_MODE") or task_config.get(
+        "prediction", "shap_enrichment_mode", SHAP_MODE_INPROCESS
+    )
+    mode = str(raw).strip().lower()
+    if mode not in _VALID_SHAP_MODES:
+        logger.warning(
+            "Unknown shap_enrichment_mode %r; falling back to %r. Valid: %s",
+            raw,
+            SHAP_MODE_INPROCESS,
+            sorted(_VALID_SHAP_MODES),
+        )
+        return SHAP_MODE_INPROCESS
+    return mode
 
 
 # Compatibility aliases allow existing prediction and optimizer modules to use

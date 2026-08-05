@@ -16,10 +16,13 @@ and Postgres (production) with no dialect-specific types.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger("smarthub.train_and_predict.prediction_log_schema")
 
 from sqlalchemy import (
     Boolean,
@@ -93,6 +96,9 @@ prediction_log_table = Table(
     Column("min_bid", Numeric(10, 2), nullable=False),
     Column("bid_step", Numeric(10, 2), nullable=False),
     Column("candidate_bid_generation", Text),
+    # Human-friendly model identity (e.g. "auto" / production slug), alongside
+    # the exact version below.
+    Column("model_name", String(128)),
     Column("model_version", String(128)),
     Column("model_uri", Text),
     Column("model_type", String(64)),
@@ -122,7 +128,15 @@ prediction_log_table = Table(
     Column("recommended_bid_predicted_cm", Numeric(6, 5)),
     Column("shap_explanation", Text),
     Column("serving_config", Text),
+    # Turnaround time (seconds): wall-clock from the server receiving the
+    # request to the response being produced for it. Measured in the request
+    # handler and passed in; independent of the async prediction-log write /
+    # SHAP backfill, which happen after the response is already sent.
+    Column("tat_seconds", Numeric(10, 4)),
     Column("created_at", DateTime, nullable=False),
+    # Last time this row changed -- equals created_at at insert, bumped when the
+    # SHAP explanation is backfilled (see update_shap_explanation).
+    Column("updated_at", DateTime),
 )
 
 
@@ -161,6 +175,75 @@ def _decode_row(mapping) -> dict:
     return out
 
 
+def _row_values(rec: dict) -> tuple[dict, str]:
+    """Build the INSERT values dict for one prediction-log row from a record.
+
+    Single source of truth for the column mapping, shared by ``log_prediction``
+    (one row) and ``log_many`` (batched writer), so the two can never drift.
+    Returns ``(values, prediction_id)``.
+    """
+    endpoint = rec.get("endpoint")
+    status = rec.get("status", "success")
+    if endpoint not in VALID_ENDPOINTS:
+        raise ValueError(f"endpoint must be one of {VALID_ENDPOINTS}, got {endpoint!r}")
+    if status not in VALID_STATUSES:
+        raise ValueError(f"status must be one of {VALID_STATUSES}, got {status!r}")
+
+    prediction_id = rec.get("prediction_id") or str(uuid.uuid4())
+    served_at = rec.get("served_at") or datetime.now(timezone.utc)
+    log_date = served_at.date() if isinstance(served_at, datetime) else served_at
+    now = datetime.now(timezone.utc)
+
+    values = dict(
+        prediction_id=prediction_id,
+        served_at=served_at,
+        log_date=log_date,
+        schema_version=SCHEMA_VERSION,
+        request_id=rec.get("request_id"),
+        lead_ping_id=rec.get("lead_ping_id"),
+        endpoint=endpoint,
+        served_by_host=rec.get("served_by_host") or os.getenv("HOSTNAME"),
+        status=status,
+        error_message=rec.get("error_message"),
+        lead_type_id=rec.get("lead_type_id"),
+        lead_type_name=rec.get("lead_type_name"),
+        campaign_id=rec.get("campaign_id"),
+        account_id=rec.get("account_id"),
+        source_type_id=rec.get("source_type_id"),
+        input_features=_json_or_none(rec.get("input_features")),
+        model_input_features=_json_or_none(rec.get("model_input_features")),
+        feature_cols=_json_or_none(rec.get("feature_cols")),
+        expected_revenue=rec.get("expected_revenue"),
+        target_cm=rec.get("target_cm"),
+        min_bid=rec.get("min_bid"),
+        bid_step=rec.get("bid_step"),
+        candidate_bid_generation=_json_or_none(rec.get("candidate_bid_generation")),
+        model_name=rec.get("model_name"),
+        model_version=rec.get("model_version"),
+        model_uri=rec.get("model_uri"),
+        model_type=rec.get("model_type"),
+        model_calibrated=rec.get("model_calibrated"),
+        training_table_version=rec.get("training_table_version"),
+        model_data_min_created_at=rec.get("model_data_min_created_at"),
+        model_data_max_created_at=rec.get("model_data_max_created_at"),
+        model_data_age_days=rec.get("model_data_age_days"),
+        decision_path=rec.get("decision_path"),
+        decision_reason=rec.get("decision_reason"),
+        recommended_bid=rec.get("recommended_bid"),
+        recommended_bid_predicted_win_rate=rec.get(
+            "recommended_bid_predicted_win_rate"
+        ),
+        recommended_bid_predicted_profit=rec.get("recommended_bid_predicted_profit"),
+        recommended_bid_predicted_cm=rec.get("recommended_bid_predicted_cm"),
+        shap_explanation=_json_or_none(rec.get("shap_explanation")),
+        serving_config=_json_or_none(rec.get("serving_config")),
+        tat_seconds=rec.get("tat_seconds"),
+        created_at=now,
+        updated_at=now,
+    )
+    return values, prediction_id
+
+
 class PredictionLogStore:
     """Write/read the single prediction-log table (creates it if absent)."""
 
@@ -175,6 +258,33 @@ class PredictionLogStore:
         """
         self.engine = create_engine(url or prediction_log_db_url(), future=True)
         _metadata.create_all(self.engine)
+        self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        """Add any newly-introduced columns to an already-existing table.
+
+        ``create_all`` only creates a missing table, never alters an existing
+        one, so a DB created before ``model_name`` / ``tat_ms`` / ``updated_at``
+        existed would silently drop those on insert. This does an idempotent
+        ``ALTER TABLE ... ADD COLUMN`` for any column defined in the schema but
+        absent from the live table -- portable across SQLite (dev/tests) and
+        Postgres (prod), both of which support this simple form.
+        """
+        from sqlalchemy import inspect, text
+
+        table = prediction_log_table
+        try:
+            existing = {c["name"] for c in inspect(self.engine).get_columns(table.name)}
+        except Exception:  # noqa: BLE001 -- table may not exist yet on some engines
+            return
+        for col in table.columns:
+            if col.name in existing:
+                continue
+            coltype = col.type.compile(dialect=self.engine.dialect)
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {coltype}')
+                )
 
     def log_prediction(
         self,
@@ -195,6 +305,7 @@ class PredictionLogStore:
         model_input_features: dict | None = None,
         feature_cols: list[str] | None = None,
         candidate_bid_generation: dict | None = None,
+        model_name: str | None = None,
         model_version: str | None = None,
         model_uri: str | None = None,
         model_type: str | None = None,
@@ -216,6 +327,7 @@ class PredictionLogStore:
         served_by_host: str | None = None,
         prediction_id: str | None = None,
         served_at: datetime | None = None,
+        tat_seconds: float | None = None,
     ) -> str:
         """Insert one prediction-log row (one row per API call, §2 of the doc).
 
@@ -292,66 +404,76 @@ class PredictionLogStore:
         ValueError
             If ``endpoint`` or ``status`` isn't one of the valid values.
         """
-        if endpoint not in VALID_ENDPOINTS:
-            raise ValueError(
-                f"endpoint must be one of {VALID_ENDPOINTS}, got {endpoint!r}"
+        values, prediction_id = _row_values(
+            dict(
+                endpoint=endpoint,
+                status=status,
+                error_message=error_message,
+                lead_type_id=lead_type_id,
+                lead_type_name=lead_type_name,
+                campaign_id=campaign_id,
+                account_id=account_id,
+                source_type_id=source_type_id,
+                input_features=input_features,
+                model_input_features=model_input_features,
+                feature_cols=feature_cols,
+                expected_revenue=expected_revenue,
+                target_cm=target_cm,
+                min_bid=min_bid,
+                bid_step=bid_step,
+                candidate_bid_generation=candidate_bid_generation,
+                model_name=model_name,
+                model_version=model_version,
+                model_uri=model_uri,
+                model_type=model_type,
+                model_calibrated=model_calibrated,
+                training_table_version=training_table_version,
+                model_data_min_created_at=model_data_min_created_at,
+                model_data_max_created_at=model_data_max_created_at,
+                model_data_age_days=model_data_age_days,
+                decision_path=decision_path,
+                decision_reason=decision_reason,
+                recommended_bid=recommended_bid,
+                recommended_bid_predicted_win_rate=recommended_bid_predicted_win_rate,
+                recommended_bid_predicted_profit=recommended_bid_predicted_profit,
+                recommended_bid_predicted_cm=recommended_bid_predicted_cm,
+                shap_explanation=shap_explanation,
+                serving_config=serving_config,
+                request_id=request_id,
+                lead_ping_id=lead_ping_id,
+                served_by_host=served_by_host,
+                prediction_id=prediction_id,
+                served_at=served_at,
+                tat_seconds=tat_seconds,
             )
-        if status not in VALID_STATUSES:
-            raise ValueError(f"status must be one of {VALID_STATUSES}, got {status!r}")
-
-        prediction_id = prediction_id or str(uuid.uuid4())
-        served_at = served_at or datetime.now(timezone.utc)
-        log_date = served_at.date() if isinstance(served_at, datetime) else served_at
-        now = datetime.now(timezone.utc)
-
+        )
         with self.engine.begin() as conn:
-            conn.execute(
-                insert(prediction_log_table).values(
-                    prediction_id=prediction_id,
-                    served_at=served_at,
-                    log_date=log_date,
-                    schema_version=SCHEMA_VERSION,
-                    request_id=request_id,
-                    lead_ping_id=lead_ping_id,
-                    endpoint=endpoint,
-                    served_by_host=served_by_host or os.getenv("HOSTNAME"),
-                    status=status,
-                    error_message=error_message,
-                    lead_type_id=lead_type_id,
-                    lead_type_name=lead_type_name,
-                    campaign_id=campaign_id,
-                    account_id=account_id,
-                    source_type_id=source_type_id,
-                    input_features=_json_or_none(input_features),
-                    model_input_features=_json_or_none(model_input_features),
-                    feature_cols=_json_or_none(feature_cols),
-                    expected_revenue=expected_revenue,
-                    target_cm=target_cm,
-                    min_bid=min_bid,
-                    bid_step=bid_step,
-                    candidate_bid_generation=_json_or_none(candidate_bid_generation),
-                    model_version=model_version,
-                    model_uri=model_uri,
-                    model_type=model_type,
-                    model_calibrated=model_calibrated,
-                    training_table_version=training_table_version,
-                    model_data_min_created_at=model_data_min_created_at,
-                    model_data_max_created_at=model_data_max_created_at,
-                    model_data_age_days=model_data_age_days,
-                    decision_path=decision_path,
-                    decision_reason=decision_reason,
-                    recommended_bid=recommended_bid,
-                    recommended_bid_predicted_win_rate=(
-                        recommended_bid_predicted_win_rate
-                    ),
-                    recommended_bid_predicted_profit=recommended_bid_predicted_profit,
-                    recommended_bid_predicted_cm=recommended_bid_predicted_cm,
-                    shap_explanation=_json_or_none(shap_explanation),
-                    serving_config=_json_or_none(serving_config),
-                    created_at=now,
-                )
-            )
+            conn.execute(insert(prediction_log_table).values(**values))
         return prediction_id
+
+    def log_many(self, records: list[dict]) -> int:
+        """Insert many prediction rows in ONE transaction (batched INSERT).
+
+        Used by the serving layer's decoupled log-writer thread, which drains a
+        queue of already-built rows off the request path. A malformed record is
+        skipped (logged), never aborting the whole batch. Returns rows written.
+        """
+        if not records:
+            return 0
+        rows: list[dict] = []
+        for rec in records:
+            try:
+                values, _ = _row_values(rec)
+                rows.append(values)
+            except Exception:  # noqa: BLE001 -- skip a bad row, keep the batch
+                logger.warning(
+                    "Skipping a malformed prediction-log record", exc_info=True
+                )
+        if not rows:
+            return 0
+        with self.engine.begin() as conn:
+            conn.execute(insert(prediction_log_table), rows)  # executemany
+        return len(rows)
 
     def update_shap_explanation(
         self, prediction_id: str, shap_explanation: dict
@@ -387,7 +509,10 @@ class PredictionLogStore:
             result = conn.execute(
                 update(prediction_log_table)
                 .where(prediction_log_table.c.prediction_id == prediction_id)
-                .values(shap_explanation=_json_or_none(shap_explanation))
+                .values(
+                    shap_explanation=_json_or_none(shap_explanation),
+                    updated_at=datetime.now(timezone.utc),
+                )
             )
         return result.rowcount > 0
 

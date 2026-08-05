@@ -5,7 +5,7 @@
 # connection details remain outside this file.
 
 training:
-  model_type: xgboost
+  model_type: lightgbm
   drop_zero_variance: true
   random_seed: 42
 
@@ -114,10 +114,39 @@ promotion:
 
 output:
   report_root: data/model_evaluations
-  model_root: data/models
+  model_root: data/models          # LOCAL model store root (all training runs)
+
+# Model artifact storage. `output.model_root` above is the local store (every
+# trained run). `storage.production` is where PROMOTED models are published --
+# the source of truth for the prediction service. Leave `backend` empty to run
+# local-only (today's behaviour); set it to enable production publishing.
+storage:
+  production:
+    backend: ""                    # "" = disabled (local-only) | "s3" | "filesystem"
+    bucket: smarthub-models        # S3 bucket; env SMARTHUB_S3_BUCKET overrides
+    prefix: models                 # key prefix inside the bucket
+    # S3 endpoint. Set for an S3-compatible service (MinIO); leave EMPTY for
+    # real AWS S3 (boto3 talks to AWS directly). env SMARTHUB_S3_ENDPOINT_URL
+    # overrides -- in Docker it defaults to the MinIO service, set it empty
+    # (`SMARTHUB_S3_ENDPOINT_URL=`) to use AWS.
+    endpoint_url: ""
+    region: ""                     # env SMARTHUB_S3_REGION / AWS_DEFAULT_REGION
+    root: data/production_models    # local dir (filesystem backend, for testing)
 
 mlflow:
+  # LOCAL metadata (backend) store. `tracking_db_path` is the SQLite fallback
+  # for non-Docker/dev runs. In Docker, SMARTHUB_MLFLOW_TRACKING_URI overrides
+  # this to the shared Postgres `mlflow` database (see docker-compose.prefect.yml).
   tracking_db_path: data/mlflow.db
+  # Artifact store (plots, model, summary JSON) -- separate from the backend
+  # store above; stays a file tree for now (-> S3 in production).
   artifact_root: data/mlruns
   experiment_name: anton_win_probability
   registered_model_name: anton-win-probability-model
+  # PRODUCTION MLflow -- promotions log + register here. Empty tracking_uri
+  # disables it (skipped gracefully); env SMARTHUB_MLFLOW_PROD_TRACKING_URI
+  # overrides. Fill in when the production tracking server is available.
+  production:
+    tracking_uri: ""               # e.g. https://insurance.io/smarthub-anton/mlflow
+    experiment_name: SmartHub Production
+    registered_model_name: anton-win-probability-model

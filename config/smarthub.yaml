@@ -79,6 +79,19 @@ prediction:
   # Pin serving to one specific local model version (e.g. v3_2026-07-09T...)
   # instead of whatever is currently serving. "none" (default) = serve that.
   active_model_version: "none"
+  # How /recommend_bid attaches SHAP factors to a prediction's log row
+  # (config.shap_enrichment_mode). $SMARTHUB_SHAP_MODE overrides this.
+  #   inprocess (default): serve computes SHAP in a background task after the
+  #     response -- correct, but the ~1.5s CPU work contends with later
+  #     requests on the same worker (the 1s-TAT throughput bottleneck).
+  #   offload: serve logs the prediction with SHAP empty; a separate
+  #     `shap-worker` process (smarthub.server.shap_worker) backfills it, so
+  #     serving CPU stays free. Requires the shap-worker to be running.
+  #   off: no SHAP enrichment (control mode for benchmarking the bid path).
+  # Default is `offload`: SHAP is computed by the separate shap-worker so the
+  # bid path stays fast (good TAT). Requires the shap-worker to be running to
+  # backfill explanations; bids are unaffected either way.
+  shap_enrichment_mode: offload
 
 explain:
   # Offline/on-demand "why did Anton bid $X" explanations (SHAP factor
