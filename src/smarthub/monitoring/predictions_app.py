@@ -99,7 +99,11 @@ def render_inference_log(as_section: bool = False, kp: str = "il"):
         )
     with c3:
         limit = st.number_input(
-            "Max rows", min_value=10, max_value=10000, value=500, step=50,
+            "Max rows",
+            min_value=10,
+            max_value=10000,
+            value=500,
+            step=50,
             key=f"{kp}_lim",
         )
     with c4:
@@ -164,14 +168,10 @@ def render_inference_log(as_section: bool = False, kp: str = "il"):
         use_container_width=True,
         hide_index=True,
         column_config={
-            "tat_seconds": st.column_config.NumberColumn(
-                "TAT (s)", format="%.3f"
-            ),
+            "tat_seconds": st.column_config.NumberColumn("TAT (s)", format="%.3f"),
             "created_at": st.column_config.DatetimeColumn("Created"),
             "updated_at": st.column_config.DatetimeColumn("Updated"),
-            "recommended_bid": st.column_config.NumberColumn(
-                "Bid", format="%.2f"
-            ),
+            "recommended_bid": st.column_config.NumberColumn("Bid", format="%.2f"),
             "recommended_bid_predicted_win_rate": st.column_config.NumberColumn(
                 "Win rate", format="%.3f"
             ),

@@ -129,9 +129,7 @@ def test_prediction_falls_back_to_shap_when_no_served_value(monkeypatch):
 
 def test_cold_start_payload_has_spec_keys(monkeypatch):
     """Even with no model, the payload keeps the spec shape (empty)."""
-    monkeypatch.setattr(
-        shap_explain, "explain_prepared_row", lambda *a, **k: {}
-    )
+    monkeypatch.setattr(shap_explain, "explain_prepared_row", lambda *a, **k: {})
     out = se.explain_from_prediction(None, _prediction(), with_llm=False)
     assert out["feature_contributions"] == []
     assert out["base_prediction"] is None

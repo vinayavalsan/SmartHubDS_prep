@@ -81,3 +81,5 @@ docs/SmartHub_Overview.drawio
 
 # Local Docker Compose override
 docker-compose.local.yml
+# isort atomic-write temp files
+*.isorted

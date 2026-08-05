@@ -44,7 +44,9 @@ def _ensure_database_exists(tracking_uri: str) -> None:
             ).scalar()
             if not exists:
                 conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-                logger.info("Created MLflow database %r on the shared Postgres.", db_name)
+                logger.info(
+                    "Created MLflow database %r on the shared Postgres.", db_name
+                )
         admin_engine.dispose()
     except Exception:  # noqa: BLE001 -- best-effort; MLflow will surface a clear error
         logger.warning(

@@ -986,9 +986,7 @@ if _FASTAPI_AVAILABLE:
                 lead_type_id=lead_type_id,
                 model_input_features=model_input_features,
                 recommended_bid=recommended_bid,
-                recommended_bid_predicted_win_rate=(
-                    recommended_bid_predicted_win_rate
-                ),
+                recommended_bid_predicted_win_rate=(recommended_bid_predicted_win_rate),
             )
             factors = server_explain.explain_from_prediction(
                 model, prediction, with_llm=False
@@ -998,9 +996,7 @@ if _FASTAPI_AVAILABLE:
                 {
                     "base_prediction": factors.get("base_prediction"),
                     "prediction": factors.get("prediction"),
-                    "feature_contributions": factors.get(
-                        "feature_contributions", []
-                    ),
+                    "feature_contributions": factors.get("feature_contributions", []),
                     "top_factors": factors["top_factors"],
                     "base_win_rate": factors["base_win_rate"],
                 },
@@ -1082,22 +1078,24 @@ if _FASTAPI_AVAILABLE:
         except Exception as exc:
             # Error path: also enqueued (off the request path) so even failure
             # logging can't block. The client gets its 500 immediately.
-            _enqueue_log(dict(
-                endpoint="recommend_bid",
-                status="error",
-                error_message=str(exc),
-                lead_type_id=request.lead_type_id,
-                lead_type_name=lead_type_name,
-                campaign_id=request.campaign_id,
-                account_id=request.account_id,
-                source_type_id=request.source_type_id,
-                lead_ping_id=request.lead_ping_id,
-                input_features=record or request.model_dump(),
-                expected_revenue=request.expected_revenue,
-                target_cm=request.target_cm,
-                min_bid=request.min_bid,
-                bid_step=request.bid_step,
-            ))
+            _enqueue_log(
+                dict(
+                    endpoint="recommend_bid",
+                    status="error",
+                    error_message=str(exc),
+                    lead_type_id=request.lead_type_id,
+                    lead_type_name=lead_type_name,
+                    campaign_id=request.campaign_id,
+                    account_id=request.account_id,
+                    source_type_id=request.source_type_id,
+                    lead_ping_id=request.lead_ping_id,
+                    input_features=record or request.model_dump(),
+                    expected_revenue=request.expected_revenue,
+                    target_cm=request.target_cm,
+                    min_bid=request.min_bid,
+                    bid_step=request.bid_step,
+                )
+            )
             raise
 
         # Generated here (not by the store) so it can be returned to the
@@ -1120,47 +1118,49 @@ if _FASTAPI_AVAILABLE:
         # BackgroundTask, which runs in this worker after the response). If the
         # queue is full the row is dropped with a warning -- serving is never
         # blocked or slowed by logging.
-        _enqueue_log(dict(
-            endpoint="recommend_bid",
-            prediction_id=prediction_id,
-            tat_seconds=tat_seconds,
-            lead_type_id=request.lead_type_id,
-            lead_type_name=lead_type_name,
-            campaign_id=request.campaign_id,
-            account_id=request.account_id,
-            source_type_id=request.source_type_id,
-            lead_ping_id=request.lead_ping_id,
-            input_features=record,
-            model_input_features=row.to_dict(),
-            feature_cols=manifest.get("feature_cols") if manifest else None,
-            expected_revenue=request.expected_revenue,
-            target_cm=request.target_cm,
-            min_bid=request.min_bid,
-            bid_step=request.bid_step,
-            candidate_bid_generation={
-                "method": "equally_spaced",
-                "min_bid": request.min_bid,
-                "max_bid": result.get("max_bid"),
-                "bid_step": request.bid_step,
-                "n_candidates": result.get("n_candidate_bids"),
-            },
-            **_manifest_log_fields(manifest),
-            model_data_age_days=result.get("model_data_age_days"),
-            decision_path=result.get("decision_path"),
-            decision_reason=result.get("decision_reason"),
-            recommended_bid=result.get("recommended_bid"),
-            recommended_bid_predicted_win_rate=result.get(
-                "recommended_bid_predicted_win_rate"
-            ),
-            recommended_bid_predicted_profit=result.get(
-                "recommended_bid_predicted_profit"
-            ),
-            recommended_bid_predicted_cm=_predicted_cm(
-                result.get("recommended_bid_predicted_profit"),
-                request.expected_revenue,
-            ),
-            serving_config=_serving_config_snapshot(),
-        ))
+        _enqueue_log(
+            dict(
+                endpoint="recommend_bid",
+                prediction_id=prediction_id,
+                tat_seconds=tat_seconds,
+                lead_type_id=request.lead_type_id,
+                lead_type_name=lead_type_name,
+                campaign_id=request.campaign_id,
+                account_id=request.account_id,
+                source_type_id=request.source_type_id,
+                lead_ping_id=request.lead_ping_id,
+                input_features=record,
+                model_input_features=row.to_dict(),
+                feature_cols=manifest.get("feature_cols") if manifest else None,
+                expected_revenue=request.expected_revenue,
+                target_cm=request.target_cm,
+                min_bid=request.min_bid,
+                bid_step=request.bid_step,
+                candidate_bid_generation={
+                    "method": "equally_spaced",
+                    "min_bid": request.min_bid,
+                    "max_bid": result.get("max_bid"),
+                    "bid_step": request.bid_step,
+                    "n_candidates": result.get("n_candidate_bids"),
+                },
+                **_manifest_log_fields(manifest),
+                model_data_age_days=result.get("model_data_age_days"),
+                decision_path=result.get("decision_path"),
+                decision_reason=result.get("decision_reason"),
+                recommended_bid=result.get("recommended_bid"),
+                recommended_bid_predicted_win_rate=result.get(
+                    "recommended_bid_predicted_win_rate"
+                ),
+                recommended_bid_predicted_profit=result.get(
+                    "recommended_bid_predicted_profit"
+                ),
+                recommended_bid_predicted_cm=_predicted_cm(
+                    result.get("recommended_bid_predicted_profit"),
+                    request.expected_revenue,
+                ),
+                serving_config=_serving_config_snapshot(),
+            )
+        )
 
         # SHAP enrichment mode (config.shap_enrichment_mode / $SMARTHUB_SHAP_MODE):
         #   inprocess -> compute SHAP here, in a background task on this worker

@@ -139,7 +139,10 @@ def call_ollama(prompt, model=None, host=None, timeout=None):
             pass
         logger.warning(
             "Ollama /api/generate failed for model %r at %s: %s %s",
-            model, host, exc, body,
+            model,
+            host,
+            exc,
+            body,
         )
         if not is_model_pulled(model, host):
             ensure_model_pulled_async(model, host)

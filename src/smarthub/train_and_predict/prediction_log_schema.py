@@ -22,8 +22,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-logger = logging.getLogger("smarthub.train_and_predict.prediction_log_schema")
-
 from sqlalchemy import (
     Boolean,
     Column,
@@ -41,6 +39,8 @@ from sqlalchemy import (
     select,
     update,
 )
+
+logger = logging.getLogger("smarthub.train_and_predict.prediction_log_schema")
 
 DEFAULT_PREDICTION_LOG_DB_URL = (
     "postgresql+psycopg2://prefect:prefect@postgres:5432/prefect"
@@ -572,3 +572,47 @@ class PredictionLogStore:
         with self.engine.begin() as conn:
             rows = conn.execute(query).all()
         return [_decode_row(r._mapping) for r in rows]
+
+    def window_rows(self, minutes: int = 15, limit: int = 50000) -> list[dict]:
+        """Rows logged within the last ``minutes`` (newest first).
+
+        Used by the health/SLO page and the alert check to compute service-level
+        indicators (TAT percentiles, error rate, request rate) over a recent
+        window. ``created_at`` is stored as naive UTC, so the cutoff is computed
+        the same way for a portable comparison (Postgres + SQLite).
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            minutes=minutes
+        )
+        query = (
+            select(prediction_log_table)
+            .where(prediction_log_table.c.created_at >= cutoff)
+            .order_by(prediction_log_table.c.created_at.desc())
+            .limit(limit)
+        )
+        with self.engine.begin() as conn:
+            rows = conn.execute(query).all()
+        return [_decode_row(r._mapping) for r in rows]
+
+    def pending_shap_count(self) -> int:
+        """Number of model-served rows still awaiting a SHAP explanation.
+
+        This is the shap-worker backlog gauge -- a rising value means SHAP
+        enrichment is falling behind (never affects the bid path, but worth an
+        alert).
+        """
+        from sqlalchemy import func
+
+        query = (
+            select(func.count())
+            .select_from(prediction_log_table)
+            .where(
+                prediction_log_table.c.shap_explanation.is_(None),
+                prediction_log_table.c.decision_path.in_(("model", "exploration")),
+                prediction_log_table.c.status.in_(("success", "ok")),
+            )
+        )
+        with self.engine.begin() as conn:
+            return int(conn.execute(query).scalar_one())

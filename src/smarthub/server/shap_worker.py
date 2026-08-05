@@ -115,9 +115,7 @@ def _compute_shap_payload(row: dict) -> dict:
         ),
     )
     model = _load_model_for_row(row)
-    factors = server_explain.explain_from_prediction(
-        model, prediction, with_llm=False
-    )
+    factors = server_explain.explain_from_prediction(model, prediction, with_llm=False)
     return {
         "base_prediction": factors.get("base_prediction"),
         "prediction": factors.get("prediction"),

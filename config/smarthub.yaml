@@ -112,3 +112,12 @@ explain:
   ollama_host: http://localhost:11434
   top_n_factors: 5
   timeout_seconds: 30
+
+# SLO thresholds for the Health page (monitoring/health_app) and the Slack
+# alerter (monitoring/slo_alerts). Breaching any one is an alert. Computed from
+# the prediction log over a recent window -- no extra infra.
+slo:
+  tat_p99_seconds: 0.8        # p99 turnaround must stay under the 1s TAT
+  error_rate_pct: 1.0         # % of requests that errored
+  shap_backlog: 1000          # rows awaiting SHAP enrichment (shap-worker lag)
+  no_requests_minutes: 10     # no successful request this long => possible outage

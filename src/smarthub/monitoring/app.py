@@ -13,6 +13,7 @@ import streamlit as st
 
 from smarthub.monitoring import (
     config_app,
+    health_app,
     leads_app,
     monitoring_app,
     predictions_app,
@@ -31,11 +32,10 @@ def config_page():
 def main():
     """Register the pages and run the Streamlit multipage navigation."""
     pages = [
+        st.Page(health_app.main, title="Health", url_path="health"),
         st.Page(leads_app.main, title="Leads", url_path="leads", default=True),
         st.Page(monitoring_app.main, title="Monitoring", url_path="monitoring"),
-        st.Page(
-            predictions_app.main, title="Predictions", url_path="predictions"
-        ),
+        st.Page(predictions_app.main, title="Predictions", url_path="predictions"),
         st.Page(config_page, title="Config", url_path="config"),
     ]
     st.navigation(pages).run()

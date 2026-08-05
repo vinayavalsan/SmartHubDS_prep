@@ -46,9 +46,7 @@ def _production_store():
         try:
             from . import config
 
-            _PRODUCTION_STORE = (
-                config.load_training_config().production_model_store()
-            )
+            _PRODUCTION_STORE = config.load_training_config().production_model_store()
         except Exception:  # noqa: BLE001 -- never let prod config break local use
             logger.warning(
                 "Could not initialise production model store; using local only.",

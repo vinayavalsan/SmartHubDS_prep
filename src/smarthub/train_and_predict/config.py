@@ -362,17 +362,20 @@ def _resolve_production_storage(cfg: Any) -> dict[str, Any] | None:
     """
     cfg = cfg or {}
     backend = (
-        os.getenv("SMARTHUB_PRODUCTION_STORAGE_BACKEND")
-        or str(cfg.get("backend", "") or "")
-    ).strip().lower()
+        (
+            os.getenv("SMARTHUB_PRODUCTION_STORAGE_BACKEND")
+            or str(cfg.get("backend", "") or "")
+        )
+        .strip()
+        .lower()
+    )
     if not backend:
         return None
     # Endpoint selects the S3 target: a value (default MinIO in Docker) points
     # at an S3-compatible service; EMPTY means real AWS S3 (boto3 talks to AWS
     # directly). `SMARTHUB_S3_ENDPOINT_URL` overrides -- set it empty for AWS.
     endpoint = (
-        os.getenv("SMARTHUB_S3_ENDPOINT_URL")
-        or str(cfg.get("endpoint_url", "") or "")
+        os.getenv("SMARTHUB_S3_ENDPOINT_URL") or str(cfg.get("endpoint_url", "") or "")
     ) or None
     bucket = os.getenv("SMARTHUB_S3_BUCKET") or str(cfg.get("bucket", "") or "")
     prefix = os.getenv("SMARTHUB_S3_PREFIX") or str(cfg.get("prefix", "") or "")
@@ -400,15 +403,13 @@ def _resolve_mlflow_production(cfg: Any) -> dict[str, str]:
     ``SMARTHUB_MLFLOW_PROD_TRACKING_URI`` overrides the tracking URI.
     """
     cfg = cfg or {}
-    tracking_uri = (
-        os.getenv("SMARTHUB_MLFLOW_PROD_TRACKING_URI")
-        or str(cfg.get("tracking_uri", "") or "")
+    tracking_uri = os.getenv("SMARTHUB_MLFLOW_PROD_TRACKING_URI") or str(
+        cfg.get("tracking_uri", "") or ""
     )
     return {
         "tracking_uri": tracking_uri,
         "experiment_name": str(
-            cfg.get("experiment_name", "SmartHub Production")
-            or "SmartHub Production"
+            cfg.get("experiment_name", "SmartHub Production") or "SmartHub Production"
         ),
         "registered_model_name": str(cfg.get("registered_model_name", "") or ""),
     }

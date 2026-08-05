@@ -358,6 +358,26 @@ services:
       - ./data:/app/data
     command: ["python", "-m", "smarthub.server.shap_worker"]
 
+  # Lightweight SLO alerter: every minute it computes the bid API's SLIs from
+  # the prediction log (TAT p99, error rate, SHAP backlog, freshness) and posts
+  # a Slack alert on any threshold breach (config/smarthub.yaml `slo:`). Reuses
+  # the serve image + the existing Slack webhook -- no Prometheus/Alertmanager.
+  # No-op (logs only) if SLACK_WEBHOOK_URL is unset. Same numbers as the
+  # dashboard Health page.
+  slo-alerts:
+    container_name: smarthub-slo-alerts
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_SLO_WINDOW_MINUTES: ${SMARTHUB_SLO_WINDOW_MINUTES:-15}
+    command: ["python", "-m", "smarthub.monitoring.slo_alerts", "--loop", "--interval", "60"]
+
   # Reverse proxy in front of `serve` -- the only way to reach the bid API
   # from outside the Docker network. Plain HTTP for now (see
   # docker/nginx/nginx.conf for where TLS would go later).

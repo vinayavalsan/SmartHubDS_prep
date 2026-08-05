@@ -132,9 +132,7 @@ class S3ModelStore(ModelStore):
 
         self.bucket = bucket
         self.prefix = prefix.strip("/")
-        self._client = boto3.client(
-            "s3", endpoint_url=endpoint_url, region_name=region
-        )
+        self._client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region)
         self._cache_dir = Path(cache_dir) if cache_dir else None
 
     def _full_key(self, key: str) -> str:
@@ -145,9 +143,7 @@ class S3ModelStore(ModelStore):
         return obj["Body"].read()
 
     def write_bytes(self, key: str, data: bytes) -> None:
-        self._client.put_object(
-            Bucket=self.bucket, Key=self._full_key(key), Body=data
-        )
+        self._client.put_object(Bucket=self.bucket, Key=self._full_key(key), Body=data)
 
     def exists(self, key: str) -> bool:
         from botocore.exceptions import ClientError
@@ -167,7 +163,7 @@ class S3ModelStore(ModelStore):
             for item in page.get("Contents", []):
                 name = item["Key"]
                 if strip and name.startswith(strip):
-                    name = name[len(strip):]
+                    name = name[len(strip) :]
                 keys.append(name)
         return sorted(keys)
 
