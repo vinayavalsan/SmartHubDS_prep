@@ -165,6 +165,10 @@ services:
     container_name: smarthub-dashboard
     restart: unless-stopped
     image: ${IMAGE_REPO:-smarthub/smarthub}:dashboard-${IMAGE_TAG:-latest}
+    # Safety cap: the leads/monitoring pages now read a bounded window (not all
+    # history), but keep a memory ceiling so a wide window can't take down the
+    # node. Bump via .env if you routinely view long windows.
+    mem_limit: ${DASHBOARD_MEM:-2g}
     # Streamlit's `run` exits cleanly (ExitCode 0) in a detached container with
     # no TTY (EOF on stdin during first-run), which Docker then restart-loops.
     # Allocating a pseudo-TTY keeps it alive -- same as `docker run -it`.
