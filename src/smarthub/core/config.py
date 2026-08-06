@@ -32,6 +32,14 @@ def _require(name: str) -> str:
     return value.strip()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var (``true/false/1/0/yes/no/on/off``)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class SSHSettings:
     """SSH connection settings loaded from the environment."""
@@ -106,28 +114,41 @@ class RedshiftSettings:
 
 @dataclass(frozen=True)
 class PullSettings:
-    """Settings for a single data-pull run."""
+    """Settings for a single data-pull run.
 
-    ssh: SSHSettings
+    ``use_ssh_tunnel`` (env ``SSH_TUNNEL``, default true) controls whether the
+    Redshift connection is made through an SSH bastion tunnel or directly. Set
+    ``SSH_TUNNEL=false`` when the host can reach Redshift directly (e.g. an EC2
+    box in the same VPC) -- then no ``SSH_*`` vars or key are needed.
+    """
+
     redshift: RedshiftSettings
+    ssh: SSHSettings | None = None
+    use_ssh_tunnel: bool = True
 
     @classmethod
     def from_env(cls) -> "PullSettings":
-        """Build combined SSH + Redshift settings from the environment.
+        """Build combined Redshift (+ optional SSH) settings from the environment.
+
+        Reads ``SSH_TUNNEL`` first: when true (default) the ``SSH_*`` vars are
+        required and a tunnel is used; when false, Redshift is connected to
+        directly and SSH settings are skipped entirely.
 
         Returns
         -------
         PullSettings
-            The combined SSH and Redshift settings.
+            The combined settings.
 
         Raises
         ------
         ConfigError
-            If any required variable is unset or invalid.
+            If a required variable is unset or invalid.
         """
+        use_tunnel = _env_bool("SSH_TUNNEL", True)
         return cls(
-            ssh=SSHSettings.from_env(),
             redshift=RedshiftSettings.from_env(),
+            ssh=SSHSettings.from_env() if use_tunnel else None,
+            use_ssh_tunnel=use_tunnel,
         )
 
 

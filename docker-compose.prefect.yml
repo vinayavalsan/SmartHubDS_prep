@@ -72,6 +72,10 @@ services:
       PREFECT_WORK_POOL: smarthub-pool
       PREFECT_WORK_QUEUES: "default features training"
       SMARTHUB_ROOT: /app
+      # Redshift access: tunnel through the SSH bastion by default. Set
+      # SSH_TUNNEL=false in .env when the host reaches Redshift directly (e.g.
+      # an EC2 box in the same VPC) -- then no key is mounted or required.
+      SSH_TUNNEL: ${SSH_TUNNEL:-true}
       SSH_PRIVATE_KEY_PATH: /keys/id_ed25519
       # MLflow metadata (backend store) -> the shared Postgres `mlflow` database
       # instead of a SQLite file, so training runs land where the UI reads them
@@ -93,7 +97,10 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data                              # persist pulled data
-      - ${SSH_PRIVATE_KEY_PATH}:/keys/id_ed25519:ro   # mount the SSH key (read-only)
+      # Mount the SSH key read-only. Defaults to /dev/null so that with
+      # SSH_TUNNEL=false (and SSH_PRIVATE_KEY_PATH unset) compose still starts;
+      # the key is never read on the direct-connect path.
+      - ${SSH_PRIVATE_KEY_PATH:-/dev/null}:/keys/id_ed25519:ro
 
   # S3-compatible object storage for PRODUCTION model artifacts (promoted
   # models, production manifests, serving pointer). Local dev/training still

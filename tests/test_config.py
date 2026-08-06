@@ -2,7 +2,19 @@
 
 import pytest
 
-from smarthub.core.config import ConfigError, RedshiftSettings, SSHSettings
+from smarthub.core.config import (
+    ConfigError,
+    PullSettings,
+    RedshiftSettings,
+    SSHSettings,
+)
+
+
+def _set_redshift(monkeypatch):
+    monkeypatch.setenv("REDSHIFT_HOST", "redshift.example.com")
+    monkeypatch.setenv("REDSHIFT_DB", "analytics")
+    monkeypatch.setenv("REDSHIFT_USER", "anton")
+    monkeypatch.setenv("REDSHIFT_PASSWORD", "secret")
 
 
 def test_redshift_settings_missing_var_raises(monkeypatch):
@@ -83,3 +95,33 @@ def test_ssh_settings_ok(monkeypatch, tmp_path):
     settings = SSHSettings.from_env()
     assert settings.host == "bastion.example.com"
     assert settings.port == 22
+
+
+def test_pull_settings_tunnel_default_requires_ssh(monkeypatch, tmp_path):
+    """Default (SSH_TUNNEL unset) uses the tunnel and populates ssh settings."""
+    _set_redshift(monkeypatch)
+    monkeypatch.delenv("SSH_TUNNEL", raising=False)
+    key = tmp_path / "id_rsa"
+    key.write_text("dummy")
+    monkeypatch.setenv("SSH_HOST", "bastion.example.com")
+    monkeypatch.setenv("SSH_USER", "ec2-user")
+    monkeypatch.setenv("SSH_PRIVATE_KEY_PATH", str(key))
+
+    settings = PullSettings.from_env()
+    assert settings.use_ssh_tunnel is True
+    assert settings.ssh is not None
+    assert settings.ssh.host == "bastion.example.com"
+
+
+def test_pull_settings_tunnel_off_skips_ssh(monkeypatch):
+    """SSH_TUNNEL=false connects directly: no ssh settings, no key required."""
+    _set_redshift(monkeypatch)
+    monkeypatch.setenv("SSH_TUNNEL", "false")
+    # Deliberately leave SSH_* unset -- they must NOT be needed.
+    for var in ("SSH_HOST", "SSH_USER", "SSH_PRIVATE_KEY_PATH"):
+        monkeypatch.delenv(var, raising=False)
+
+    settings = PullSettings.from_env()
+    assert settings.use_ssh_tunnel is False
+    assert settings.ssh is None
+    assert settings.redshift.host == "redshift.example.com"
