@@ -65,7 +65,9 @@ def _fire(url: str, timeout: float) -> None:
             if r.status_code == 200:
                 _latencies.append(elapsed)
             else:
-                _errors[f"HTTP {r.status_code}"] = _errors.get(f"HTTP {r.status_code}", 0) + 1
+                _errors[f"HTTP {r.status_code}"] = (
+                    _errors.get(f"HTTP {r.status_code}", 0) + 1
+                )
     except Exception as exc:  # noqa: BLE001
         key = type(exc).__name__
         with _lock:
@@ -82,14 +84,26 @@ def _pct(values: list[float], p: float) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Load test /recommend_bid")
-    ap.add_argument("--url", required=True, help="base URL, e.g. http://54.161.161.100:8000")
+    ap.add_argument(
+        "--url", required=True, help="base URL, e.g. http://54.161.161.100:8000"
+    )
     ap.add_argument("--rpm", type=int, default=200, help="target requests per minute")
     ap.add_argument("--duration", type=int, default=60, help="test duration in seconds")
-    ap.add_argument("--workers", type=int, default=64, help="max concurrent in-flight requests")
-    ap.add_argument("--timeout", type=float, default=10.0, help="per-request timeout (s)")
-    ap.add_argument("--slo", type=float, default=1.0, help="TAT SLO in seconds (p99 target)")
-    ap.add_argument("--warmup", type=int, default=0,
-                    help="fire N warm-up requests (not timed) to prime model caches first")
+    ap.add_argument(
+        "--workers", type=int, default=64, help="max concurrent in-flight requests"
+    )
+    ap.add_argument(
+        "--timeout", type=float, default=10.0, help="per-request timeout (s)"
+    )
+    ap.add_argument(
+        "--slo", type=float, default=1.0, help="TAT SLO in seconds (p99 target)"
+    )
+    ap.add_argument(
+        "--warmup",
+        type=int,
+        default=0,
+        help="fire N warm-up requests (not timed) to prime model caches first",
+    )
     args = ap.parse_args()
 
     endpoint = args.url.rstrip("/") + "/recommend_bid"
@@ -106,8 +120,10 @@ def main() -> None:
     total = int(args.rpm * args.duration / 60)
 
     print(f">> {endpoint}")
-    print(f">> rate={args.rpm}/min  duration={args.duration}s  ~{total} requests  "
-          f"workers={args.workers}\n")
+    print(
+        f">> rate={args.rpm}/min  duration={args.duration}s  ~{total} requests  "
+        f"workers={args.workers}\n"
+    )
 
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -133,16 +149,20 @@ def main() -> None:
     print(f"wall time:   {wall:.1f}s")
     print(f"throughput:  {ok / wall * 60:.0f} ok/min ({ok / wall:.1f}/s)")
     if _latencies:
-        print(f"latency ms:  p50={_pct(_latencies,50)*1000:.0f}  "
-              f"p95={_pct(_latencies,95)*1000:.0f}  "
-              f"p99={_pct(_latencies,99)*1000:.0f}  "
-              f"max={max(_latencies)*1000:.0f}  "
-              f"mean={statistics.mean(_latencies)*1000:.0f}")
+        print(
+            f"latency ms:  p50={_pct(_latencies, 50)*1000:.0f}  "
+            f"p95={_pct(_latencies, 95)*1000:.0f}  "
+            f"p99={_pct(_latencies, 99)*1000:.0f}  "
+            f"max={max(_latencies)*1000:.0f}  "
+            f"mean={statistics.mean(_latencies)*1000:.0f}"
+        )
         p99 = _pct(_latencies, 99)
         verdict = "PASS" if p99 <= args.slo and err == 0 else "FAIL"
-        print(f"\nSLO (p99 <= {args.slo:.0f}s, 0 errors): {verdict}  (p99={p99*1000:.0f}ms)")
+        print(
+            f"\nSLO (p99 <= {args.slo:.0f}s, 0 errors): "
+            f"{verdict}  (p99={p99*1000:.0f}ms)"
+        )
 
 
 if __name__ == "__main__":
     main()
-

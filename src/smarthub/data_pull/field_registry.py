@@ -17,15 +17,17 @@ still uses ``validation_rules.py`` directly for now. Keeping the registry
 metadata-only is deliberate: validation logic stays in ``validation_rules.py``
 and is referenced from a field only when simple metadata can't express it.
 
-Fields are declared with the small ``_num`` / ``_cat`` / ``_bin`` / ``_dt``
-constructors below (each returns an explicit ``RawFieldSpec``); a field that
-needs anything unusual can always be written as a full ``RawFieldSpec(...)``.
+Fields are declared explicitly in ``RAW_FIELD_REGISTRY`` so the dictionary
+key, field name, lead-type scope, source, and validation metadata are visible
+together at the declaration site.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable
+
+from smarthub.core.lead_types import all_lead_types
 
 from .validation_custom import validate_us_state
 
@@ -34,10 +36,6 @@ from .validation_custom import validate_us_state
 # ``validation_custom`` (imported above) and are referenced from a field's
 # ``ValidationSpec.custom_rule``; this alias just types that slot.
 ValidationRule = Callable[..., Any]
-
-# Lead-type ids (match smarthub.core.lead_types).
-LEAD_TYPE_AUTO = 6
-LEAD_TYPE_HOME = 1
 
 
 @dataclass(frozen=True)
@@ -72,144 +70,565 @@ class RawFieldSpec:
     source and validation. Defined exactly once, here."""
 
     name: str
-    lead_types: frozenset[int]
+    lead_types: frozenset[str]
     source: DataSourceSpec
     validation: ValidationSpec
     pii: bool = False
     enabled: bool = True
 
 
-# --- lead-type scopes + shared domains ---------------------------------------
-_ALL = frozenset({LEAD_TYPE_AUTO, LEAD_TYPE_HOME})
-_AUTO = frozenset({LEAD_TYPE_AUTO})
-_HOME = frozenset({LEAD_TYPE_HOME})
-
+# --- shared validation domains -----------------------------------------------
 _GENDER_DOMAIN = frozenset({"Male", "Female", "Non-binary"})
 _MARITAL_DOMAIN = frozenset({"Single", "Married", "Divorced", "Widowed"})
 
-
-# --- declarative field constructors (all read from lead_pings) ---------------
-def _num(
-    name,
-    lead_types=_ALL,
-    *,
-    min_value=None,
-    max_value=None,
-    allow_missing=True,
-    unique=False,
-):
-    return RawFieldSpec(
-        name=name,
-        lead_types=lead_types,
-        source=DataSourceSpec(table="lead_pings", column=name),
-        validation=ValidationSpec(
-            kind="numeric",
-            allow_missing=allow_missing,
-            min_value=min_value,
-            max_value=max_value,
-            unique=unique,
-        ),
-    )
-
-
-def _cat(name, lead_types=_ALL, *, allowed=None, allow_missing=True, custom_rule=None):
-    return RawFieldSpec(
-        name=name,
-        lead_types=lead_types,
-        source=DataSourceSpec(table="lead_pings", column=name),
-        validation=ValidationSpec(
-            kind="categorical",
-            allow_missing=allow_missing,
-            allowed_values=allowed,
-            custom_rule=custom_rule,
-        ),
-    )
-
-
-def _bin(name, lead_types=_ALL, *, allow_missing=True):
-    return RawFieldSpec(
-        name=name,
-        lead_types=lead_types,
-        source=DataSourceSpec(table="lead_pings", column=name),
-        validation=ValidationSpec(kind="binary", allow_missing=allow_missing),
-    )
-
-
-def _dt(name, lead_types=_ALL, *, allow_missing=True):
-    return RawFieldSpec(
-        name=name,
-        lead_types=lead_types,
-        source=DataSourceSpec(table="lead_pings", column=name),
-        validation=ValidationSpec(kind="datetime", allow_missing=allow_missing),
-    )
+_ALL_LEAD_TYPES = frozenset(all_lead_types())
 
 
 # --- the registry ------------------------------------------------------------
-# Order here defines the pull's column order (see query_builder.leads_column_names
-# and models.LEADS_COLUMNS). It matches the previous hand-maintained tuple.
-# Ranges/domains mirror the current validation_rules constants; the `state`
-# custom_rule (validate_us_state) is attached when the runner is registry-driven.
-_FIELDS: list[RawFieldSpec] = [
-    _num("id", allow_missing=False, unique=True),
-    _dt("created_at", allow_missing=False),
-    _num("account_id"),
-    _num("campaign_id"),
-    _num("lead_type_id", allow_missing=False),
-    _num("source_type_id"),
-    _num("bidding_strategy_id"),
-    _cat("traffic_tier"),
-    _num("total_listings", min_value=0),
-    _num("accepted_listings", min_value=0),
-    _num("bid", min_value=0),
-    _num("rev", min_value=0),
-    _bin("won"),
-    _bin("accepted"),
-    _bin("erred"),
-    _num("error_reason_id"),
-    _num("response_ms", min_value=0),
-    _cat("zip"),
-    _cat("city"),
-    _cat("state", allow_missing=False, custom_rule=validate_us_state),
-    _cat("device_type"),
-    _bin("insured"),
-    _cat("current_carrier"),
-    _num("continuous_coverage_months", min_value=0, max_value=600),
-    _bin("military_affiliation"),
-    _cat("credit"),
-    _bin("pnc_bundle"),
-    _bin("home_owner"),
-    _cat("gender", allowed=_GENDER_DOMAIN),
-    _cat("marital_status", allowed=_MARITAL_DOMAIN),
-    _num("num_drivers", _AUTO, min_value=0, max_value=6),
-    _num("num_vehicles", _AUTO, min_value=0, max_value=12),
-    _bin("dui", _AUTO),
-    _bin("sr22_required", _AUTO),
-    _num("age", min_value=1, max_value=200),
-    _num("num_auto_violations", _AUTO, min_value=0, max_value=20),
-    _num("num_auto_claims", _AUTO, min_value=0, max_value=20),
-    _num("num_auto_accidents", _AUTO, min_value=0, max_value=20),
-    _num("num_home_claims", _HOME, min_value=0, max_value=20),
-    _cat("home_property_type", _HOME),
-    _num("num_dependents", min_value=0, max_value=15),
-    _cat("health_conditions"),
-    # household_income is treated as a non-negative numeric to mirror current
-    # behaviour; the warehouse value may be an income band/string (a known
-    # limitation to revisit — see docs/validation_rules.md).
-    _num("household_income", min_value=0),
-    _cat("life_coverage_type"),
-    _num("life_coverage_amount", min_value=0),
-    _cat("naics_code"),
-    _cat("sic_code"),
-    _num("num_employees", min_value=0),
-    _num("annual_revenue", min_value=0),
-    _dt("lead_created_at"),
-    _dt("expiration_date"),
-    _dt("pst_date"),
-    _num("pst_hour"),
-    _num("exp_rev", min_value=0),
-]
-
-RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {spec.name: spec for spec in _FIELDS}
+# Dictionary insertion order is the canonical pull-column order. Each raw field
+# is declared explicitly so its lead-type scope, source, and validation rules
+# are visible at the declaration site.
+RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
+    "id": RawFieldSpec(
+        name="id",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="id"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=False,
+            unique=True,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "created_at": RawFieldSpec(
+        name="created_at",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="created_at"),
+        validation=ValidationSpec(
+            kind="datetime",
+            allow_missing=False,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "account_id": RawFieldSpec(
+        name="account_id",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="account_id"),
+        validation=ValidationSpec(kind="numeric", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "campaign_id": RawFieldSpec(
+        name="campaign_id",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="campaign_id"),
+        validation=ValidationSpec(kind="numeric", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "lead_type_id": RawFieldSpec(
+        name="lead_type_id",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="lead_type_id"),
+        validation=ValidationSpec(kind="numeric", allow_missing=False),
+        pii=False,
+        enabled=True,
+    ),
+    "source_type_id": RawFieldSpec(
+        name="source_type_id",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="source_type_id"),
+        validation=ValidationSpec(kind="numeric", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "bidding_strategy_id": RawFieldSpec(
+        name="bidding_strategy_id",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="bidding_strategy_id"),
+        validation=ValidationSpec(kind="numeric", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "traffic_tier": RawFieldSpec(
+        name="traffic_tier",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="traffic_tier"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "total_listings": RawFieldSpec(
+        name="total_listings",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="total_listings"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "accepted_listings": RawFieldSpec(
+        name="accepted_listings",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="accepted_listings"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "bid": RawFieldSpec(
+        name="bid",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="bid"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "rev": RawFieldSpec(
+        name="rev",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="rev"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "won": RawFieldSpec(
+        name="won",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="won"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "accepted": RawFieldSpec(
+        name="accepted",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="accepted"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "erred": RawFieldSpec(
+        name="erred",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="erred"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "error_reason_id": RawFieldSpec(
+        name="error_reason_id",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="error_reason_id"),
+        validation=ValidationSpec(kind="numeric", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "response_ms": RawFieldSpec(
+        name="response_ms",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="response_ms"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "zip": RawFieldSpec(
+        name="zip",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="zip"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "city": RawFieldSpec(
+        name="city",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="city"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "state": RawFieldSpec(
+        name="state",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="state"),
+        validation=ValidationSpec(
+            kind="categorical",
+            allow_missing=False,
+            custom_rule=validate_us_state,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "device_type": RawFieldSpec(
+        name="device_type",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="device_type"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "insured": RawFieldSpec(
+        name="insured",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="insured"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "current_carrier": RawFieldSpec(
+        name="current_carrier",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="current_carrier"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "continuous_coverage_months": RawFieldSpec(
+        name="continuous_coverage_months",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(
+            table="lead_pings",
+            column="continuous_coverage_months",
+        ),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=600,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "military_affiliation": RawFieldSpec(
+        name="military_affiliation",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="military_affiliation"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "credit": RawFieldSpec(
+        name="credit",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="credit"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "pnc_bundle": RawFieldSpec(
+        name="pnc_bundle",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="pnc_bundle"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "home_owner": RawFieldSpec(
+        name="home_owner",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="home_owner"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "gender": RawFieldSpec(
+        name="gender",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="gender"),
+        validation=ValidationSpec(
+            kind="categorical",
+            allow_missing=True,
+            allowed_values=_GENDER_DOMAIN,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "marital_status": RawFieldSpec(
+        name="marital_status",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="marital_status"),
+        validation=ValidationSpec(
+            kind="categorical",
+            allow_missing=True,
+            allowed_values=_MARITAL_DOMAIN,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_drivers": RawFieldSpec(
+        name="num_drivers",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_drivers"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=6,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_vehicles": RawFieldSpec(
+        name="num_vehicles",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_vehicles"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=12,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "dui": RawFieldSpec(
+        name="dui",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="dui"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "sr22_required": RawFieldSpec(
+        name="sr22_required",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="sr22_required"),
+        validation=ValidationSpec(kind="binary", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "age": RawFieldSpec(
+        name="age",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="age"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=1,
+            max_value=200,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_auto_violations": RawFieldSpec(
+        name="num_auto_violations",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_auto_violations"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_auto_claims": RawFieldSpec(
+        name="num_auto_claims",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_auto_claims"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_auto_accidents": RawFieldSpec(
+        name="num_auto_accidents",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_auto_accidents"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_home_claims": RawFieldSpec(
+        name="num_home_claims",
+        lead_types=frozenset({"home"}),
+        source=DataSourceSpec(table="lead_pings", column="num_home_claims"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "home_property_type": RawFieldSpec(
+        name="home_property_type",
+        lead_types=frozenset({"home"}),
+        source=DataSourceSpec(table="lead_pings", column="home_property_type"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "num_dependents": RawFieldSpec(
+        name="num_dependents",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="num_dependents"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+            max_value=15,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "health_conditions": RawFieldSpec(
+        name="health_conditions",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="health_conditions"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "household_income": RawFieldSpec(
+        name="household_income",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="household_income"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "life_coverage_type": RawFieldSpec(
+        name="life_coverage_type",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="life_coverage_type"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "life_coverage_amount": RawFieldSpec(
+        name="life_coverage_amount",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="life_coverage_amount"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "naics_code": RawFieldSpec(
+        name="naics_code",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="naics_code"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "sic_code": RawFieldSpec(
+        name="sic_code",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="sic_code"),
+        validation=ValidationSpec(kind="categorical", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "num_employees": RawFieldSpec(
+        name="num_employees",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="num_employees"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "annual_revenue": RawFieldSpec(
+        name="annual_revenue",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="annual_revenue"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "lead_created_at": RawFieldSpec(
+        name="lead_created_at",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="lead_created_at"),
+        validation=ValidationSpec(kind="datetime", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "expiration_date": RawFieldSpec(
+        name="expiration_date",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="expiration_date"),
+        validation=ValidationSpec(kind="datetime", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "pst_date": RawFieldSpec(
+        name="pst_date",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="pst_date"),
+        validation=ValidationSpec(kind="datetime", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "pst_hour": RawFieldSpec(
+        name="pst_hour",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="pst_hour"),
+        validation=ValidationSpec(kind="numeric", allow_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "exp_rev": RawFieldSpec(
+        name="exp_rev",
+        lead_types=_ALL_LEAD_TYPES,
+        source=DataSourceSpec(table="lead_pings", column="exp_rev"),
+        validation=ValidationSpec(
+            kind="numeric",
+            allow_missing=True,
+            min_value=0,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+}
 
 
 def field_names() -> list[str]:
@@ -221,23 +640,23 @@ def field_names() -> list[str]:
     ]
 
 
-def fields_for_lead_type(lead_type_id: int) -> list[RawFieldSpec]:
+def fields_for_lead_type(lead_type_name: str) -> list[RawFieldSpec]:
     """Return the enabled raw fields that apply to a given lead type.
 
     Inputs
     ------
-    lead_type_id : int
-        Lead type id (e.g. 6=auto, 1=home).
+    lead_type_name : str
+        Registered lead-type name.
 
     Returns
     -------
     list[RawFieldSpec]
-        The enabled specs whose ``lead_types`` include ``lead_type_id``.
+        The enabled specs whose ``lead_types`` include ``lead_type_name``.
     """
     return [
         spec
         for spec in RAW_FIELD_REGISTRY.values()
-        if spec.enabled and lead_type_id in spec.lead_types
+        if spec.enabled and lead_type_name in spec.lead_types
     ]
 
 
@@ -246,7 +665,7 @@ def get(name: str) -> RawFieldSpec:
     return RAW_FIELD_REGISTRY[name]
 
 
-def columns_not_for_lead_type(lead_type_id: int) -> set[str]:
+def columns_not_for_lead_type(lead_type_name: str) -> set[str]:
     """Registered raw columns that do NOT apply to a given lead type.
 
     Used to scope validation reporting (e.g. the high-missing catalogue) so a
@@ -258,22 +677,22 @@ def columns_not_for_lead_type(lead_type_id: int) -> set[str]:
 
     Inputs
     ------
-    lead_type_id : int
-        Lead type id (e.g. 6=auto, 1=home).
+    lead_type_name : str
+        Registered lead-type name.
 
     Returns
     -------
     set[str]
-        Enabled field names whose ``lead_types`` exclude ``lead_type_id``
+        Enabled field names whose ``lead_types`` exclude ``lead_type_name``
         (empty when the lead type isn't modelled in the registry).
     """
-    known: set[int] = set()
+    known: set[str] = set()
     for spec in RAW_FIELD_REGISTRY.values():
         known |= set(spec.lead_types)
-    if lead_type_id not in known:
+    if lead_type_name not in known:
         return set()
     return {
         name
         for name, spec in RAW_FIELD_REGISTRY.items()
-        if spec.enabled and lead_type_id not in spec.lead_types
+        if spec.enabled and lead_type_name not in spec.lead_types
     }

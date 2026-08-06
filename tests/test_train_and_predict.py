@@ -5,12 +5,15 @@ optimizer math. sklearn/mlflow/fastapi are NOT required here (predict keeps
 those imports lazy/guarded), so these run in the base env.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from smarthub.core.lead_types import lead_type_id
 from smarthub.feature_engineering import features as fe
+from smarthub.feature_engineering.feature_registry import FEATURES, MISSING_CATEGORY
 from smarthub.server import predict
 from smarthub.train_and_predict import (
     config,
@@ -42,8 +45,8 @@ def test_model_feature_columns_auto_vs_home():
 
     # shared features present in both
     for col in (
-        "age_cohort",
-        "is_married",
+        "age",
+        "marital_status",
         "created_hour",
         "is_workday",
         "state",
@@ -58,7 +61,7 @@ def test_model_feature_columns_auto_vs_home():
         assert col not in home_features
 
 
-def test_derive_serving_features_parity():
+def test_derive_serving_features_parity(monkeypatch):
     raw = pd.DataFrame(
         [
             {
@@ -70,11 +73,16 @@ def test_derive_serving_features_parity():
             }
         ]
     )
+
+    original = FEATURES["is_married"]
+    monkeypatch.setitem(FEATURES, "is_married", replace(original, enabled=False))
+
     out = fe.derive_serving_features(raw)
-    assert out.loc[0, "is_married"] == 1
-    assert out.loc[0, "multi_vehicle"] == 1
-    assert out.loc[0, "age_cohort"] == "35_44"
-    # time parts already supplied are preserved
+
+    if FEATURES["multi_vehicle"].enabled:
+        assert out.loc[0, "multi_vehicle"] == 1
+    assert "is_married" not in out.columns
+    assert out.loc[0, "age"] == 40
     assert out.loc[0, "created_hour"] == 9
 
 
@@ -107,12 +115,16 @@ def test_serving_frame_selects_and_normalizes():
     numeric, categorical = config.feature_columns(lead_type_id("auto"))
 
     assert list(frame.columns) == numeric + categorical
-    # ids normalised to strings for one-hot; blank -> NAvail
     assert frame.loc[0, "campaign_id"] == "123"
-    assert frame.loc[0, "marital_status"] == "NAvail"
-    # derived features computed from raw
-    assert frame.loc[0, "multi_vehicle"] == 1
-    assert frame.loc[0, "age_cohort"] == "25_34"
+    assert frame.loc[0, "marital_status"] == MISSING_CATEGORY
+
+    if FEATURES["multi_vehicle"].enabled:
+        assert frame.loc[0, "multi_vehicle"] == 1
+
+    selected = set(numeric) | set(categorical)
+    for name, spec in FEATURES.items():
+        if not spec.enabled:
+            assert name not in selected
 
 
 # --- Training-table preparation ---------------------------------------------

@@ -6,7 +6,6 @@ This module loads and validates YAML settings for training and serving.
 from __future__ import annotations
 
 import copy
-import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +70,7 @@ class TrainingConfig:
     split: dict[str, Any]
     model_parameters: dict[str, Any]
     optimizer: OptimizerConfig
+    comparison_artifacts: bool
     promotion_mode: str
     promotion_max_log_loss_regression: float
     promotion_min_profit_ratio: float
@@ -550,6 +550,12 @@ def load_training_config(
         ),
     )
 
+    if "comparison_artifacts" not in output:
+        raise ValueError("Missing required config: output.comparison_artifacts")
+    comparison_artifacts = output["comparison_artifacts"]
+    if not isinstance(comparison_artifacts, bool):
+        raise TypeError("output.comparison_artifacts must be a YAML boolean.")
+
     promotion_mode = str(promotion.get("mode", "")).strip().lower()
     if promotion_mode not in _SUPPORTED_PROMOTION_MODES:
         choices = ", ".join(sorted(_SUPPORTED_PROMOTION_MODES))
@@ -598,6 +604,11 @@ def load_training_config(
         },
         "selected_model_parameters": copy.deepcopy(model_parameters),
         "optimizer": optimizer.as_dict(),
+        "output": {
+            "report_root": str(output["report_root"]),
+            "model_root": str(output["model_root"]),
+            "comparison_artifacts": comparison_artifacts,
+        },
         "promotion": {
             "mode": promotion_mode,
             "criteria": {
@@ -623,6 +634,7 @@ def load_training_config(
         split=selected_split,
         model_parameters=model_parameters,
         optimizer=optimizer,
+        comparison_artifacts=comparison_artifacts,
         promotion_mode=promotion_mode,
         promotion_max_log_loss_regression=(promotion_max_log_loss_regression),
         promotion_min_profit_ratio=promotion_min_profit_ratio,
@@ -891,64 +903,102 @@ def _validate_search_parameter(
     Returns
     -------
     dict[str, Any]
-        Validated search-space specification.
+        Validated and normalized search-space specification.
 
     Raises
     ------
     ValueError
         If the specification is invalid.
     """
-    spec = copy.deepcopy(_mapping(specification, f"{section}.{parameter_name}"))
+    field_name = f"{section}.{parameter_name}"
+    spec = copy.deepcopy(_mapping(specification, field_name))
+
     parameter_type = str(spec.get("type", "")).strip().lower()
     if parameter_type not in {"int", "float", "categorical"}:
-        raise ValueError(
-            f"{section}.{parameter_name}.type must be int, float, or categorical."
-        )
+        raise ValueError(f"{field_name}.type must be int, float, or categorical.")
+    spec["type"] = parameter_type
 
     if parameter_type == "categorical":
         choices = spec.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise ValueError(
-                f"{section}.{parameter_name}.choices must be a non-empty list."
-            )
+            raise ValueError(f"{field_name}.choices must be a non-empty list.")
+        spec["choices"] = copy.deepcopy(choices)
         return spec
 
     if "low" not in spec or "high" not in spec:
-        raise ValueError(f"{section}.{parameter_name} must define low and high values.")
-    if float(spec["low"]) >= float(spec["high"]):
-        raise ValueError(f"{section}.{parameter_name}.low must be less than high.")
+        raise ValueError(f"{field_name} must define low and high values.")
 
-    if "log" not in spec:
-        raise ValueError(f"{section}.{parameter_name}.log must be configured.")
-    if not isinstance(spec["log"], bool):
-        raise ValueError(f"{section}.{parameter_name}.log must be true or false.")
+    low = spec["low"]
+    high = spec["high"]
+    if isinstance(low, bool) or isinstance(high, bool):
+        raise ValueError(f"{field_name}.low and high must be numeric values.")
 
-    if "step" not in spec:
-        raise ValueError(f"{section}.{parameter_name}.step must be configured.")
+    log = spec.get("log", False)
+    if not isinstance(log, bool):
+        raise ValueError(f"{field_name}.log must be true or false.")
+    spec["log"] = log
 
-    step = spec["step"]
     if parameter_type == "int":
-        if step is None:
-            raise ValueError(
-                f"{section}.{parameter_name}.step must be a positive integer."
-            )
-        if isinstance(step, bool) or int(step) != step or int(step) <= 0:
-            raise ValueError(
-                f"{section}.{parameter_name}.step must be a positive integer."
-            )
-        spec["step"] = int(step)
-    else:
-        if step is not None and float(step) <= 0:
-            raise ValueError(
-                f"{section}.{parameter_name}.step must be null or greater than 0."
-            )
-        if step is not None:
-            spec["step"] = float(step)
+        try:
+            normalized_low = int(low)
+            normalized_high = int(high)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name}.low and high must be integers.") from exc
 
-    if spec["log"] and step is not None:
-        raise ValueError(
-            f"{section}.{parameter_name} must set step: null when log: true."
-        )
+        if normalized_low != low or normalized_high != high:
+            raise ValueError(f"{field_name}.low and high must be integers.")
+        if normalized_low >= normalized_high:
+            raise ValueError(f"{field_name}.low must be less than high.")
+
+        step = spec.get("step", 1)
+        if step is None:
+            step = 1
+        if isinstance(step, bool):
+            raise ValueError(f"{field_name}.step must be a positive integer.")
+        try:
+            normalized_step = int(step)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name}.step must be a positive integer.") from exc
+        if normalized_step != step or normalized_step <= 0:
+            raise ValueError(f"{field_name}.step must be a positive integer.")
+        if log and normalized_step != 1:
+            raise ValueError(f"{field_name}.step must be 1 when log is true.")
+
+        spec["low"] = normalized_low
+        spec["high"] = normalized_high
+        spec["step"] = normalized_step
+        return spec
+
+    try:
+        normalized_low = float(low)
+        normalized_high = float(high)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name}.low and high must be numeric values.") from exc
+
+    if normalized_low >= normalized_high:
+        raise ValueError(f"{field_name}.low must be less than high.")
+    if log and normalized_low <= 0.0:
+        raise ValueError(f"{field_name}.low must be greater than 0 when log is true.")
+
+    step = spec.get("step")
+    normalized_step = None
+    if step is not None:
+        if isinstance(step, bool):
+            raise ValueError(f"{field_name}.step must be null or greater than 0.")
+        try:
+            normalized_step = float(step)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{field_name}.step must be null or greater than 0."
+            ) from exc
+        if normalized_step <= 0.0:
+            raise ValueError(f"{field_name}.step must be null or greater than 0.")
+    if log and normalized_step is not None:
+        raise ValueError(f"{field_name}.step must be null when log is true.")
+
+    spec["low"] = normalized_low
+    spec["high"] = normalized_high
+    spec["step"] = normalized_step
     return spec
 
 

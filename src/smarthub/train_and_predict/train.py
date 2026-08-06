@@ -6,6 +6,7 @@ This module trains, evaluates, versions, and optionally registers models.
 from __future__ import annotations
 
 import argparse
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from . import (
     plots_and_reports,
     preprocessing,
     registry,
+    training_artifacts,
 )
 
 logger = get_logger(__name__)
@@ -334,6 +336,10 @@ def run_training(
         y_test,
     )
 
+    evaluation_df = test_df.copy()
+    evaluation_df["predicted_win_probability"] = pred
+    evaluation_df["predicted_class"] = pred_class
+
     optimizer_config = training_config.optimizer
     target_cm = optimizer_config.target_cm
     min_bid = optimizer_config.minimum_bid
@@ -415,6 +421,13 @@ def run_training(
         lineage["data_max_created_at"],
         lineage["source_row_count"],
     )
+
+    test_set_id = training_artifacts.build_test_set_id(
+        test_df,
+        training_table_version=prep_summary["training_table_version"],
+        split_settings=split_settings,
+    )
+    lineage["test_set_id"] = test_set_id
 
     evaluation_summary = {
         "lead_type_id": lead_type_id,
@@ -507,6 +520,58 @@ def run_training(
 
     model_path = manifest["model_path"]
 
+    artifact_metadata = {
+        "training_run_id": manifest["training_run_id"],
+        "lead_type_id": lead_type_id,
+        "lead_type_name": lead_type_name,
+        "test_set_id": test_set_id,
+        "training_table_version": prep_summary["training_table_version"],
+        "split_settings": split_settings,
+        "random_seed": training_config.random_seed,
+        "model_type": model_type,
+        "model_parameters": model_params,
+        "calibration": {
+            "enabled": calibration_enabled,
+            "method": training_config.calibration_method,
+            "cv": training_config.calibration_cv,
+        },
+        "feature_cols": list(feature_cols),
+        "train_rows": int(len(X_train)),
+        "test_rows": int(len(X_test)),
+        "optimizer": optimizer_config.as_dict(),
+        "lineage": lineage,
+    }
+
+    manifest = registry.update_manifest(
+        lead_type_name,
+        manifest["training_run_id"],
+        test_set_id=test_set_id,
+    )
+
+    comparison_temp_dir = None
+    comparison_artifacts = {}
+    if training_config.comparison_artifacts:
+        if not register_mlflow:
+            logger.warning(
+                "Model-comparison artifacts were requested, but MLflow logging "
+                "is disabled. The comparison artifacts will not be retained."
+            )
+        elif optimizer_eval_df is None:
+            logger.warning(
+                "Model-comparison artifacts were requested, but optimizer "
+                "results are unavailable. No comparison artifacts were created."
+            )
+        else:
+            comparison_temp_dir = tempfile.TemporaryDirectory(
+                prefix="smarthub_model_comparison_"
+            )
+            comparison_artifacts = training_artifacts.save_comparison_artifacts(
+                output_dir=comparison_temp_dir.name,
+                evaluation_df=evaluation_df,
+                optimizer_df=optimizer_eval_df,
+                metadata=artifact_metadata,
+            )
+
     logger.info(
         "Saved training run %s → %s",
         manifest["training_run_id"],
@@ -563,7 +628,7 @@ def run_training(
                 metrics=model_metrics.to_dict(),
                 optimizer_metrics=optimizer_mlflow_metrics,
                 report_dir=report_dir,
-                report_artifact_path=training_config.report_root,
+                comparison_artifact_dir=comparison_artifacts.get("artifact_dir"),
                 tracking_db_path=training_config.mlflow_tracking_db_path,
                 artifact_root=training_config.mlflow_artifact_root,
                 experiment_name=experiment_name,
@@ -593,6 +658,12 @@ def run_training(
                 manifest["training_run_id"],
                 **mlflow_metadata,
             )
+            if comparison_artifacts:
+                manifest = registry.update_manifest(
+                    lead_type_name,
+                    manifest["training_run_id"],
+                    comparison_artifact_path="comparison",
+                )
             if promoted:
                 promotion_mlflow_metadata = mlflow_utils.promote_training_run(
                     training_run_id=manifest["training_run_id"],
@@ -623,6 +694,9 @@ def run_training(
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("MLflow logging skipped: %s", exc)
+        finally:
+            if comparison_temp_dir is not None:
+                comparison_temp_dir.cleanup()
 
     return {
         "lead_type_id": lead_type_id,
@@ -649,6 +723,8 @@ def run_training(
         "lineage": lineage,
         "feature_cols": list(feature_cols),
         "split_settings": split_settings,
+        "test_set_id": test_set_id,
+        "comparison_artifact_path": manifest.get("comparison_artifact_path"),
     }
 
 
@@ -714,9 +790,7 @@ def _evaluate_currently_serving_model(
     # older feature pipeline and expect columns the current training data no
     # longer produces. In that case, it cannot be re-scored like-for-like.
     missing = [
-        column
-        for column in serving_feature_cols
-        if column not in test_df.columns
+        column for column in serving_feature_cols if column not in test_df.columns
     ]
     if missing:
         logger.warning(
@@ -738,17 +812,15 @@ def _evaluate_currently_serving_model(
             X_serving,
             y_test,
         )
-        serving_optimizer_result = (
-            optimizer_evaluation.run_bid_optimizer_evaluation(
-                test_eval_df=test_df,
-                model=serving_model,
-                feature_cols=serving_feature_cols,
-                target_cm=target_cm,
-                min_bid=min_bid,
-                bid_step=bid_step,
-                chunk_size=chunk_size,
-                log_summary_result=False,
-            )
+        serving_optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
+            test_eval_df=test_df,
+            model=serving_model,
+            feature_cols=serving_feature_cols,
+            target_cm=target_cm,
+            min_bid=min_bid,
+            bid_step=bid_step,
+            chunk_size=chunk_size,
+            log_summary_result=False,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(

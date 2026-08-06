@@ -2,7 +2,7 @@
 # Candidate models are evaluated without post-fit calibration.
 
 search:
-  model_type: lightgbm
+  model_type: logistic_regression
   scoring: neg_log_loss
   n_trials: 50
   cv_folds: 3
@@ -29,6 +29,24 @@ models:
         choices:
           - lbfgs
           - liblinear
+          - saga
+      penalty:
+        choices:
+          - l1
+          - l2
+      class_weight:
+        choices:
+          - null
+          - balanced
+      fit_intercept:
+        choices:
+          - true
+          - false
+      tol:
+        type: float
+        low: 1e-6
+        high: 1e-2
+        log: true
 
   xgboost:
     fixed_parameters:

@@ -23,7 +23,7 @@ from smarthub.core import io, storage
 from smarthub.core.config import StorageSettings, training_window_days
 from smarthub.core.lead_types import lead_type_name as _lead_type_name
 from smarthub.feature_engineering import features as fe
-from smarthub.feature_engineering.feature_registry import FEATURES
+from smarthub.feature_engineering.feature_registry import FEATURES, MISSING_CATEGORY
 from smarthub.feature_engineering.features import build_training_table
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def _required_raw_columns() -> list[str]:
     registry_inputs = [
         spec.api_input or spec.name
         for spec in FEATURES.values()
-        if spec.source == "raw" or spec.api_input is not None
+        if spec.enabled and (spec.source == "raw" or spec.api_input is not None)
     ]
 
     cols = (
@@ -150,10 +150,12 @@ def build_metadata(
     n = len(table)
     wins = int(pd.to_numeric(table["won_flag"], errors="coerce").sum()) if n else 0
 
-    def _rate(col):
-        if col in table.columns and n:
-            return float(pd.to_numeric(table[col], errors="coerce").mean())
-        return None
+    def _binary_rate(col):
+        if col not in table.columns or not n:
+            return None
+        values = pd.to_numeric(table[col], errors="coerce")
+        known = values[values.isin([0, 1])]
+        return float(known.mean()) if len(known) else None
 
     er_coverage = None
     if "expected_revenue" in table.columns and n:
@@ -178,20 +180,31 @@ def build_metadata(
         "data_min_created_at": created.min() if len(created) else None,
         "data_max_created_at": created.max() if len(created) else None,
         "expected_revenue_coverage": er_coverage,  # share with R > 0
-        # age_cohort is null whenever age was missing/implausible (see
-        # feature_engineering.features._derive_features) -- same signal the
-        # old standalone age_missing flag carried, now folded into the
-        # single age_cohort column. Key name kept as "age_missing_rate" so
-        # existing manifest/Slack/artifact readers (flow.py) don't need to
-        # change.
+        # Keep this metadata key for compatibility even though age_cohort is
+        # no longer an enabled model feature. Prefer raw age when available;
+        # fall back to age_cohort for older training tables.
         "age_missing_rate": (
-            float(table["age_cohort"].isna().mean())
-            if "age_cohort" in table.columns and n
-            else None
+            float(
+                (
+                    pd.to_numeric(table["age"], errors="coerce").isna()
+                    | pd.to_numeric(table["age"], errors="coerce").eq(-1)
+                ).mean()
+            )
+            if "age" in table.columns and n
+            else (
+                float(
+                    (
+                        table["age_cohort"].isna()
+                        | table["age_cohort"].eq(MISSING_CATEGORY)
+                    ).mean()
+                )
+                if "age_cohort" in table.columns and n
+                else None
+            )
         ),
         "weekday_share": weekday_share,
         "weekend_share": weekend_share,
-        "workday_rate": _rate("is_workday"),  # is_workday feature share
+        "workday_rate": _binary_rate("is_workday"),
         "traffic_tier_distinct": (
             int(table["traffic_tier"].nunique())
             if "traffic_tier" in table.columns

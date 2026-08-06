@@ -124,12 +124,12 @@ def log_training_run(
     feature_cols,
     metrics,
     report_dir,
-    report_artifact_path,
     tracking_db_path,
     artifact_root,
     experiment_name,
     run_name,
     training_config_path,
+    comparison_artifact_dir=None,
     registered_model_name=None,
     extra_params=None,
     extra_tags=None,
@@ -175,7 +175,12 @@ def log_training_run(
             if _is_loggable_number(metric_value):
                 mlflow.log_metric(metric_name, metric_value)
 
-        mlflow.log_artifacts(report_dir, artifact_path=report_artifact_path)
+        mlflow.log_artifacts(report_dir, artifact_path="reports")
+        if comparison_artifact_dir:
+            mlflow.log_artifacts(
+                comparison_artifact_dir,
+                artifact_path="comparison",
+            )
         mlflow.log_artifact(
             str(training_config_path),
             artifact_path="config",

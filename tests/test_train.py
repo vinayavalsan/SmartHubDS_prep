@@ -82,8 +82,7 @@ def test_evaluate_currently_serving_model_skips_incompatible_schema(monkeypatch)
     )
     assert result == (None, None)
     assert any(
-        "not present in the current training data" in message
-        for message in logged
+        "not present in the current training data" in message for message in logged
     )
 
 
@@ -122,4 +121,3 @@ def test_evaluate_currently_serving_model_skips_on_scoring_failure(monkeypatch):
     )
     assert result == (None, None)
     assert any("not comparable" in message for message in logged)
-

@@ -41,8 +41,8 @@ def test_field_names_returns_enabled_only():
 
 def test_fields_for_lead_type_scoping():
     """Per-lead-type scoping: auto-only fields don't appear for home."""
-    auto = {s.name for s in fr.fields_for_lead_type(fr.LEAD_TYPE_AUTO)}
-    home = {s.name for s in fr.fields_for_lead_type(fr.LEAD_TYPE_HOME)}
+    auto = {s.name for s in fr.fields_for_lead_type("auto")}
+    home = {s.name for s in fr.fields_for_lead_type("home")}
     assert "num_vehicles" in auto  # auto-only
     assert "num_vehicles" not in home
     assert "age" in auto and "age" in home  # shared
@@ -58,8 +58,8 @@ def test_get_unknown_raises():
 
 def test_columns_not_for_lead_type_scoping():
     """Other products' columns are out-of-scope for a lead type; shared aren't."""
-    auto_out = fr.columns_not_for_lead_type(fr.LEAD_TYPE_AUTO)
-    home_out = fr.columns_not_for_lead_type(fr.LEAD_TYPE_HOME)
+    auto_out = fr.columns_not_for_lead_type("auto")
+    home_out = fr.columns_not_for_lead_type("home")
     # home-only columns are out of scope for auto; shared/auto columns are not.
     assert "home_property_type" in auto_out and "num_home_claims" in auto_out
     assert "num_vehicles" not in auto_out  # auto-only -> in scope for auto
@@ -67,4 +67,4 @@ def test_columns_not_for_lead_type_scoping():
     # symmetric for home
     assert "num_vehicles" in home_out and "home_property_type" not in home_out
     # An unmodelled lead type scopes nothing (never suppresses every field).
-    assert fr.columns_not_for_lead_type(999) == set()
+    assert fr.columns_not_for_lead_type("unmodelled") == set()

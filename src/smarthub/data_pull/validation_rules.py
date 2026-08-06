@@ -17,7 +17,6 @@ from __future__ import annotations
 import pandas as pd
 
 from smarthub.core.lead_types import all_lead_types
-from smarthub.feature_engineering.feature_registry import FEATURES
 
 from . import field_registry
 
@@ -172,19 +171,18 @@ def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
         accepted = _lower(df["accepted"]).isin({"true", "t", "1", "yes", "y"})
         out["accepted_but_won_null"] = int((accepted & (won == "")).sum())
 
-    # Lead-type completeness — driven by the feature registry. A feature is
-    # required for a lead type when that name appears in ``mandatory_for``.
-    # Raw features use their own name unless ``api_input`` declares a different
-    # source column; derived features contribute their declared raw input.
+    # Lead-type completeness belongs to the raw-data validation layer, not
+    # the model feature registry. Only fields that explicitly disallow
+    # missing values are checked row-by-row for the lead types they apply to.
     if present("lead_type_id"):
         lt = pd.to_numeric(df["lead_type_id"], errors="coerce")
 
-        for lead_type_name, lead_type_id in all_lead_types().items():
+        for lead_type_name in all_lead_types():
+            lead_type_id = all_lead_types()[lead_type_name]
             required_raw_columns = {
-                spec.api_input or spec.name
-                for spec in FEATURES.values()
-                if lead_type_name in spec.mandatory_for
-                and (spec.source == "raw" or spec.api_input is not None)
+                spec.name
+                for spec in field_registry.fields_for_lead_type(lead_type_name)
+                if not spec.validation.allow_missing
             }
 
             for col in sorted(required_raw_columns):
