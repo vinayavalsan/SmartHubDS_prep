@@ -14,6 +14,16 @@ services:
       POSTGRES_USER: prefect
       POSTGRES_PASSWORD: prefect
       POSTGRES_DB: prefect
+    # Every service shares this one Postgres (prefect-server's async pool +
+    # mlflow-ui + serve + shap-worker + slo-alerts + dashboard + prediction-log
+    # writers). The stock max_connections=100 gets exhausted, which surfaces as
+    # `asyncpg TooManyConnectionsError: sorry, too many clients already` in the
+    # prefect-server log and leaves it unhealthy (so the worker never starts).
+    # Raise the ceiling; ~300 idle conns cost well under 1 GB on this node.
+    command:
+      - postgres
+      - -c
+      - max_connections=300
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -32,16 +42,25 @@ services:
                prefect server start --host 0.0.0.0"
     environment:
       PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:prefect@postgres:5432/prefect
+      # Bound the server's SQLAlchemy pool so it can't monopolise the shared
+      # Postgres connection budget (see the postgres service note above).
+      PREFECT_SERVER_DATABASE_SQLALCHEMY_POOL_SIZE: "10"
+      PREFECT_SERVER_DATABASE_SQLALCHEMY_MAX_OVERFLOW: "20"
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "4200:4200"
     healthcheck:
-      test: ["CMD", "prefect", "work-pool", "ls"]
+      # Hit the running server's own /api/health over HTTP. The previous check
+      # (`prefect work-pool ls`) invoked the Prefect CLI with no PREFECT_API_URL
+      # set, so it spun up a throwaway temporary server on each probe and blew
+      # past the timeout -- the server was fine, the check was wrong.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:4200/api/health', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 30s
 
   worker:
     container_name: prefect-worker
@@ -368,6 +387,13 @@ services:
     volumes:
       - ./data:/app/data
     command: ["python", "-m", "smarthub.server.shap_worker"]
+    # This service runs the SHAP drainer loop, NOT the uvicorn API, so the serve
+    # image's baked-in HTTP healthcheck (curl :8000/health) would always fail and
+    # flag the container "unhealthy". The slim image has no `pgrep`/`ps`, so just
+    # disable the inherited check -- restart:unless-stopped already recovers a
+    # crashed loop.
+    healthcheck:
+      disable: true
 
   # Lightweight SLO alerter: every minute it computes the bid API's SLIs from
   # the prediction log (TAT p99, error rate, SHAP backlog, freshness) and posts
@@ -388,6 +414,11 @@ services:
       SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       SMARTHUB_SLO_WINDOW_MINUTES: ${SMARTHUB_SLO_WINDOW_MINUTES:-15}
     command: ["python", "-m", "smarthub.monitoring.slo_alerts", "--loop", "--interval", "60"]
+    # Same as shap-worker: runs the alerter loop, not the HTTP API, so disable
+    # the serve image's inherited HTTP healthcheck (no pgrep/ps in the slim image;
+    # restart:unless-stopped recovers a crashed loop).
+    healthcheck:
+      disable: true
 
   # Reverse proxy in front of `serve` -- the only way to reach the bid API
   # from outside the Docker network. Plain HTTP for now (see
