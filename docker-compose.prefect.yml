@@ -46,6 +46,12 @@ services:
       # Postgres connection budget (see the postgres service note above).
       PREFECT_SERVER_DATABASE_SQLALCHEMY_POOL_SIZE: "10"
       PREFECT_SERVER_DATABASE_SQLALCHEMY_MAX_OVERFLOW: "20"
+      # The UI runs in the browser, so its API URL must be the address the
+      # browser can reach -- not localhost/0.0.0.0 (which resolves to the
+      # user's own machine). Set PREFECT_UI_API_URL to the server's public
+      # host:port/api in .env per deployment. Falls back to localhost for a
+      # purely local run.
+      PREFECT_UI_API_URL: ${PREFECT_UI_API_URL:-http://localhost:4200/api}
     depends_on:
       postgres:
         condition: service_healthy
@@ -176,7 +182,7 @@ services:
       mlflow ui
       --backend-store-uri postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
       --default-artifact-root file:///app/data/mlruns
-      --host 0.0.0.0 --port 5000
+      --host 0.0.0.0 --port 5000 --allowed-hosts "*" --cors-allowed-origins "*"
     environment:
       SMARTHUB_ROOT: /app
     depends_on:
