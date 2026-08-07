@@ -69,6 +69,10 @@ def client(tmp_path, monkeypatch, log_store):
     monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
     monkeypatch.delenv("MODEL_URI", raising=False)
     monkeypatch.setattr(config, "active_model_version", lambda: None)
+    # Prediction logging is decoupled (async writer thread) in production; force
+    # synchronous inline writes in tests so the row is visible immediately after
+    # the request (no polling), keeping these assertions deterministic.
+    monkeypatch.setenv("SMARTHUB_PREDICTION_LOG_SYNC", "1")
     predict.clear_model_cache()
     with TestClient(predict.app, raise_server_exceptions=False) as c:
         yield c
@@ -233,44 +237,80 @@ def test_recommend_bid_error_logs_error_row_and_still_returns_500(
     assert row["input_features"]["state"] == "TX"
 
 
-# --- /explain_bid: success path (cold start -- no SHAP/lightgbm needed) -----
+# --- /explain_bid: consumes an already-logged prediction (production mode) ---
+# The route now takes {prediction_id} and explains a *persisted* prediction --
+# it never re-decides the bid. So each test first makes a /recommend_bid call to
+# create the prediction, then explains it by id.
 
 
-def test_explain_bid_cold_start_logs_success_row_with_prediction_id(client, log_store):
-    # Cold start returns early before SHAP ever runs (see explain.explain_bid),
-    # so this exercises a real /explain_bid success path with no lightgbm/shap
-    # installed.
-    resp = client.post("/explain_bid", json={**PAYLOAD, "lead_ping_id": 555})
+def test_explain_bid_cold_start_consumes_prediction(client, log_store):
+    """Cold start: the logged prediction has no model, so /explain_bid returns
+    the policy explanation (no SHAP) and persists it onto the same row."""
+    pred = client.post("/recommend_bid", json={**PAYLOAD, "lead_ping_id": 555})
+    assert pred.status_code == 200
+    assert pred.json()["decision_path"] == "cold_start_fallback"
+    prediction_id = pred.json()["prediction_id"]
+
+    resp = client.post("/explain_bid", json={"prediction_id": prediction_id})
     assert resp.status_code == 200
-    assert resp.json()["decision_path"] == "cold_start_fallback"
-    assert resp.json()["prediction_id"] is not None
-    assert resp.json()["lead_ping_id"] == 555
+    body = resp.json()
+    assert body["prediction_id"] == prediction_id
+    assert body["lead_ping_id"] == 555
+    assert body["top_factors"] == []
+    assert body["explanation"]  # the cold-start policy reason
 
-    row = log_store.recent(limit=10)[0]
-    assert row["endpoint"] == "explain_bid"
-    assert row["status"] == "success"
-    assert row["lead_ping_id"] == 555
-    assert row["prediction_id"] == resp.json()["prediction_id"]
-
-
-# --- /explain_bid: failure path (non-LGBM model) -----------------------------
+    # Persisted back onto the same (recommend_bid) row -- no new row created.
+    row = log_store.get(prediction_id)
+    assert row["shap_explanation"]["explanation"] == body["explanation"]
 
 
-def test_explain_bid_error_on_non_lgbm_model_logs_error_row(client, log_store):
-    # _ConstantWinRateModel isn't a Pipeline wrapping a LightGBM classifier --
-    # explain.py's SHAP path rejects it (it expects `.named_steps`), a real
-    # error, without needing lightgbm/shap installed to exercise the
-    # error-logging path.
+def test_explain_bid_unknown_prediction_id_returns_404(client, log_store):
+    """Explaining an id that was never logged is a 404, not a crash."""
+    resp = client.post("/explain_bid", json={"prediction_id": "does-not-exist"})
+    assert resp.status_code == 404
+
+
+def test_explain_bid_non_lgbm_model_degrades_gracefully(client, log_store):
+    """A non-LightGBM model can't be SHAP-explained -> graceful 200 with a
+    fallback message (never a 500)."""
     _promote_constant_model()
+    pred = client.post("/recommend_bid", json=PAYLOAD)
+    assert pred.json()["decision_path"] == "model"
+    prediction_id = pred.json()["prediction_id"]
 
-    resp = client.post("/explain_bid", json=PAYLOAD)
-    assert resp.status_code == 500
+    resp = client.post("/explain_bid", json={"prediction_id": prediction_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["top_factors"] == []
+    assert "unavailable" in body["explanation"].lower()
 
-    row = log_store.recent(limit=10)[0]
-    assert row["endpoint"] == "explain_bid"
-    assert row["status"] == "error"
-    assert row["error_message"]  # non-empty -- the real exception text
-    assert row["recommended_bid"] is None
+
+def test_explain_bid_uses_the_predictions_model_not_the_current(
+    client, log_store, monkeypatch
+):
+    """The correctness win: even after a newer model is promoted, /explain_bid
+    loads the model that *served* the logged prediction (by its logged
+    model_uri), not whatever is currently serving."""
+    model_a = _promote_constant_model(win_rate=0.3)  # A serves the prediction
+    pred = client.post("/recommend_bid", json=PAYLOAD)
+    prediction_id = pred.json()["prediction_id"]
+    model_a_uri = log_store.get(prediction_id)["model_uri"]
+    assert model_a_uri
+
+    model_b = _promote_constant_model(win_rate=0.9)  # B is now current-serving
+    assert model_b["version"] != model_a["version"]
+
+    loaded = {}
+    real_load = predict.load_model
+
+    def _spy(model_uri=None, lead_type_id=lead_type_id("auto")):
+        loaded["uri"] = model_uri
+        return real_load(model_uri=model_uri, lead_type_id=lead_type_id)
+
+    monkeypatch.setattr(predict, "load_model", _spy)
+
+    client.post("/explain_bid", json={"prediction_id": prediction_id})
+    assert loaded["uri"] == model_a_uri  # A, not B
 
 
 # --- /recommend_bid: background SHAP enrichment ------------------------------
@@ -323,7 +363,9 @@ def _promote_tiny_lightgbm_model():
         NUMERIC,
         CATEGORICAL,
         model_params={"n_estimators": 5, "min_child_samples": 1, "num_leaves": 7},
-        calibrate=False,
+        calibration_enabled=False,
+        calibration_method="isotonic",
+        calibration_cv=3,
     )
     model.fit(frame, y)
 
@@ -347,13 +389,16 @@ def _promote_tiny_lightgbm_model():
 
 
 def test_recommend_bid_background_task_attaches_shap_explanation(
-    client, log_store, small_feature_columns
+    client, log_store, small_feature_columns, monkeypatch
 ):
     """A real LightGBM model triggers a background task that attaches
     top_factors/base_win_rate to the already-logged row -- without the LLM
     'explanation'/'bid_curve' fields /explain_bid's shap_explanation carries,
     since those stay off the /recommend_bid path entirely (see
     _log_shap_background's docstring)."""
+    # This test exercises the in-process SHAP path specifically; pin the mode
+    # so the offload default (config/smarthub.yaml) doesn't turn it off here.
+    monkeypatch.setenv("SMARTHUB_SHAP_MODE", "inprocess")
     _promote_tiny_lightgbm_model()
 
     resp = client.post("/recommend_bid", json=PAYLOAD)
@@ -381,12 +426,17 @@ def test_recommend_bid_cold_start_never_schedules_shap_task(client, log_store):
     assert row["shap_explanation"] is None
 
 
-def test_recommend_bid_non_lgbm_model_leaves_shap_explanation_null(client, log_store):
+def test_recommend_bid_non_lgbm_model_leaves_shap_explanation_null(
+    client, log_store, monkeypatch
+):
     """A non-LightGBM model (_ConstantWinRateModel) makes the background SHAP
     task fail internally (explain_row only supports lightgbm) -- caught and
     swallowed by _log_shap_background, leaving shap_explanation null. Must
     never surface as an error to the caller (response is still 200) or break
     anything else already logged on the row."""
+    # In-process path is what this test asserts; pin it against the offload
+    # default so the failure-is-swallowed behaviour is what's exercised.
+    monkeypatch.setenv("SMARTHUB_SHAP_MODE", "inprocess")
     _promote_constant_model()
 
     resp = client.post("/recommend_bid", json=PAYLOAD)

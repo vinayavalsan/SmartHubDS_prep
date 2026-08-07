@@ -19,8 +19,48 @@ from pathlib import Path
 
 from smarthub.core import paths
 
+logger = logging.getLogger(__name__)
+
 MODEL_DIR_ROOT = paths.data_dir() / "models"
 _PRODUCTION_VERSION_RE = re.compile(r"^(?P<lead>[a-z0-9_]+)_v(?P<number>\d+)$")
+
+# --- production storage (promoted models) ------------------------------------
+# Local training always writes to the filesystem under MODEL_DIR_ROOT. When
+# production storage is configured, `promote()` also publishes the promoted
+# artifact + manifest + serving pointer there, and serving prefers it. When it
+# is not configured everything below is a no-op, so local behaviour is
+# unchanged.
+_PRODUCTION_STORE = None
+_PRODUCTION_STORE_RESOLVED = False
+
+
+def _production_store():
+    """Lazily build (and cache) the production model store from config.
+
+    Returns None when production storage is disabled, so every production step
+    degrades to a no-op.
+    """
+    global _PRODUCTION_STORE, _PRODUCTION_STORE_RESOLVED
+    if not _PRODUCTION_STORE_RESOLVED:
+        _PRODUCTION_STORE_RESOLVED = True
+        try:
+            from . import config
+
+            _PRODUCTION_STORE = config.load_training_config().production_model_store()
+        except Exception:  # noqa: BLE001 -- never let prod config break local use
+            logger.warning(
+                "Could not initialise production model store; using local only.",
+                exc_info=True,
+            )
+            _PRODUCTION_STORE = None
+    return _PRODUCTION_STORE
+
+
+def reset_production_store_cache() -> None:
+    """Force re-resolution of the production store (tests / config reloads)."""
+    global _PRODUCTION_STORE, _PRODUCTION_STORE_RESOLVED
+    _PRODUCTION_STORE = None
+    _PRODUCTION_STORE_RESOLVED = False
 
 
 def model_dir(lead_type_name: str) -> Path:
@@ -54,11 +94,18 @@ def manifest_path(lead_type_name: str, version: str) -> Path:
 
 def load_manifest(lead_type_name: str, version: str) -> dict:
     path = manifest_path(lead_type_name, version)
-    if not path.exists():
-        raise FileNotFoundError(
-            f"No manifest for lead type '{lead_type_name}' training run '{version}'."
-        )
-    return json.loads(path.read_text())
+    if path.exists():
+        return json.loads(path.read_text())
+    # Production-only model (promoted elsewhere, not trained on this box):
+    # fall back to the manifest published in production storage.
+    store = _production_store()
+    if store is not None:
+        key = f"{lead_type_name.strip().lower()}/{version}.json"
+        if store.exists(key):
+            return json.loads(store.read_text(key))
+    raise FileNotFoundError(
+        f"No manifest for lead type '{lead_type_name}' training run '{version}'."
+    )
 
 
 def update_manifest(lead_type_name: str, version: str, **updates) -> dict:
@@ -197,20 +244,56 @@ def _serving_pointer_path(lead_type_name: str) -> Path:
     return model_dir(lead_type_name) / "current.json"
 
 
+def _read_serving_pointer(lead_type_name: str) -> dict | None:
+    """Return the serving pointer, preferring production storage.
+
+    When production storage is configured its ``current.json`` is the source of
+    truth for what serves; otherwise the local pointer is used. So the same
+    serving-read helpers work in both local-only and production deployments.
+    """
+    prod = production_serving_pointer(lead_type_name)
+    if prod is not None:
+        return prod
+    path = _serving_pointer_path(lead_type_name)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def serving_model_path(lead_type_name: str, version: str) -> Path | None:
+    """Local filesystem path to a version's artifact, preferring production.
+
+    For an S3 production store this downloads+caches the object and returns the
+    cache path (usable by ``joblib.load``). Falls back to the local artifact,
+    or None when neither exists.
+    """
+    store = _production_store()
+    if store is not None:
+        key = f"{lead_type_name.strip().lower()}/{version}.pkl"
+        try:
+            if store.exists(key):
+                return store.local_path(key)
+        except Exception:  # noqa: BLE001 -- fall back to local on any error
+            logger.warning(
+                "Could not fetch %s from production storage.",
+                version,
+                exc_info=True,
+            )
+    local = version_path(lead_type_name, version)
+    return local if local.exists() else None
+
+
 def currently_serving_version(lead_type_name: str) -> str | None:
     """Return the serving training-run identifier (legacy-compatible name)."""
-    pointer = _serving_pointer_path(lead_type_name)
-    if not pointer.exists():
+    pointer = _read_serving_pointer(lead_type_name)
+    if pointer is None:
         return None
-    payload = json.loads(pointer.read_text())
-    return payload.get("training_run_id") or payload.get("version")
+    return pointer.get("training_run_id") or pointer.get("version")
 
 
 def currently_serving_production_version(lead_type_name: str) -> str | None:
-    pointer = _serving_pointer_path(lead_type_name)
-    if not pointer.exists():
-        return None
-    return json.loads(pointer.read_text()).get("production_model_version")
+    pointer = _read_serving_pointer(lead_type_name)
+    return pointer.get("production_model_version") if pointer else None
 
 
 def currently_serving_manifest(lead_type_name: str) -> dict | None:
@@ -225,7 +308,7 @@ def currently_serving_manifest(lead_type_name: str) -> dict | None:
 
 def currently_serving_model_path(lead_type_name: str) -> Path | None:
     version = currently_serving_version(lead_type_name)
-    return version_path(lead_type_name, version) if version else None
+    return serving_model_path(lead_type_name, version) if version else None
 
 
 def load_currently_serving_model(lead_type_name: str):
@@ -236,8 +319,8 @@ def load_currently_serving_model(lead_type_name: str):
         manifest = load_manifest(lead_type_name, version)
     except FileNotFoundError:
         return None, None
-    model_file = version_path(lead_type_name, version)
-    if not model_file.exists():
+    model_file = serving_model_path(lead_type_name, version)
+    if model_file is None:
         return None, None
     import joblib
 
@@ -296,7 +379,123 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
     _serving_pointer_path(lead_type_name).write_text(
         json.dumps(pointer, indent=2, ensure_ascii=False, default=str)
     )
+    # Publish the promoted model to production storage (only promoted models
+    # reach production). No-op when production storage is disabled.
+    _publish_to_production(lead_type_name, version, pointer)
+    # Register it in the production MLflow server (audit/registry). No-op when
+    # production MLflow isn't configured.
+    _publish_production_mlflow(lead_type_name, version, pointer)
     return pointer
+
+
+def _publish_to_production(lead_type_name: str, version: str, pointer: dict) -> None:
+    """Copy a promoted run's artifact + manifest to production storage and
+    update the production serving pointer. No-op when production is disabled.
+
+    Raises on failure: a promotion that can't publish to production is not a
+    completed promotion, so the operator should see it.
+    """
+    store = _production_store()
+    if store is None:
+        return
+    lead = lead_type_name.strip().lower()
+    try:
+        store.write_bytes(
+            f"{lead}/{version}.pkl",
+            version_path(lead_type_name, version).read_bytes(),
+        )
+        store.write_text(
+            f"{lead}/{version}.json",
+            manifest_path(lead_type_name, version).read_text(),
+        )
+        store.write_text(
+            f"{lead}/current.json",
+            json.dumps(pointer, indent=2, ensure_ascii=False, default=str),
+        )
+        logger.info(
+            "Published %s to production storage (%s).",
+            version,
+            getattr(store, "backend", "?"),
+        )
+    except Exception:
+        logger.exception("Failed to publish %s to production storage.", version)
+        raise
+
+
+def _publish_production_mlflow(
+    lead_type_name: str, version: str, pointer: dict
+) -> None:
+    """Register a promoted model in the production MLflow server.
+
+    Best-effort (warns, never raises): production storage is the serving source
+    of truth and has already been written by :func:`_publish_to_production`;
+    MLflow here is audit/registry, so a production-MLflow outage must not fail a
+    promotion. No-op when production MLflow isn't configured (checked before
+    importing mlflow, so disabled setups never need it installed).
+    """
+    try:
+        from . import config
+
+        cfg = config.load_training_config()
+        if not cfg.production_mlflow_enabled:
+            return
+        import joblib
+
+        from . import mlflow_utils
+
+        manifest = load_manifest(lead_type_name, version)
+        model = joblib.load(version_path(lead_type_name, version))
+        metadata = mlflow_utils.log_production_model(
+            tracking_uri=cfg.mlflow_production_tracking_uri,
+            experiment_name=cfg.mlflow_production_experiment_name,
+            registered_model_name=(
+                cfg.mlflow_production_registered_model_name
+                or cfg.mlflow_registered_model_name
+            ),
+            run_name=f"{lead_type_name}_{pointer['production_model_version']}",
+            model=model,
+            model_params=manifest.get("model_params"),
+            feature_cols=manifest.get("feature_cols"),
+            metrics=manifest.get("metrics"),
+            tags={
+                "training_run_id": version,
+                "lead_type_name": lead_type_name,
+                "production_model_version": pointer["production_model_version"],
+                "promotion_reason": pointer.get("reason", ""),
+            },
+        )
+        update_manifest(lead_type_name, version, **metadata)
+        logger.info(
+            "Registered %s in production MLflow (%s v%s).",
+            version,
+            metadata["production_registered_model_name"],
+            metadata["production_registered_model_version"],
+        )
+    except Exception:  # noqa: BLE001 -- audit registry; must not fail promotion
+        logger.warning(
+            "Failed to register %s in production MLflow.", version, exc_info=True
+        )
+
+
+def production_serving_pointer(lead_type_name: str) -> dict | None:
+    """Return the production serving pointer, or None when unavailable."""
+    store = _production_store()
+    if store is None:
+        return None
+    key = f"{lead_type_name.strip().lower()}/current.json"
+    if not store.exists(key):
+        return None
+    return json.loads(store.read_text(key))
+
+
+def load_serving_model(lead_type_name: str):
+    """Load the serving ``(model, manifest)``, preferring production storage.
+
+    Thin alias for :func:`load_currently_serving_model`, which is now
+    production-aware (it reads the production pointer/manifest/artifact when
+    production storage is configured, and falls back to local otherwise).
+    """
+    return load_currently_serving_model(lead_type_name)
 
 
 def rollback(

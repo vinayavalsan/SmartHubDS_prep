@@ -150,10 +150,62 @@ different database/schema. See §8 for how it gets populated.
 
 ### `shap_explanation` shape
 
-**`/explain_bid`** (full - written synchronously, before the response):
+The canonical payload is a structured SHAP breakdown (no LLM required):
+`base_prediction` (the model's average win rate before this lead's factors),
+`prediction` (the predicted win rate for this lead), and
+`feature_contributions` — **every** model feature's contribution to the
+predicted win probability, each `{feature, value, contribution}`, sorted by
+`|contribution|` descending. Contributions are in log-odds units (their sign
+and relative magnitude are what matter); `base_prediction`/`prediction` are
+0-1 probabilities. `top_factors`/`base_win_rate` are a backward-compatible
+top-N view kept for existing consumers. Because the full contribution set is
+stored, a natural-language explanation can be generated later from this payload
+**without re-running the model or recomputing SHAP**.
+
+> **Note on `prediction` vs the contributions.** `prediction` is reconciled to
+> the **calibrated** win rate actually served and logged — it equals the
+> `recommended_bid_predicted_win_rate` column, so there is a single consistent
+> headline number. The SHAP `feature_contributions` (log-odds) and
+> `base_prediction` describe the underlying tree model and therefore sum to the
+> model's *uncalibrated* output; when calibration (isotonic/sigmoid) is applied
+> they will **not** exactly reconstruct `prediction`. Use the contributions for
+> *why* (relative feature influence and direction) and `prediction` for the
+> served win probability. (On the raw-lead dev path, where no served value
+> exists, `prediction` falls back to the SHAP-reconstructed win rate.)
+
+**`/recommend_bid`** (written by a background task after the response, so
+prediction latency is unaffected; no LLM, no `bid_curve`/`explanation`):
 
 ```json
 {
+  "base_prediction": 0.114,
+  "prediction": 0.78,
+  "feature_contributions": [
+    {"feature": "num_auto_accidents", "value": 1, "contribution": 0.84},
+    {"feature": "bid", "value": 8.25, "contribution": 0.13},
+    {"feature": "state", "value": "CA", "contribution": 0.05},
+    {"feature": "age", "value": 34.0, "contribution": -0.31}
+  ],
+  "top_factors": [
+    {"feature": "num_auto_accidents", "value": 1, "shap": 0.84, "direction": "increased"},
+    {"feature": "age", "value": 34.0, "shap": -0.31, "direction": "decreased"}
+  ],
+  "base_win_rate": 0.114
+}
+```
+
+**`/explain_bid`** (same payload as above, written synchronously before the
+response, plus the on-demand `bid_curve` and — only if explicitly requested —
+an LLM `explanation`; neither is part of the automatic production workflow):
+
+```json
+{
+  "base_prediction": 0.114,
+  "prediction": 0.78,
+  "feature_contributions": [
+    {"feature": "num_auto_accidents", "value": 1, "contribution": 0.84},
+    {"feature": "age", "value": 34.0, "contribution": -0.31}
+  ],
   "top_factors": [
     {"feature": "num_auto_accidents", "value": 1, "shap": 0.84, "direction": "increased"},
     {"feature": "age", "value": 34.0, "shap": -0.31, "direction": "decreased"}
@@ -161,23 +213,9 @@ different database/schema. See §8 for how it gets populated.
   "base_win_rate": 0.114,
   "bid_curve": [
     {"bid": 12.25, "predicted_win_rate": 0.33, "expected_profit": 12.4},
-    {"bid": 12.50, "predicted_win_rate": 0.34, "expected_profit": 12.75},
-    {"bid": 12.75, "predicted_win_rate": 0.35, "expected_profit": 12.9}
+    {"bid": 12.50, "predicted_win_rate": 0.34, "expected_profit": 12.75}
   ],
   "explanation": "This lead's prior accident and other factors pushed the predicted win rate well above average, supporting a bid of $12.50 for an expected $12.75 profit."
-}
-```
-
-**`/recommend_bid`** (lighter - written by a background task after the
-response; no `bid_curve`/`explanation`, see §2):
-
-```json
-{
-  "top_factors": [
-    {"feature": "num_auto_accidents", "value": 1, "shap": 0.84, "direction": "increased"},
-    {"feature": "age", "value": 34.0, "shap": -0.31, "direction": "decreased"}
-  ],
-  "base_win_rate": 0.114
 }
 ```
 

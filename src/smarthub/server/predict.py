@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -19,6 +22,27 @@ from smarthub.core.lead_types import lead_type_id as get_lead_type_id
 from smarthub.train_and_predict import config, optimizer, preprocessing, registry
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe(obj):
+    """Recursively replace non-finite floats (NaN/±inf) with None.
+
+    SHAP factor values can be NaN (e.g. a numeric feature missing from the
+    prepared row coerces to NaN), and Starlette's JSON encoder runs with
+    ``allow_nan=False`` -- so an un-sanitized NaN anywhere in the response
+    500s the request at serialization time, after the handler has returned.
+    Applied at the serialization boundary so no explanation payload can break
+    ``/explain_bid``.
+    """
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.generic):  # np.float32/float64/int64 -> native
+        obj = obj.item()
+    if isinstance(obj, float) and not np.isfinite(obj):
+        return None
+    return obj
 
 
 def resolve_model_uri(lead_type_id: int = get_lead_type_id("auto")) -> str:
@@ -237,8 +261,10 @@ def load_model_and_manifest(lead_type_id: int = get_lead_type_id("auto")):
     manifest = _cached_manifest(lead_type_name, version)
     if manifest is None:
         return None, None
-    model_path = registry.version_path(lead_type_name, version)
-    if not model_path.exists():
+    # Production-aware: resolves the local artifact, or the downloaded+cached
+    # copy from production storage (S3/MinIO) when configured.
+    model_path = registry.serving_model_path(lead_type_name, version)
+    if model_path is None:
         return None, None
     return load_model(model_uri=str(model_path)), manifest
 
@@ -581,7 +607,7 @@ def bid_curve_around(
 
 
 try:
-    from fastapi import BackgroundTasks, FastAPI
+    from fastapi import BackgroundTasks, FastAPI, HTTPException
     from pydantic import BaseModel, Field
 
     _FASTAPI_AVAILABLE = True
@@ -628,6 +654,19 @@ if _FASTAPI_AVAILABLE:
         continuous_coverage_months: float | None = None
         age: float | None = None
 
+    class ExplainRequest(BaseModel):
+        """Explain an already-logged prediction, by id (production mode).
+
+        Consumes a persisted prediction rather than re-deciding the bid, so the
+        explanation always corresponds to the logged bid and to the model
+        version that served it. (A raw-lead / predict-then-explain local mode is
+        deferred -- see the ticket's Future Work.)
+        """
+
+        prediction_id: str
+        with_llm: bool = True
+        with_bid_curve: bool = True
+
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
         """Warm the model cache once at startup (see _eager_load_models),
@@ -641,10 +680,41 @@ if _FASTAPI_AVAILABLE:
         completing, nor blocks any request while a multi-minute pull runs.
         """
         _eager_load_models()
+        _eager_init_db()
+        _start_log_writer()  # decoupled prediction-log writer thread
         from smarthub.train_and_predict import explain
 
         explain.ensure_model_pulled_async()
         yield
+        _stop_log_writer()  # flush remaining log rows on shutdown
+
+    def _eager_init_db() -> None:
+        """Create SmartHub's Postgres tables at startup, so they exist right
+        after deploy rather than lazily on first use.
+
+        Constructing each store runs SQLAlchemy ``create_all`` (idempotent),
+        creating ``smarthub_prediction_log`` and ``smarthub_config`` /
+        ``smarthub_config_history`` in the shared Postgres. Best-effort: an
+        unreachable DB is logged and swallowed, never blocking startup -- same
+        principle as the lazily-built prediction logger.
+        """
+        try:
+            _prediction_log_store()  # create_all -> smarthub_prediction_log
+        except Exception:  # noqa: BLE001 -- must never block startup
+            logger.warning(
+                "Could not eager-init the prediction-log table at startup "
+                "(will retry lazily on first prediction).",
+                exc_info=True,
+            )
+        try:
+            from smarthub.core.config_store import ConfigStore
+
+            ConfigStore()  # create_all -> smarthub_config(+_history)
+        except Exception:  # noqa: BLE001 -- must never block startup
+            logger.warning(
+                "Could not eager-init the config-store tables at startup.",
+                exc_info=True,
+            )
 
     app = FastAPI(title="Anton Bid Prediction API", lifespan=_lifespan)
 
@@ -718,6 +788,7 @@ if _FASTAPI_AVAILABLE:
         """Manifest-derived fields the prediction log wants, or all-None."""
         if not manifest:
             return {
+                "model_name": None,
                 "model_version": None,
                 "model_uri": None,
                 "model_type": None,
@@ -728,6 +799,12 @@ if _FASTAPI_AVAILABLE:
             }
         lineage = manifest.get("lineage") or {}
         return {
+            # Human-friendly name: the production slug (e.g. "auto_v6") when
+            # promoted, else the lead-type name.
+            "model_name": (
+                manifest.get("production_model_version")
+                or manifest.get("lead_type_name")
+            ),
             "model_version": manifest.get("version"),
             "model_uri": manifest.get("model_path"),
             "model_type": lineage.get("model_type"),
@@ -792,46 +869,134 @@ if _FASTAPI_AVAILABLE:
             logger.warning("Failed to write prediction log row", exc_info=True)
             return None
 
+    # --- Decoupled prediction-log writer --------------------------------------
+    # /recommend_bid enqueues a fully-built log row and returns immediately; a
+    # dedicated daemon thread performs the Postgres INSERTs off the request
+    # path. This is stronger than a Starlette BackgroundTask (which still runs
+    # in the request's own worker after the response and can contend with the
+    # next request under DB load) -- here the request path does no DB I/O at
+    # all, so logging can never affect TAT. One queue + thread per uvicorn
+    # worker process.
+    _LOG_QUEUE: "queue.Queue[dict | None]" = queue.Queue(maxsize=50000)
+    _LOG_WRITER = {"thread": None, "stop": threading.Event()}
+
+    def _enqueue_log(record: dict) -> None:
+        """Hand a prediction-log row to the writer thread (non-blocking).
+
+        ``SMARTHUB_PREDICTION_LOG_SYNC=1`` forces an inline synchronous write
+        instead -- used by tests so the row is visible immediately after the
+        request, and available as an escape hatch for debugging. Production
+        leaves it unset (async, off the request path).
+        """
+        if os.getenv("SMARTHUB_PREDICTION_LOG_SYNC", "").strip() in {"1", "true"}:
+            _log_prediction_safe(**record)
+            return
+        try:
+            _LOG_QUEUE.put_nowait(record)
+        except queue.Full:
+            # Backpressure: drop the row rather than block the request. Serving
+            # correctness never depends on a log row existing.
+            logger.warning(
+                "prediction-log queue full -- dropping a log row (serving "
+                "unaffected). Consider a faster log DB or a bigger queue."
+            )
+
+    def _log_writer_loop() -> None:
+        """Drain the queue and write rows, one small batched transaction at a
+        time, until stopped and drained."""
+        stop = _LOG_WRITER["stop"]
+        while True:
+            try:
+                first = _LOG_QUEUE.get(timeout=0.5)
+            except queue.Empty:
+                if stop.is_set():
+                    break
+                continue
+            if first is None:  # shutdown sentinel
+                break
+            # Opportunistically batch anything already queued into one txn.
+            batch = [first]
+            while len(batch) < 500:
+                try:
+                    nxt = _LOG_QUEUE.get_nowait()
+                except queue.Empty:
+                    break
+                if nxt is None:
+                    stop.set()
+                    break
+                batch.append(nxt)
+            try:
+                _prediction_log_store().log_many(batch)
+            except Exception:  # noqa: BLE001 -- never let the writer die
+                logger.warning(
+                    "prediction-log batch write failed (%d rows dropped)",
+                    len(batch),
+                    exc_info=True,
+                )
+
+    def _start_log_writer() -> None:
+        """Start the writer thread once per process (idempotent)."""
+        if _LOG_WRITER["thread"] is not None:
+            return
+        _LOG_WRITER["stop"].clear()
+        t = threading.Thread(
+            target=_log_writer_loop, name="predlog-writer", daemon=True
+        )
+        t.start()
+        _LOG_WRITER["thread"] = t
+
+    def _stop_log_writer() -> None:
+        """Signal stop and flush remaining rows on shutdown (best-effort)."""
+        t = _LOG_WRITER["thread"]
+        if t is None:
+            return
+        _LOG_WRITER["stop"].set()
+        _LOG_QUEUE.put(None)  # wake the thread
+        t.join(timeout=10)
+
     def _log_shap_background(
         prediction_id: str | None,
         model,
-        record: dict,
+        model_input_features: dict,
         lead_type_id: int,
         recommended_bid: float,
+        recommended_bid_predicted_win_rate: float | None = None,
     ) -> None:
         """Best-effort: compute SHAP factors for a /recommend_bid prediction
         and attach them to its already-written log row.
 
-        Runs as a `BackgroundTasks` job -- scheduled by the route, but not
-        actually executed until *after* the response has been sent (Starlette
-        semantics) -- so this never adds latency to the bid decision itself.
-        Same principle as `/explain_bid` keeping SHAP off `/recommend_bid`'s
-        response path, just applied per-request instead of skipped entirely.
+        Consumes the prediction's already-prepared feature row via
+        `server.explain.explain_from_prediction` (`with_llm=False`) -- the bid
+        is never recomputed and no optimizer sweep is re-run; only SHAP at the
+        chosen bid. Runs as a `BackgroundTasks` job (after the response is sent,
+        per Starlette semantics), so it never adds latency to the bid decision.
+        The LLM narrative and `bid_curve` stay /explain_bid-only.
 
-        Deliberately excludes the LLM narrative `explain.explain_bid()` also
-        produces (`explanation`) -- that's a much heavier Ollama call, and
-        running it for every single bid, even off the response path, risks
-        piling up load on Ollama under concurrency. That field stays
-        /explain_bid-only.
-
-        Silently gives up (logs a warning) on any failure -- e.g. a
-        non-LightGBM model (`explain.explain_row` only supports
-        `model_type='lightgbm'`, see `_fitted_lgbm_estimators`), or the
-        logging DB being unreachable for the update -- since this is pure
-        enrichment after the fact and must never surface anywhere a caller
-        would see it.
+        Silently gives up (logs a warning) on any failure -- e.g. a non-LightGBM
+        model (SHAP supports `model_type='lightgbm'` only), or the logging DB
+        being unreachable for the update -- since this is pure after-the-fact
+        enrichment and must never surface anywhere a caller would see it.
         """
         if prediction_id is None or model is None:
             return
         try:
-            from smarthub.train_and_predict import explain
+            from smarthub.server import explain as server_explain
 
-            explained_record = dict(record)
-            explained_record["bid"] = recommended_bid
-            factors = explain.explain_row(model, explained_record, lead_type_id)
+            prediction = server_explain.PredictionOutput(
+                lead_type_id=lead_type_id,
+                model_input_features=model_input_features,
+                recommended_bid=recommended_bid,
+                recommended_bid_predicted_win_rate=(recommended_bid_predicted_win_rate),
+            )
+            factors = server_explain.explain_from_prediction(
+                model, prediction, with_llm=False
+            )
             _prediction_log_store().update_shap_explanation(
                 prediction_id,
                 {
+                    "base_prediction": factors.get("base_prediction"),
+                    "prediction": factors.get("prediction"),
+                    "feature_contributions": factors.get("feature_contributions", []),
                     "top_factors": factors["top_factors"],
                     "base_win_rate": factors["base_win_rate"],
                 },
@@ -889,6 +1054,11 @@ if _FASTAPI_AVAILABLE:
         scheduled to run after the logging insert above, and attached to
         the same `prediction_id`'s log row. See `_log_shap_background`.
         """
+        # TAT (turnaround time) clock: starts the moment the handler receives
+        # the request, stops once the bid result is ready to return. Everything
+        # after that -- the prediction-log insert and SHAP -- runs in background
+        # tasks after the response is sent, so it's deliberately NOT counted.
+        _t_start = time.perf_counter()
         lead_type_name = config.lead_type_name(request.lead_type_id)
         record = None
         try:
@@ -906,24 +1076,25 @@ if _FASTAPI_AVAILABLE:
                 created_hour=request.created_hour,
             )
         except Exception as exc:
-            # Unlike the success path below, an error here means there's no
-            # bid response to protect from delay -- this stays a plain
-            # synchronous log call, same as before.
-            _log_prediction_safe(
-                endpoint="recommend_bid",
-                status="error",
-                error_message=str(exc),
-                lead_type_id=request.lead_type_id,
-                lead_type_name=lead_type_name,
-                campaign_id=request.campaign_id,
-                account_id=request.account_id,
-                source_type_id=request.source_type_id,
-                lead_ping_id=request.lead_ping_id,
-                input_features=record or request.model_dump(),
-                expected_revenue=request.expected_revenue,
-                target_cm=request.target_cm,
-                min_bid=request.min_bid,
-                bid_step=request.bid_step,
+            # Error path: also enqueued (off the request path) so even failure
+            # logging can't block. The client gets its 500 immediately.
+            _enqueue_log(
+                dict(
+                    endpoint="recommend_bid",
+                    status="error",
+                    error_message=str(exc),
+                    lead_type_id=request.lead_type_id,
+                    lead_type_name=lead_type_name,
+                    campaign_id=request.campaign_id,
+                    account_id=request.account_id,
+                    source_type_id=request.source_type_id,
+                    lead_ping_id=request.lead_ping_id,
+                    input_features=record or request.model_dump(),
+                    expected_revenue=request.expected_revenue,
+                    target_cm=request.target_cm,
+                    min_bid=request.min_bid,
+                    bid_step=request.bid_step,
+                )
             )
             raise
 
@@ -934,49 +1105,76 @@ if _FASTAPI_AVAILABLE:
         result["prediction_id"] = prediction_id
         result["lead_ping_id"] = request.lead_ping_id
 
-        background_tasks.add_task(
-            _log_prediction_safe,
-            endpoint="recommend_bid",
-            prediction_id=prediction_id,
-            lead_type_id=request.lead_type_id,
-            lead_type_name=lead_type_name,
-            campaign_id=request.campaign_id,
-            account_id=request.account_id,
-            source_type_id=request.source_type_id,
-            lead_ping_id=request.lead_ping_id,
-            input_features=record,
-            model_input_features=row.to_dict(),
-            feature_cols=manifest.get("feature_cols") if manifest else None,
-            expected_revenue=request.expected_revenue,
-            target_cm=request.target_cm,
-            min_bid=request.min_bid,
-            bid_step=request.bid_step,
-            candidate_bid_generation={
-                "method": "equally_spaced",
-                "min_bid": request.min_bid,
-                "max_bid": result.get("max_bid"),
-                "bid_step": request.bid_step,
-                "n_candidates": result.get("n_candidate_bids"),
-            },
-            **_manifest_log_fields(manifest),
-            model_data_age_days=result.get("model_data_age_days"),
-            decision_path=result.get("decision_path"),
-            decision_reason=result.get("decision_reason"),
-            recommended_bid=result.get("recommended_bid"),
-            recommended_bid_predicted_win_rate=result.get(
-                "recommended_bid_predicted_win_rate"
-            ),
-            recommended_bid_predicted_profit=result.get(
-                "recommended_bid_predicted_profit"
-            ),
-            recommended_bid_predicted_cm=_predicted_cm(
-                result.get("recommended_bid_predicted_profit"),
-                request.expected_revenue,
-            ),
-            serving_config=_serving_config_snapshot(),
+        # Stop the TAT clock here: the bid decision is done and the response is
+        # about to be returned. Recorded in SECONDS and persisted to the log DB
+        # only -- deliberately NOT returned in the response (it's an internal
+        # serving metric, not something the caller needs on the bid).
+        tat_seconds = round(time.perf_counter() - _t_start, 4)
+
+        # Decoupled logging: hand the fully-built row to the in-process log
+        # queue and return immediately. A dedicated writer thread does the
+        # Postgres INSERT off the request path, so DB latency/contention can
+        # never affect this request's TAT or the next one's (unlike a
+        # BackgroundTask, which runs in this worker after the response). If the
+        # queue is full the row is dropped with a warning -- serving is never
+        # blocked or slowed by logging.
+        _enqueue_log(
+            dict(
+                endpoint="recommend_bid",
+                prediction_id=prediction_id,
+                tat_seconds=tat_seconds,
+                lead_type_id=request.lead_type_id,
+                lead_type_name=lead_type_name,
+                campaign_id=request.campaign_id,
+                account_id=request.account_id,
+                source_type_id=request.source_type_id,
+                lead_ping_id=request.lead_ping_id,
+                input_features=record,
+                model_input_features=row.to_dict(),
+                feature_cols=manifest.get("feature_cols") if manifest else None,
+                expected_revenue=request.expected_revenue,
+                target_cm=request.target_cm,
+                min_bid=request.min_bid,
+                bid_step=request.bid_step,
+                candidate_bid_generation={
+                    "method": "equally_spaced",
+                    "min_bid": request.min_bid,
+                    "max_bid": result.get("max_bid"),
+                    "bid_step": request.bid_step,
+                    "n_candidates": result.get("n_candidate_bids"),
+                },
+                **_manifest_log_fields(manifest),
+                model_data_age_days=result.get("model_data_age_days"),
+                decision_path=result.get("decision_path"),
+                decision_reason=result.get("decision_reason"),
+                recommended_bid=result.get("recommended_bid"),
+                recommended_bid_predicted_win_rate=result.get(
+                    "recommended_bid_predicted_win_rate"
+                ),
+                recommended_bid_predicted_profit=result.get(
+                    "recommended_bid_predicted_profit"
+                ),
+                recommended_bid_predicted_cm=_predicted_cm(
+                    result.get("recommended_bid_predicted_profit"),
+                    request.expected_revenue,
+                ),
+                serving_config=_serving_config_snapshot(),
+            )
         )
 
-        if model is not None and not pd.isna(result.get("recommended_bid")):
+        # SHAP enrichment mode (config.shap_enrichment_mode / $SMARTHUB_SHAP_MODE):
+        #   inprocess -> compute SHAP here, in a background task on this worker
+        #                (legacy behaviour, kept for A/B TAT comparison).
+        #   offload   -> do nothing here; the prediction row is logged with
+        #                shap_explanation NULL and a separate `shap-worker`
+        #                process backfills it, keeping serving CPU free.
+        #   off       -> no SHAP enrichment at all.
+        shap_mode = config.shap_enrichment_mode()
+        if (
+            shap_mode == config.SHAP_MODE_INPROCESS
+            and model is not None
+            and not pd.isna(result.get("recommended_bid"))
+        ):
             # Scheduled after the logging insert above -- Starlette runs
             # BackgroundTasks in registration order, so this update always
             # finds its row already there (or, on a logging failure, simply
@@ -985,125 +1183,147 @@ if _FASTAPI_AVAILABLE:
                 _log_shap_background,
                 prediction_id,
                 model,
-                record,
+                row.to_dict(),
                 request.lead_type_id,
                 result.get("recommended_bid"),
+                result.get("recommended_bid_predicted_win_rate"),
             )
 
         return result
 
-    @app.post("/explain_bid")
-    def explain_bid_route(request: BidRequest):
-        """Answer "why did Anton bid $X for this lead?" in plain English.
+    def _prediction_output_from_log(row: dict):
+        """Rebuild a ``server.explain.PredictionOutput`` from a logged row."""
+        from smarthub.server import explain as server_explain
 
-        Offline/on-demand only -- a separate, slower endpoint;
-        `/recommend_bid` doesn't call it -- but runs the identical
-        `decide_bid` policy, so the bid and `decision_path` always match
-        what live serving would return for the same inputs.
+        cbg = row.get("candidate_bid_generation") or {}
+
+        def _f(value):
+            return float(value) if value is not None else None
+
+        return server_explain.PredictionOutput(
+            lead_type_id=int(row["lead_type_id"]),
+            model_input_features=row.get("model_input_features") or {},
+            recommended_bid=_f(row.get("recommended_bid")),
+            recommended_bid_predicted_win_rate=_f(
+                row.get("recommended_bid_predicted_win_rate")
+            ),
+            recommended_bid_predicted_profit=_f(
+                row.get("recommended_bid_predicted_profit")
+            ),
+            decision_path=row.get("decision_path"),
+            decision_reason=row.get("decision_reason"),
+            expected_revenue=_f(row.get("expected_revenue")),
+            min_bid=_f(row.get("min_bid")),
+            max_bid=cbg.get("max_bid"),
+            bid_step=_f(row.get("bid_step")),
+            prediction_id=row.get("prediction_id"),
+            lead_ping_id=row.get("lead_ping_id"),
+        )
+
+    @app.post("/explain_bid")
+    def explain_bid_route(request: ExplainRequest):
+        """Explain an already-computed prediction, by id (production mode).
+
+        Loads the persisted prediction and runs SHAP (plus optional LLM
+        narrative / nearby-bid curve) on the exact feature row it scored --
+        **never re-running the bid decision** -- then persists the explanation
+        back onto that same prediction-log row. So the explanation always
+        corresponds to the logged bid and to the model version that served it,
+        and the optimizer sweep isn't duplicated here.
 
         Inputs
         ------
-        request : BidRequest
-            Same shape as `/recommend_bid`.
+        request : ExplainRequest
+            The ``prediction_id`` to explain (+ ``with_llm`` / ``with_bid_curve``).
 
         Returns
         -------
         dict
-            Everything from `decide_bid` plus `base_win_rate`,
-            `top_factors` (SHAP), `bid_curve`, `explanation` -- see
-            `train_and_predict.explain.explain_bid` -- `prediction_id`, a
-            receipt correlating this response to its prediction-log row
-            (`None` if the logging write itself failed), and `lead_ping_id`,
-            echoed back exactly as sent (`None` if the caller didn't supply
-            one).
+            ``top_factors``, ``base_win_rate``, ``bid_curve``, ``explanation``,
+            plus ``prediction_id`` and the row's ``lead_ping_id``.
         """
-        # Local import: explain.py imports this module (`smarthub.server`),
-        # so importing it at module load time here would be circular.
-        # Also keeps the heavier explain-only deps (shap) out of every
-        # /recommend_bid request.
-        from smarthub.train_and_predict import explain
+        from smarthub.server import explain as server_explain
 
-        lead_type_name = config.lead_type_name(request.lead_type_id)
-        record = None
+        store = _prediction_log_store()
+        row = store.get(request.prediction_id)
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No prediction logged for id '{request.prediction_id}'.",
+            )
+
+        prediction = _prediction_output_from_log(row)
+
+        # Load the *exact* model version that served this prediction, so SHAP
+        # reflects it even if a newer model has since been promoted. `None`
+        # (cold start, or an unloadable artifact) yields the policy's own
+        # explanation rather than an error.
+        model = None
+        model_uri = row.get("model_uri")
+        if model_uri:
+            try:
+                model = load_model(model_uri=model_uri)
+            except Exception:  # noqa: BLE001 -- artifact unloadable -> canned
+                logger.warning(
+                    "Could not load model '%s' to explain prediction %s; "
+                    "returning the policy explanation only.",
+                    model_uri,
+                    request.prediction_id,
+                    exc_info=True,
+                )
+
         try:
-            model, manifest = load_model_and_manifest(request.lead_type_id)
-            record, row = _record_and_row(request)
-            result = explain.explain_bid(
-                model=model,
-                record=record,
-                lead_type_id=request.lead_type_id,
-                expected_revenue=request.expected_revenue,
-                manifest=manifest,
-                target_cm=request.target_cm,
-                min_bid=request.min_bid,
-                bid_step=request.bid_step,
-                created_dayofweek=request.created_dayofweek,
-                created_hour=request.created_hour,
+            result = server_explain.explain_from_prediction(
+                model,
+                prediction,
+                with_llm=request.with_llm,
+                with_bid_curve=request.with_bid_curve,
             )
-        except Exception as exc:
-            _log_prediction_safe(
-                endpoint="explain_bid",
-                status="error",
-                error_message=str(exc),
-                lead_type_id=request.lead_type_id,
-                lead_type_name=lead_type_name,
-                campaign_id=request.campaign_id,
-                account_id=request.account_id,
-                source_type_id=request.source_type_id,
-                lead_ping_id=request.lead_ping_id,
-                input_features=record or request.model_dump(),
-                expected_revenue=request.expected_revenue,
-                target_cm=request.target_cm,
-                min_bid=request.min_bid,
-                bid_step=request.bid_step,
+        except Exception as exc:  # noqa: BLE001 -- explanation must never 500
+            # e.g. SHAP only supports lightgbm; degrade to a clear message
+            # rather than failing the request.
+            logger.warning(
+                "Explanation failed for prediction %s: %s",
+                request.prediction_id,
+                exc,
+                exc_info=True,
             )
-            raise
+            result = {
+                "base_prediction": None,
+                "prediction": None,
+                "feature_contributions": [],
+                "top_factors": [],
+                "base_win_rate": None,
+                "explanation": f"Explanation unavailable: {exc}",
+            }
 
-        prediction_id = _log_prediction_safe(
-            endpoint="explain_bid",
-            lead_type_id=request.lead_type_id,
-            lead_type_name=lead_type_name,
-            campaign_id=request.campaign_id,
-            account_id=request.account_id,
-            source_type_id=request.source_type_id,
-            lead_ping_id=request.lead_ping_id,
-            input_features=record,
-            model_input_features=row.to_dict(),
-            feature_cols=manifest.get("feature_cols") if manifest else None,
-            expected_revenue=request.expected_revenue,
-            target_cm=request.target_cm,
-            min_bid=request.min_bid,
-            bid_step=request.bid_step,
-            candidate_bid_generation={
-                "method": "equally_spaced",
-                "min_bid": request.min_bid,
-                "max_bid": result.get("max_bid"),
-                "bid_step": request.bid_step,
-                "n_candidates": result.get("n_candidate_bids"),
-            },
-            **_manifest_log_fields(manifest),
-            model_data_age_days=result.get("model_data_age_days"),
-            decision_path=result.get("decision_path"),
-            decision_reason=result.get("decision_reason"),
-            recommended_bid=result.get("recommended_bid"),
-            recommended_bid_predicted_win_rate=result.get(
-                "recommended_bid_predicted_win_rate"
-            ),
-            recommended_bid_predicted_profit=result.get(
-                "recommended_bid_predicted_profit"
-            ),
-            recommended_bid_predicted_cm=_predicted_cm(
-                result.get("recommended_bid_predicted_profit"),
-                request.expected_revenue,
-            ),
-            shap_explanation={
-                "top_factors": result.get("top_factors"),
-                "base_win_rate": result.get("base_win_rate"),
-                "bid_curve": result.get("bid_curve"),
-                "explanation": result.get("explanation"),
-            },
-            serving_config=_serving_config_snapshot(),
-        )
-        result["prediction_id"] = prediction_id
-        result["lead_ping_id"] = request.lead_ping_id
-        return result
+        # SHAP values / feature values can be NaN or ±inf; Starlette's JSON
+        # encoder rejects those, so sanitize before persisting and returning.
+        result = _json_safe(result)
+
+        # Persist the explanation back onto the same row (no new log row).
+        try:
+            store.update_shap_explanation(
+                request.prediction_id,
+                {
+                    "base_prediction": result.get("base_prediction"),
+                    "prediction": result.get("prediction"),
+                    "feature_contributions": result.get("feature_contributions"),
+                    "top_factors": result.get("top_factors"),
+                    "base_win_rate": result.get("base_win_rate"),
+                    "bid_curve": result.get("bid_curve"),
+                    "explanation": result.get("explanation"),
+                },
+            )
+        except Exception:  # noqa: BLE001 -- logging must never break serving
+            logger.warning(
+                "Failed to persist explanation for prediction %s",
+                request.prediction_id,
+                exc_info=True,
+            )
+
+        return {
+            **result,
+            "prediction_id": request.prediction_id,
+            "lead_ping_id": row.get("lead_ping_id"),
+        }

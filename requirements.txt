@@ -2,7 +2,7 @@
 pandas>=2.0
 numpy>=1.24
 pyarrow>=14.0
-streamlit>=1.36   # st.navigation (multipage) requires 1.36+
+streamlit>=1.36,<1.53   # 1.36+ for st.navigation; <1.53 avoids the experimental Starlette server (gzip middleware breaks)
 plotly>=5.18
 python-dotenv>=1.0
 sshtunnel>=0.4

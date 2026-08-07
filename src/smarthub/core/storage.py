@@ -509,6 +509,38 @@ def read_parquet_dataset(
     return pd.concat((_read(f) for f in files), ignore_index=True)
 
 
+def read_parquet_window(
+    root: str | os.PathLike[str], days: int, columns: list[str] | None = None
+) -> pd.DataFrame:
+    """Read only the most recent ``days`` of a day-partitioned Parquet dataset.
+
+    Each partition file holds one day, so this reads just the last ~``days``
+    files (plus a small margin for partial days / ordering) instead of the whole
+    dataset, then trims to the exact cutoff. This keeps callers -- notably the
+    dashboards -- from loading all accumulated history into memory (which for a
+    long-running deployment can be millions of rows and OOM the container).
+    """
+    root_path = paths.resolve(root)
+    files = sorted(root_path.glob("*/*/*.parquet"))
+    if not files:
+        raise StorageError(f"No Parquet files found under {root_path}.")
+    recent = files[-(days + 2) :] if days and days > 0 else files
+
+    def _read(f):
+        if not columns:
+            return pd.read_parquet(f)
+        available = set(pd.read_parquet(f, columns=[]).columns)
+        picked = [c for c in columns if c in available]
+        return pd.read_parquet(f, columns=picked or None)
+
+    df = pd.concat((_read(f) for f in recent), ignore_index=True)
+    if days and days > 0 and "created_at" in df.columns:
+        ts = pd.to_datetime(df["created_at"], errors="coerce")
+        cutoff = ts.max() - pd.Timedelta(days=days)
+        df = df[ts >= cutoff]
+    return df
+
+
 def parquet_exists(root: str | os.PathLike[str]) -> bool:
     """Return True when any Parquet partition exists under ``root``."""
     return any(paths.resolve(root).glob("*/*/*.parquet"))
@@ -642,8 +674,6 @@ def load_window_raw(
     if settings.use_duckdb and duckdb_exists(path=settings.duckdb_path):
         return read_duckdb_window(days, path=settings.duckdb_path, columns=columns)
     if settings.use_parquet and parquet_exists(settings.parquet_dir):
-        df = read_parquet_dataset(settings.parquet_dir, columns=columns)
-        ts = pd.to_datetime(df["created_at"], errors="coerce")
-        cutoff = ts.max() - pd.Timedelta(days=days)
-        return df[ts >= cutoff]
+        # Partition-aware: read only the recent day-files, not the whole dataset.
+        return read_parquet_window(settings.parquet_dir, days, columns=columns)
     raise StorageError(NO_DATA_MESSAGE)

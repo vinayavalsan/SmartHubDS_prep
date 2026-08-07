@@ -39,9 +39,14 @@ _BIN_MAP = {"1hr": "1h", "6hr": "6h", "12hr": "12h", "day": "D", "week": "W-MON"
 
 
 @st.cache_data
-def load_data():
-    """Build the monitoring base from the real accumulated leads."""
-    return leads_to_monitoring_base(io.load_leads())
+def load_data(days: int):
+    """Build the monitoring base from a recent ``days``-window of leads.
+
+    Bounded read (see ``storage.read_parquet_window``): loading all accumulated
+    history would OOM/hang the dashboard once the deployment has millions of
+    rows. Only the recent day-partitions are read.
+    """
+    return leads_to_monitoring_base(io.load_leads_window(days))
 
 
 def y_label_for(metric: str) -> str:
@@ -169,9 +174,17 @@ def _render_controls(df):
 def main():
     """Run the Monitoring dashboard page (load, filter, aggregate, plot)."""
     st.title("SmartHub Monitoring")
+    # (The inference log lives on the dedicated "Predictions" tab, not here.)
 
+    days = st.selectbox(
+        "History window",
+        options=[7, 14, 30, 60, 90],
+        index=1,
+        format_func=lambda d: f"last {d} days",
+        key="mon_days",
+    )
     try:
-        df = load_data()
+        df = load_data(int(days))
     except io.DataNotFoundError as exc:
         st.error(str(exc))
         st.stop()

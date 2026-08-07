@@ -11,7 +11,10 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
     "pyarrow>=14.0",
-    "streamlit>=1.36",
+    # Upper bound: 1.53 switched to an experimental Starlette/ASGI server whose
+    # gzip middleware breaks against current Starlette (GZipResponder missing
+    # `thread_minimum_size`). Stay on the stable Tornado-based server (<1.53).
+    "streamlit>=1.36,<1.53",
     "plotly>=5.18",
     "python-dotenv>=1.0",
     "sshtunnel>=0.4",
@@ -45,6 +48,7 @@ ml = [
     "uvicorn>=0.29",
     "pydantic>=2.0",
     "requests>=2.31",
+    "boto3>=1.34",   # production model storage on S3 / S3-compatible (MinIO)
 ]
 # Offline "why did Anton bid $X" explanations (SHAP + a local LLM via Ollama —
 # see train_and_predict/explain.py). Also requires the `ml` extra (lightgbm,

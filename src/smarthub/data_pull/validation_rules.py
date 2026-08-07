@@ -17,152 +17,68 @@ from __future__ import annotations
 import pandas as pd
 
 from smarthub.core.lead_types import all_lead_types
-from smarthub.data_pull import models
 from smarthub.feature_engineering.feature_registry import FEATURES
 
+from . import field_registry
+
 # Columns the pull is expected to produce (drives schema-drift detection).
-EXPECTED_COLUMNS: tuple[str, ...] = tuple(c.key for c in models.LEADS_COLUMNS)
-
-# --- Domains ----------------------------------------------------------------
-US_STATES = {
-    "AL",
-    "AK",
-    "AZ",
-    "AR",
-    "CA",
-    "CO",
-    "CT",
-    "DE",
-    "FL",
-    "GA",
-    "HI",
-    "ID",
-    "IL",
-    "IN",
-    "IA",
-    "KS",
-    "KY",
-    "LA",
-    "ME",
-    "MD",
-    "MA",
-    "MI",
-    "MN",
-    "MS",
-    "MO",
-    "MT",
-    "NE",
-    "NV",
-    "NH",
-    "NJ",
-    "NM",
-    "NY",
-    "NC",
-    "ND",
-    "OH",
-    "OK",
-    "OR",
-    "PA",
-    "RI",
-    "SC",
-    "SD",
-    "TN",
-    "TX",
-    "UT",
-    "VT",
-    "VA",
-    "WA",
-    "WV",
-    "WI",
-    "WY",
-    "DC",
-    "PR",
-    "GU",
-    "VI",
-    "AS",
-    "MP",
-}
-GENDER_DOMAIN = {"Male", "Female", "Non-binary"}
-MARITAL_DOMAIN = {"Single", "Married", "Divorced", "Widowed"}
-# Accepted tokens for boolean-ish string columns (compared lower-cased).
-BOOL_TOKENS = {"true", "false", "t", "f", "1", "0", "yes", "no", "y", "n"}
-# Boolean-ish columns whose values should fall in BOOL_TOKENS.
-BOOLISH_COLUMNS = [
-    "insured",
-    "home_owner",
-    "dui",
-    "sr22_required",
-    "pnc_bundle",
-    "military_affiliation",
-    "accepted",
-]
-
-# Plausible numeric ranges (min, max), inclusive. Anything outside is flagged.
-NUMERIC_RANGES = {
-    "age": (1, 200),
-    "num_vehicles": (0, 12),
-    "num_drivers": (0, 6),
-    "num_auto_violations": (0, 20),
-    "num_auto_accidents": (0, 20),
-    "num_auto_claims": (0, 20),
-    "num_home_claims": (0, 20),
-    "num_dependents": (0, 15),
-    "continuous_coverage_months": (0, 600),
-}
-# Columns that must simply be non-negative when present.
-NON_NEGATIVE = [
-    "bid",
-    "exp_rev",
-    "rev",
-    "total_listings",
-    "accepted_listings",
-    "household_income",
-    "annual_revenue",
-    "life_coverage_amount",
-    "num_employees",
-    "response_ms",
-]
+EXPECTED_COLUMNS: tuple[str, ...] = tuple(field_registry.field_names())
 
 
 def leads_schema():
-    """Build the pandera schema for per-column rules (lazy pandera import).
+    """Build the pandera schema from the raw-field registry (lazy pandera import).
 
-    ``required=False`` everywhere (a column may be absent — that's handled by
-    schema-drift detection, not here) and ``coerce=True`` so string numerics
-    are read as numbers. ``strict=False`` so extra columns don't error.
+    The per-column declarative rules are derived from each field's
+    ``ValidationSpec`` in ``field_registry`` — the single source of truth — so
+    ranges/domains/uniqueness are no longer duplicated here:
+
+    - numeric with min **and** max -> ``in_range``; min only -> ``ge`` (both
+      coerce string numerics to float);
+    - categorical with ``allowed_values`` -> ``isin``;
+    - ``unique`` fields (e.g. ``id``) -> unique + not-null.
+
+    Fields whose only check is a ``custom_rule`` (e.g. ``state``) are handled by
+    ``validation_runner`` instead, not pandera. ``required=False`` everywhere (a
+    missing column is caught by schema-drift, not here); ``strict=False`` so
+    extra columns don't error.
 
     Returns
     -------
     pandera.pandas.DataFrameSchema
         Schema enforcing dtypes, numeric ranges, categorical domains, and
-        ``id`` uniqueness.
+        ``id`` uniqueness, all sourced from the registry.
     """
     from pandera.pandas import Check, Column, DataFrameSchema
 
-    cols: dict = {
-        "id": Column(nullable=False, required=False, unique=True),
-        "state": Column(str, Check.isin(US_STATES), nullable=True, required=False),
-        "gender": Column(str, Check.isin(GENDER_DOMAIN), nullable=True, required=False),
-        "marital_status": Column(
-            str, Check.isin(MARITAL_DOMAIN), nullable=True, required=False
-        ),
-    }
-    for col, (lo, hi) in NUMERIC_RANGES.items():
-        cols[col] = Column(
-            float,
-            Check.in_range(lo, hi),
-            nullable=True,
-            required=False,
-            coerce=True,
-        )
-    for col in NON_NEGATIVE:
-        cols[col] = Column(
-            float,
-            Check.ge(0),
-            nullable=True,
-            required=False,
-            coerce=True,
-        )
+    cols: dict = {}
+    for name, spec in field_registry.RAW_FIELD_REGISTRY.items():
+        v = spec.validation
+        checks: list = []
+        dtype = None
+        coerce = False
+        unique = bool(v.unique)
+        nullable = not unique  # id: unique + not-null; everything else nullable
+
+        if v.kind == "numeric":
+            if v.min_value is not None and v.max_value is not None:
+                dtype, coerce = float, True
+                checks.append(Check.in_range(v.min_value, v.max_value))
+            elif v.min_value is not None:
+                dtype, coerce = float, True
+                checks.append(Check.ge(v.min_value))
+        elif v.kind == "categorical" and v.allowed_values:
+            dtype = str
+            checks.append(Check.isin(v.allowed_values))
+
+        if checks or unique:
+            cols[name] = Column(
+                dtype,
+                checks or None,
+                nullable=nullable,
+                required=False,
+                unique=unique,
+                coerce=coerce,
+            )
     return DataFrameSchema(cols, strict=False, coerce=False)
 
 
@@ -317,7 +233,8 @@ def batch_metrics(df: pd.DataFrame) -> dict:
         m["pst_hour_populated"] = _rate(int((~_null_or_blank(df["pst_hour"])).sum()), n)
     if "age" in df.columns:
         age = pd.to_numeric(df["age"], errors="coerce")
-        lo, hi = NUMERIC_RANGES["age"]
+        age_v = field_registry.get("age").validation
+        lo, hi = age_v.min_value, age_v.max_value
         implausible = age.notna() & ~age.between(lo, hi)
         m["age_implausible_rate"] = _rate(int(implausible.sum()), n)
     if "won" in df.columns:

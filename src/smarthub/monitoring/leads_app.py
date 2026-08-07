@@ -22,9 +22,15 @@ from smarthub.monitoring import _ui
 
 
 @st.cache_data
-def load_data():
-    """Load and cache the accumulated leads dataframe."""
-    return io.load_leads()
+def load_data(days: int):
+    """Load and cache a recent ``days``-window of leads.
+
+    Bounded on purpose: a long-running deployment accumulates millions of lead
+    rows, and loading all of them into the dashboard container OOMs/hangs it.
+    The window reads only the recent day-partitions (see
+    ``storage.read_parquet_window``).
+    """
+    return io.load_leads_window(days)
 
 
 def ordered_state_list(df) -> list[str]:
@@ -673,12 +679,20 @@ def _render_metrics(df):
 def main():
     """Run the Leads dashboard page (load, filter, and plot)."""
     st.title("SmartHub Leads")
+    cw1, cw2 = st.columns([1, 3])
+    with cw1:
+        days = st.selectbox(
+            "History window",
+            options=[7, 14, 30, 60, 90],
+            index=1,
+            format_func=lambda d: f"last {d} days",
+        )
     if st.button("🔄 Reload Data"):
         st.cache_data.clear()
         st.rerun()
 
     try:
-        df = load_data()
+        df = load_data(int(days))
     except io.DataNotFoundError as exc:
         st.error(str(exc))
         st.stop()

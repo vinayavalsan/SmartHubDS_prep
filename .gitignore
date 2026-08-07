@@ -65,6 +65,7 @@ data/models/auto/*.json
 data/models/auto/*.pkl
 data/leads
 mlruns
+scripts
 
 # Ignore all data
 data/**
@@ -74,3 +75,9 @@ data/**
 
 docs/SmartHub_Architecture.drawio
 docs/SmartHub_Overview.drawio
+
+# macOS
+.DS_Store
+
+# isort atomic-write temp files
+*.isorted

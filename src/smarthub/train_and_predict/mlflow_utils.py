@@ -1,6 +1,8 @@
 """MLflow integration for SmartHub model training and promotion."""
 
+import logging
 import math
+import os
 from pathlib import Path
 
 import mlflow
@@ -9,21 +11,87 @@ from mlflow import MlflowClient
 
 from smarthub.core import paths
 
+logger = logging.getLogger("smarthub.train_and_predict.mlflow_utils")
+
+
+def _ensure_database_exists(tracking_uri: str) -> None:
+    """For a Postgres tracking URI, create the target database if it's missing.
+
+    MLflow creates its own tables but NOT the database itself, so pointing it at
+    ``.../mlflow`` on the shared Postgres normally needs a one-time manual
+    ``CREATE DATABASE mlflow``. This does it automatically: connect to the
+    server's ``postgres`` maintenance DB and create the target database if it
+    doesn't exist yet. No-op for SQLite / non-Postgres URIs, and best-effort --
+    a failure here just falls through to MLflow's own (clearer) error.
+    """
+    if not tracking_uri.startswith("postgresql"):
+        return
+    try:
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.engine import make_url
+
+        url = make_url(tracking_uri)
+        db_name = url.database
+        if not db_name or db_name == "postgres":
+            return
+        admin_engine = create_engine(
+            url.set(database="postgres"), isolation_level="AUTOCOMMIT"
+        )
+        with admin_engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :n"),
+                {"n": db_name},
+            ).scalar()
+            if not exists:
+                conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+                logger.info(
+                    "Created MLflow database %r on the shared Postgres.", db_name
+                )
+        admin_engine.dispose()
+    except Exception:  # noqa: BLE001 -- best-effort; MLflow will surface a clear error
+        logger.warning(
+            "Could not ensure the MLflow database exists (%s); MLflow will "
+            "report the underlying error if the DB is truly missing.",
+            tracking_uri,
+            exc_info=True,
+        )
+
 
 def _is_loggable_number(value):
     """Return whether a value is a finite MLflow metric."""
     return isinstance(value, (int, float)) and not math.isnan(float(value))
 
 
-def _configure_tracking(tracking_db_path, artifact_root, experiment_name):
-    """Configure local MLflow metadata and artifact storage."""
+def _resolve_tracking_uri(tracking_db_path):
+    """Resolve MLflow's backend store (metadata) URI.
+
+    ``SMARTHUB_MLFLOW_TRACKING_URI`` wins when set -- e.g. the shared Prefect
+    Postgres (``postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow``) --
+    so Docker deployments consolidate metadata onto one database instead of a
+    SQLite file (which also sidesteps the absolute-artifact-path bug that a
+    file store bakes in). Otherwise fall back to the local SQLite file at
+    ``tracking_db_path`` for non-Docker/dev use. Note: this is only the
+    *metadata* store; artifacts still live under ``artifact_root`` (the
+    ``mlruns`` tree / later S3).
+    """
+    override = os.getenv("SMARTHUB_MLFLOW_TRACKING_URI")
+    if override:
+        return override
     db_path = Path(paths.resolve(tracking_db_path))
-    artifact_path = Path(paths.resolve(artifact_root))
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{db_path}"
+
+
+def _configure_tracking(tracking_db_path, artifact_root, experiment_name):
+    """Configure MLflow metadata (backend store) and artifact storage."""
+    artifact_path = Path(paths.resolve(artifact_root))
     artifact_path.mkdir(parents=True, exist_ok=True)
 
-    tracking_uri = f"sqlite:///{db_path}"
+    tracking_uri = _resolve_tracking_uri(tracking_db_path)
     artifact_uri = artifact_path.as_uri()
+    # Auto-create the target Postgres database if it's missing (no-op for
+    # SQLite), so MLflow-on-Postgres needs no manual `CREATE DATABASE mlflow`.
+    _ensure_database_exists(tracking_uri)
     mlflow.set_tracking_uri(tracking_uri)
 
     client = MlflowClient(tracking_uri=tracking_uri)
@@ -241,3 +309,64 @@ def promote_training_run(
         "mlflow_registered_model_name": registered_model_name,
         "mlflow_registered_model_version": mlflow_model_version,
     }
+
+
+def log_production_model(
+    *,
+    tracking_uri,
+    experiment_name,
+    registered_model_name,
+    run_name,
+    model,
+    model_params=None,
+    feature_cols=None,
+    metrics=None,
+    tags=None,
+):
+    """Log a promoted model to the PRODUCTION MLflow server and register it.
+
+    Production MLflow only ever sees promoted models. The training run lived in
+    the *local* MLflow (via :func:`log_training_run`), so here we create a fresh
+    run on the production tracking server, log its params/metrics/model, and
+    register it under ``registered_model_name`` -- giving production a clean
+    registry + lineage of only the models that were actually promoted.
+
+    Returns production MLflow metadata (prefixed ``production_``) to persist on
+    the training-run manifest.
+    """
+    mlflow.set_tracking_uri(tracking_uri)
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.get_experiment_by_name(experiment_name)
+    experiment_id = (
+        experiment.experiment_id
+        if experiment is not None
+        else client.create_experiment(experiment_name)
+    )
+
+    with mlflow.start_run(experiment_id=experiment_id, run_name=run_name) as run:
+        for name, value in (model_params or {}).items():
+            if value is not None:
+                mlflow.log_param(name, value)
+        if feature_cols:
+            mlflow.log_param("feature_count", len(feature_cols))
+            mlflow.log_param("features", ",".join(feature_cols))
+        for name, value in (metrics or {}).items():
+            if _is_loggable_number(value):
+                mlflow.log_metric(name, value)
+        for name, value in (tags or {}).items():
+            if value is not None:
+                mlflow.set_tag(name, str(value))
+        mlflow.sklearn.log_model(
+            sk_model=model, name="model", serialization_format="pickle"
+        )
+        model_uri = f"runs:/{run.info.run_id}/model"
+        registered = mlflow.register_model(
+            model_uri=model_uri, name=registered_model_name
+        )
+        return {
+            "production_mlflow_run_id": run.info.run_id,
+            "production_mlflow_experiment_id": experiment_id,
+            "production_mlflow_tracking_uri": tracking_uri,
+            "production_registered_model_name": registered_model_name,
+            "production_registered_model_version": str(registered.version),
+        }

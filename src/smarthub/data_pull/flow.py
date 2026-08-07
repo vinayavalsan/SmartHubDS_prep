@@ -21,10 +21,10 @@ from prefect.variables import Variable
 
 from smarthub.core import notifications, storage, task_config
 from smarthub.core.config import PullSettings, StorageSettings
+from smarthub.data_pull import validation_report as vreport
 from smarthub.data_pull.pull import fetch_leads
+from smarthub.data_pull.validation_runner import validate_leads
 from smarthub.data_pull.windowing import compute_pull_window, format_dt, parse_dt
-from smarthub.validation import report as vreport
-from smarthub.validation import validate_leads
 
 WATERMARK_PREFIX = "smarthub_last_pull_timestamp"
 
@@ -134,7 +134,7 @@ def persist(df: pd.DataFrame) -> dict:
 
 
 @task(name="validate-leads")
-def validate(df: pd.DataFrame, lead_type_name: str):
+def validate(df: pd.DataFrame, lead_type_name: str, lead_type_id: int):
     """Validate the freshly-pulled batch (warn + report only; never gates).
 
     Publishes a per-lead-type data-quality Prefect artifact so the success
@@ -147,6 +147,8 @@ def validate(df: pd.DataFrame, lead_type_name: str):
         The freshly-pulled leads batch.
     lead_type_name : str
         Lead type name, used in the artifact key and description.
+    lead_type_id : int
+        Lead type id; scopes the high-missing catalogue to this type's fields.
 
     Returns
     -------
@@ -156,7 +158,9 @@ def validate(df: pd.DataFrame, lead_type_name: str):
     logger = get_run_logger()
     threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
     try:
-        rep = validate_leads(df, high_missing_threshold=threshold)
+        rep = validate_leads(
+            df, high_missing_threshold=threshold, lead_type_id=lead_type_id
+        )
     except Exception as exc:  # noqa: BLE001 - validation must never break a pull
         logger.warning("Data validation skipped (error): %s", exc)
         return None
@@ -243,7 +247,7 @@ def data_pull_flow(
 
     previous_watermark = Variable.get(var_name, default="(none — first run)")
     df = fetch(min_s, max_s, lead_type_id, with_expected_revenue, selected_only)
-    quality = validate(df, lead_type_name)
+    quality = validate(df, lead_type_name, lead_type_id)
     result = persist(df)
     watermark = update_watermark(df, var_name, max_s)
 

@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import rules
+from . import field_registry
+from . import validation_rules as rules
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +130,50 @@ def _run_schema_checks(df: pd.DataFrame):
         return violations, True
 
 
+def _run_custom_rules(df: pd.DataFrame) -> list[RuleViolation]:
+    """Run each registered field's ``custom_rule`` and fold hits into violations.
+
+    Custom rules are plain pandas (see ``validation_custom``), so — unlike the
+    pandera schema — they run even when pandera isn't installed. A rule that
+    raises is logged and skipped; validation must never break the pull.
+
+    Inputs
+    ------
+    df : pd.DataFrame
+        Batch to validate.
+
+    Returns
+    -------
+    list[RuleViolation]
+        One violation per field whose custom rule reported a non-zero count.
+    """
+    violations: list[RuleViolation] = []
+    for name, spec in field_registry.RAW_FIELD_REGISTRY.items():
+        rule = spec.validation.custom_rule
+        if rule is None or name not in df.columns:
+            continue
+        try:
+            result = rule(df[name])
+        except Exception as exc:  # noqa: BLE001
+            # A custom rule must never break validation of the pull.
+            logger.warning("Custom validation rule for '%s' failed: %s", name, exc)
+            continue
+        if result is not None and int(getattr(result, "count", 0)) > 0:
+            violations.append(
+                RuleViolation(
+                    column=name,
+                    check=result.check,
+                    count=int(result.count),
+                    examples=list(result.examples),
+                )
+            )
+    return violations
+
+
 def validate_leads(
     df: pd.DataFrame,
     high_missing_threshold: float = DEFAULT_HIGH_MISSING_THRESHOLD,
+    lead_type_id: int | None = None,
 ) -> ValidationReport:
     """Validate a raw ``lead_pings`` batch. Detect-only; never mutates ``df``.
 
@@ -141,6 +183,13 @@ def validate_leads(
         The raw batch to validate.
     high_missing_threshold : float
         Null/blank rate at/above which a column is flagged as high-missing.
+    lead_type_id : int | None
+        When given (a single-lead-type batch), the high-missing catalogue is
+        scoped to the fields that apply to that lead type, so other products'
+        columns — legitimately empty for this type (e.g. ``home_*`` on an auto
+        pull) — aren't flagged as high-missing. ``None`` (e.g. an all-types
+        pull) applies no scoping. The full per-column ``missing`` rates are
+        always kept intact regardless.
 
     Returns
     -------
@@ -150,9 +199,19 @@ def validate_leads(
     total = len(df)
     schema_issues = rules.schema_drift(df)
     rule_violations, schema_checked = _run_schema_checks(df)
+    rule_violations = rule_violations + _run_custom_rules(df)
     cross = rules.cross_field_checks(df)
     missing = rules.missing_rates(df)
-    high_missing = sorted(c for c, r in missing.items() if r >= high_missing_threshold)
+    out_of_scope = (
+        field_registry.columns_not_for_lead_type(lead_type_id)
+        if lead_type_id is not None
+        else set()
+    )
+    high_missing = sorted(
+        c
+        for c, r in missing.items()
+        if r >= high_missing_threshold and c not in out_of_scope
+    )
     metrics = rules.batch_metrics(df)
 
     return ValidationReport(

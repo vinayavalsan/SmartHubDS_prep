@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from .validate import ValidationReport
+from .validation_runner import ValidationReport
 
 
 def _pct(value) -> str:

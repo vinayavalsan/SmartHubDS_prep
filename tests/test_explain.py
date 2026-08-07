@@ -685,7 +685,9 @@ def _tiny_lightgbm_pipeline(calibrate=False):
         NUMERIC,
         CATEGORICAL,
         model_params={"n_estimators": 5, "min_child_samples": 1, "num_leaves": 7},
-        calibrate=calibrate,
+        calibration_enabled=calibrate,
+        calibration_method="isotonic",
+        calibration_cv=3,
     )
     model.fit(frame, y)
     return model
@@ -727,7 +729,9 @@ def test_fitted_lgbm_estimators_rejects_non_lightgbm(small_feature_columns):
         NUMERIC,
         CATEGORICAL,
         model_params={},
-        calibrate=False,
+        calibration_enabled=False,
+        calibration_method="isotonic",
+        calibration_cv=3,
     )
     frame = pd.DataFrame({"bid": [1.0, 2.0], "age": [30, 40], "state": ["TX", "CA"]})
     model.fit(frame, [0, 1])

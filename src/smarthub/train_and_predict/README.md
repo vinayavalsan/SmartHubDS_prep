@@ -731,7 +731,7 @@ It can:
 - build nearby bid-curve facts,
 - optionally use a local Ollama model to turn structured numeric facts into a short explanation.
 
-### `train_and_predict/manual_api_check.py`
+### `server/manual_api_check.py`
 
 Provides a small sample client for manually testing the recommendation endpoint.
 
@@ -817,13 +817,13 @@ python -m smarthub.train_and_predict.hyperparameter_search \
 The production application lives in `src/smarthub/server/predict.py`:
 
 ```bash
-uvicorn smarthub.server.predict:app --host 0.0.0.0 --port 8000
+uvicorn smarthub.server.app:app --host 0.0.0.0 --port 8000
 ```
 
 For local development with automatic reload:
 
 ```bash
-uvicorn smarthub.server.predict:app \
+uvicorn smarthub.server.app:app \
   --host 127.0.0.1 \
   --port 8000 \
   --reload
@@ -838,7 +838,7 @@ curl "http://127.0.0.1:8000/health?lead_type_id=6"
 ## Test a bid request
 
 ```bash
-python -m smarthub.train_and_predict.manual_api_check
+python -m smarthub.server.manual_api_check
 ```
 
 ## Manually promote a saved model
@@ -870,7 +870,7 @@ python -m smarthub.train_and_predict.registry promote \
 | `train_and_predict/plots_and_reports.py` | Training | Writes plots, CSVs, and JSON evaluation reports | Output paths from `training.yaml` |
 | `train_and_predict/prediction_log_schema.py` | Prediction | Defines and writes the single-table prediction audit log | `SMARTHUB_PREDICTION_LOG_DB_URL` plus values supplied by serving |
 | `train_and_predict/explain.py` | Prediction support | Produces SHAP and optional Ollama explanations | `smarthub.yaml` explain settings |
-| `train_and_predict/manual_api_check.py` | Prediction support | Sends a sample request to the local API | URL and sample payload in the script |
+| `server/manual_api_check.py` | Prediction support | Sends a sample request to the local API | URL and sample payload in the script |
 | `server/predict.py` | Prediction | Production FastAPI application and serving-policy entry point | `smarthub.yaml` |
 
 ---

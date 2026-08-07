@@ -225,7 +225,7 @@ The FastAPI service serves whichever model version is currently promoted for the
 request's `lead_type_id`:
 
 ```bash
-uvicorn smarthub.server.predict:app --reload --port 8000
+uvicorn smarthub.server.app:app --reload --port 8000
 ```
 
 - `GET  /health?lead_type_id=6` — reports which model artifact would be served
@@ -238,7 +238,7 @@ or MLflow URI), or `config/smarthub.yaml prediction.active_model_version`.
 Send a sample request with the bundled client (start the API first):
 
 ```bash
-python -m smarthub.train_and_predict.manual_api_check
+python -m smarthub.server.manual_api_check
 ```
 
 ---

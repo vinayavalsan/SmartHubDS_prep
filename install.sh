@@ -14,13 +14,16 @@ LOCAL_OVERRIDE="docker-compose.local.yml"
 # Host ports the stack binds (free these on --down).
 HOST_PORTS=(4200 8501)
 REQUIRED_VARS=(
-  SSH_HOST
-  SSH_USER
-  SSH_PRIVATE_KEY_PATH
   REDSHIFT_HOST
   REDSHIFT_DB
   REDSHIFT_USER
   REDSHIFT_PASSWORD
+)
+# SSH_* is only required when the bastion tunnel is used (SSH_TUNNEL != false).
+SSH_VARS=(
+  SSH_HOST
+  SSH_USER
+  SSH_PRIVATE_KEY_PATH
 )
 
 red()   { printf "\033[31m%s\033[0m\n" "$*"; }
@@ -90,8 +93,18 @@ source .env
 set +a
 
 # --- 3. Required variables non-empty ----------------------------------------
+# SSH bastion is on by default; SSH_TUNNEL=false connects to Redshift directly
+# (e.g. an EC2 host in the same VPC) and needs no SSH_* vars or key.
+use_tunnel=true
+case "${SSH_TUNNEL:-true}" in
+  0 | [Ff]alse | [Nn]o | [Oo]ff) use_tunnel=false ;;
+esac
+
+req_vars=("${REQUIRED_VARS[@]}")
+$use_tunnel && req_vars+=("${SSH_VARS[@]}")
+
 missing=()
-for var in "${REQUIRED_VARS[@]}"; do
+for var in "${req_vars[@]}"; do
   [[ -n "${!var:-}" ]] || missing+=("$var")
 done
 if (( ${#missing[@]} )); then
@@ -101,10 +114,14 @@ if (( ${#missing[@]} )); then
 fi
 green "✓ required variables set"
 
-# --- 4. SSH key file exists --------------------------------------------------
-key_path="${SSH_PRIVATE_KEY_PATH/#\~/$HOME}"
-[[ -f "$key_path" ]] || fail "SSH key not found at SSH_PRIVATE_KEY_PATH: $key_path"
-green "✓ SSH key found ($key_path)"
+# --- 4. SSH key file exists (only when tunnelling) --------------------------
+if $use_tunnel; then
+  key_path="${SSH_PRIVATE_KEY_PATH/#\~/$HOME}"
+  [[ -f "$key_path" ]] || fail "SSH key not found at SSH_PRIVATE_KEY_PATH: $key_path"
+  green "✓ SSH key found ($key_path)"
+else
+  info "SSH_TUNNEL=false — skipping SSH key check (direct Redshift connection)"
+fi
 
 # --- 5. STORAGE_BACKEND valid (if set) --------------------------------------
 backend="${STORAGE_BACKEND:-both}"

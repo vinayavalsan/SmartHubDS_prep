@@ -59,6 +59,55 @@ def test_load_currently_serving_none_when_file_missing():
     assert registry.load_currently_serving_model("auto") == (None, None)
 
 
+# --- Production storage routing -----------------------------------------------
+
+
+def test_promote_publishes_only_promoted_model_to_production(tmp_path, monkeypatch):
+    """promote() copies artifact + manifest + pointer to the production store."""
+    from smarthub.train_and_predict.model_storage import FilesystemModelStore
+
+    prod = FilesystemModelStore(tmp_path / "prod")
+    monkeypatch.setattr(registry, "_production_store", lambda: prod)
+
+    m = _save()
+    version = m["version"]
+    # A saved-but-unpromoted run must NOT be in production yet.
+    assert not prod.exists(f"auto/{version}.pkl")
+
+    registry.promote("auto", version, reason="test")
+
+    assert prod.exists(f"auto/{version}.pkl")
+    assert prod.exists(f"auto/{version}.json")
+    pointer = registry.production_serving_pointer("auto")
+    assert pointer["training_run_id"] == version
+    assert pointer["production_model_version"] == "auto_v1"
+
+
+def test_load_serving_model_prefers_production(tmp_path, monkeypatch):
+    """load_serving_model resolves from the production store when configured."""
+    from smarthub.train_and_predict.model_storage import FilesystemModelStore
+
+    prod = FilesystemModelStore(tmp_path / "prod")
+    monkeypatch.setattr(registry, "_production_store", lambda: prod)
+
+    m = _save()
+    registry.promote("auto", m["version"])
+
+    model, manifest = registry.load_serving_model("auto")
+    assert model == {"fake": "model"}
+    assert manifest["version"] == m["version"]
+
+
+def test_load_serving_model_falls_back_to_local_when_no_production(monkeypatch):
+    """With production disabled, serving uses local storage unchanged."""
+    monkeypatch.setattr(registry, "_production_store", lambda: None)
+    m = _save()
+    registry.promote("auto", m["version"])
+    model, manifest = registry.load_serving_model("auto")
+    assert model == {"fake": "model"}
+    assert manifest["version"] == m["version"]
+
+
 # --- Versioning ---------------------------------------------------------------
 
 

@@ -41,30 +41,33 @@ from smarthub.data_pull.models import (
 logger = get_logger(__name__)
 
 
-def _build_engine(rs: RedshiftSettings, local_port: int) -> Engine:
-    """Create a SQLAlchemy engine that connects through the open SSH tunnel.
+def _build_engine(rs: RedshiftSettings, host: str, port: int) -> Engine:
+    """Create a SQLAlchemy engine that connects to Redshift at ``host:port``.
 
-    A ``creator`` is used so the socket goes through ``localhost`` on the
-    tunnel's local port while SQLAlchemy still uses the Redshift dialect to
-    compile queries.
+    A ``creator`` is used so the socket targets the given host/port (either
+    ``localhost`` on an SSH tunnel's local port, or the Redshift endpoint
+    directly) while SQLAlchemy still uses the Redshift dialect to compile
+    queries.
 
     Inputs
     ------
     rs : RedshiftSettings
         Redshift connection settings (database, user, password, timeout).
-    local_port : int
-        Local port the SSH tunnel is forwarding to Redshift.
+    host : str
+        Host to connect to -- ``"localhost"`` when tunnelling, else ``rs.host``.
+    port : int
+        Port to connect to -- the tunnel's local port, else ``rs.port``.
 
     Returns
     -------
     sqlalchemy.engine.Engine
-        Engine bound to the tunnelled connection.
+        Engine bound to the connection.
     """
 
     def _connect():
         return redshift_connector.connect(
-            host="localhost",
-            port=local_port,
+            host=host,
+            port=port,
             database=rs.database,
             user=rs.user,
             password=rs.password,
@@ -118,21 +121,34 @@ def fetch_leads(
     else:
         stmt = leads_select(min_created_at, max_created_at, lead_type_id=lead_type_id)
 
-    with SSHTunnelForwarder(
-        (ssh.host, ssh.port),
-        ssh_username=ssh.user,
-        ssh_pkey=str(ssh.private_key_path),
-        ssh_private_key_password=ssh.private_key_password,
-        remote_bind_address=(rs.host, rs.port),
-    ) as tunnel:
-        logger.info("SSH tunnel established on localhost:%s", tunnel.local_bind_port)
-
-        engine = _build_engine(rs, tunnel.local_bind_port)
+    def _run(engine: Engine) -> pd.DataFrame:
         try:
             with engine.connect() as conn:
-                leads_df = pd.read_sql(stmt, conn)
+                return pd.read_sql(stmt, conn)
         finally:
             engine.dispose()
+
+    if not settings.use_ssh_tunnel:
+        # Direct connection (SSH_TUNNEL=false) -- e.g. the host is in the same
+        # VPC as Redshift. No bastion / key needed.
+        logger.info(
+            "SSH_TUNNEL=false -- connecting directly to Redshift %s:%s",
+            rs.host,
+            rs.port,
+        )
+        leads_df = _run(_build_engine(rs, rs.host, rs.port))
+    else:
+        with SSHTunnelForwarder(
+            (ssh.host, ssh.port),
+            ssh_username=ssh.user,
+            ssh_pkey=str(ssh.private_key_path),
+            ssh_private_key_password=ssh.private_key_password,
+            remote_bind_address=(rs.host, rs.port),
+        ) as tunnel:
+            logger.info(
+                "SSH tunnel established on localhost:%s", tunnel.local_bind_port
+            )
+            leads_df = _run(_build_engine(rs, "localhost", tunnel.local_bind_port))
 
     leads_df = coerce_leads_dtypes(leads_df)
     logger.info("Fetched leads frame with shape %s", leads_df.shape)
@@ -178,13 +194,13 @@ def run(
         selected_only=selected_only,
         lead_type_id=lead_type_id,
     )
-    _validate(leads_df)
+    _validate(leads_df, lead_type_id=lead_type_id)
     results = storage.save_pull(leads_df, StorageSettings.from_env())
     logger.info("Persisted pull: %s", results)
     return leads_df
 
 
-def _validate(leads_df: pd.DataFrame) -> None:
+def _validate(leads_df: pd.DataFrame, lead_type_id: int | None = None) -> None:
     """Run data validation on the fetched batch (warn + report only).
 
     Detect-only: logs a summary and never drops rows or fails the pull.
@@ -193,14 +209,19 @@ def _validate(leads_df: pd.DataFrame) -> None:
     ------
     leads_df : pandas.DataFrame
         The freshly-fetched leads batch.
+    lead_type_id : int | None
+        Lead type of the batch; scopes the high-missing catalogue so other
+        products' columns aren't flagged (``None`` for an all-types pull).
     """
     try:
         from smarthub.core import task_config
-        from smarthub.validation import report as vreport
-        from smarthub.validation import validate_leads
+        from smarthub.data_pull import validation_report as vreport
+        from smarthub.data_pull.validation_runner import validate_leads
 
         threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
-        vreport.log_summary(validate_leads(leads_df, threshold), logger)
+        vreport.log_summary(
+            validate_leads(leads_df, threshold, lead_type_id=lead_type_id), logger
+        )
     except Exception as exc:  # noqa: BLE001 - validation must never break a pull
         logger.warning("Data validation skipped (error): %s", exc)
 

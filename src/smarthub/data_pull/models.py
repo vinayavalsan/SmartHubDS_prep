@@ -29,6 +29,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from . import query_builder
+
 _DT_FORMAT = "%Y-%m-%d %H:%M:%S"
 DateLike = Union[str, datetime]
 
@@ -164,64 +166,14 @@ class LeadPingListing(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime)
 
 
-# Curated, non-PII column set pulled for analysis (in a stable order).
-# PII / opaque columns (token, uid, ip_address, user_agent, jornaya_lead_id,
-# trusted_form_token, submission_url, date_of_birth) are deliberately excluded.
-LEADS_COLUMNS: Sequence = (
-    LeadPing.id,
-    LeadPing.created_at,
-    LeadPing.account_id,
-    LeadPing.campaign_id,
-    LeadPing.lead_type_id,
-    LeadPing.source_type_id,
-    LeadPing.bidding_strategy_id,
-    LeadPing.traffic_tier,
-    LeadPing.total_listings,
-    LeadPing.accepted_listings,
-    LeadPing.bid,
-    LeadPing.rev,
-    LeadPing.won,
-    LeadPing.accepted,
-    LeadPing.erred,
-    LeadPing.error_reason_id,
-    LeadPing.response_ms,
-    LeadPing.zip,
-    LeadPing.city,
-    LeadPing.state,
-    LeadPing.device_type,
-    LeadPing.insured,
-    LeadPing.current_carrier,
-    LeadPing.continuous_coverage_months,
-    LeadPing.military_affiliation,
-    LeadPing.credit,
-    LeadPing.pnc_bundle,
-    LeadPing.home_owner,
-    LeadPing.gender,
-    LeadPing.marital_status,
-    LeadPing.num_drivers,
-    LeadPing.num_vehicles,
-    LeadPing.dui,
-    LeadPing.sr22_required,
-    LeadPing.age,
-    LeadPing.num_auto_violations,
-    LeadPing.num_auto_claims,
-    LeadPing.num_auto_accidents,
-    LeadPing.num_home_claims,
-    LeadPing.home_property_type,
-    LeadPing.num_dependents,
-    LeadPing.health_conditions,
-    LeadPing.household_income,
-    LeadPing.life_coverage_type,
-    LeadPing.life_coverage_amount,
-    LeadPing.naics_code,
-    LeadPing.sic_code,
-    LeadPing.num_employees,
-    LeadPing.annual_revenue,
-    LeadPing.lead_created_at,
-    LeadPing.expiration_date,
-    LeadPing.pst_date,
-    LeadPing.pst_hour,
-    LeadPing.exp_rev,
+# Curated, non-PII column set pulled for analysis, DRIVEN BY the raw-field
+# registry (field_registry.RAW_FIELD_REGISTRY) — the single source of truth for
+# which raw fields the pull extracts and in what order. PII / opaque columns
+# (token, uid, ip_address, user_agent, jornaya_lead_id, trusted_form_token,
+# submission_url, date_of_birth) are excluded by not being registered. Each
+# registered field name resolves to its ORM column here, preserving order.
+LEADS_COLUMNS: Sequence = tuple(
+    getattr(LeadPing, name) for name in query_builder.leads_column_names()
 )
 
 

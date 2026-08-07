@@ -505,7 +505,7 @@ regardless of the registry (or pin per lead type via `config/smarthub.yaml
 **Local/dev — run it directly:**
 
 ```bash
-uvicorn smarthub.server.predict:app --port 8000
+uvicorn smarthub.server.app:app --port 8000
 # POST /recommend_bid  ·  GET /health?lead_type_id=6
 ```
 
