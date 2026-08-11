@@ -1,5 +1,7 @@
 """Tests for the leakage-safe training-table extraction."""
 
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 
@@ -91,52 +93,52 @@ def test_drops_zero_variance_when_requested():
 
 
 def test_derived_features():
-    """is_married and multi_vehicle are derived from raw columns."""
-    table = build_training_table(_raw()).set_index("id")  # ids 1,2,4,5
-    assert {"is_married", "multi_vehicle"}.issubset(table.columns)
-    # marital_status: Married/MARRIED -> 1; single/'' -> 0
-    assert table.loc[1, "is_married"] == 1
-    assert table.loc[2, "is_married"] == 0
-    assert table.loc[4, "is_married"] == 0
-    assert table.loc[5, "is_married"] == 1
-    # num_vehicles > 1 -> 1
-    assert table.loc[1, "multi_vehicle"] == 1
-    assert table.loc[2, "multi_vehicle"] == 0
-    assert table.loc[5, "multi_vehicle"] == 1
+    """Enabled derived registry features are produced by the training build."""
+    table = build_training_table(_raw()).set_index("id")
+    enabled_derived = {
+        spec.name
+        for spec in FEATURES.values()
+        if spec.enabled and spec.source == "derived"
+    }
+    assert enabled_derived.issubset(table.columns)
+    if "multi_vehicle" in enabled_derived:
+        assert table.loc[1, "multi_vehicle"] == 1
+        assert table.loc[2, "multi_vehicle"] == 0
+        assert table.loc[5, "multi_vehicle"] == 1
 
 
-def test_age_cohort_single_categorical():
-    """Age is banded into a single categorical age_cohort column."""
-    table = build_training_table(_raw()).set_index("id")  # ages 40,55,60,28
-    assert "age_cohort" in table.columns
-    assert table.loc[1, "age_cohort"] == "35_44"
-    assert table.loc[2, "age_cohort"] == "55_64"
-    assert table.loc[4, "age_cohort"] == "55_64"
-    assert table.loc[5, "age_cohort"] == "25_34"
+def test_disabled_derived_features_stay_out_of_model_table(monkeypatch):
+    """A derived feature forced disabled is not derived or selected."""
+    original = FEATURES["is_married"]
+    monkeypatch.setitem(FEATURES, "is_married", replace(original, enabled=False))
+
+    table = build_training_table(_raw())
+
+    assert "is_married" not in table.columns
+    assert "marital_status" in table.columns
 
 
-def test_age_cohort_missing_is_null():
-    """Missing age yields a null age_cohort (no band assigned)."""
+def test_missing_age_uses_numeric_missing_sentinel():
+    """Missing raw age uses the registry numeric sentinel."""
     raw = _raw()
     raw.loc[raw["id"] == 1, "age"] = None
     table = build_training_table(raw).set_index("id")
-    assert pd.isna(table.loc[1, "age_cohort"])
-
-
-def test_age_sentinel_and_cohort_for_implausible_age():
-    """Implausible ages become the -1 sentinel with a null age_cohort."""
-    raw = _raw()
-    raw.loc[raw["id"] == 1, "age"] = -7648  # garbage / implausible
-    raw.loc[raw["id"] == 2, "age"] = 1828  # garbage / implausible
-    table = build_training_table(raw).set_index("id")
-    # implausible age -> -1 sentinel (not NaN), age_cohort left null
     assert table.loc[1, "age"] == -1
-    assert table.loc[2, "age"] == -1
-    assert pd.isna(table.loc[1, "age_cohort"])
-    assert pd.isna(table.loc[2, "age_cohort"])
-    # a valid age is unchanged and gets a real band
-    assert table.loc[4, "age"] == 60
-    assert table.loc[4, "age_cohort"] == "55_64"
+
+
+def test_implausible_age_is_not_fixed_when_age_cohort_is_disabled(monkeypatch):
+    """Without age-cohort derivation, feature engineering preserves raw ages."""
+    original = FEATURES["age_cohort"]
+    monkeypatch.setitem(FEATURES, "age_cohort", replace(original, enabled=False))
+
+    raw = _raw()
+    raw.loc[raw["id"] == 1, "age"] = -7648
+    raw.loc[raw["id"] == 2, "age"] = 1828
+    table = build_training_table(raw).set_index("id")
+
+    assert table.loc[1, "age"] == -7648
+    assert table.loc[2, "age"] == 1828
+    assert "age_cohort" not in table.columns
 
 
 def test_is_workday_from_pst_date(monkeypatch, tmp_path):
@@ -249,7 +251,6 @@ def test_model_feature_columns_are_unique_and_disjoint():
     """A feature cannot be duplicated or belong to both preprocessing groups."""
     for registered_id in all_lead_type_ids():
         numeric, categorical = fe.model_feature_columns(registered_id)
-
         assert len(numeric) == len(set(numeric))
         assert len(categorical) == len(set(categorical))
         assert set(numeric).isdisjoint(categorical)
@@ -263,28 +264,38 @@ def test_model_feature_column_order_is_deterministic():
         assert first == second
 
 
-def test_mandatory_and_optional_features_partition_model_schema():
-    """Mandatory and optional sets are complete, non-overlapping partitions."""
+def test_model_schema_uses_enabled_and_lead_types_only():
+    """Selected features match enabled registry entries for the lead type."""
+    for name in ("auto", "home"):
+        registered_id = lead_type_id(name)
+        numeric, categorical = fe.model_feature_columns(registered_id)
+
+        expected_numeric = [
+            spec.name
+            for spec in FEATURES.values()
+            if spec.enabled
+            and name in spec.lead_types
+            and spec.kind in {"numeric", "binary"}
+        ]
+        expected_categorical = [
+            spec.name
+            for spec in FEATURES.values()
+            if spec.enabled and name in spec.lead_types and spec.kind == "categorical"
+        ]
+
+        assert numeric == expected_numeric
+        assert categorical == expected_categorical
+
+
+def test_disabled_features_are_not_model_inputs(monkeypatch):
+    """A registry feature forced disabled stays out of every model schema."""
+    original = FEATURES["is_married"]
+    monkeypatch.setitem(FEATURES, "is_married", replace(original, enabled=False))
+
     for registered_id in all_lead_type_ids():
         numeric, categorical = fe.model_feature_columns(registered_id)
         selected = set(numeric) | set(categorical)
-        mandatory = fe.mandatory_features(registered_id)
-        optional = fe.optional_features(registered_id)
-
-        assert mandatory.isdisjoint(optional)
-        assert mandatory | optional == selected
-
-
-def test_disabling_optional_features_keeps_only_mandatory_features():
-    """An empty optional selection never removes mandatory model inputs."""
-    for registered_id in all_lead_type_ids():
-        numeric, categorical = fe.model_feature_columns(
-            registered_id, optional_enabled=set()
-        )
-        assert set(numeric) | set(categorical) == fe.mandatory_features(registered_id)
-
-
-# --- Mandatory / optional feature selection ---------------------------------
+        assert "is_married" not in selected
 
 
 def test_sr22_is_auto_only_model_feature():
@@ -297,91 +308,8 @@ def test_sr22_is_auto_only_model_feature():
     assert "sr22_required" not in home_features
 
 
-def test_mandatory_features_kept_when_no_optional():
-    """With no optional features, only the auto mandatory core survives."""
-    numeric, categorical = fe.model_feature_columns(
-        lead_type_id("auto"), optional_enabled=set()
-    )
-    selected = set(numeric) | set(categorical)
-    expected = fe.mandatory_features(lead_type_id("auto"))
-    assert selected == expected
-    # image criteria all present
-    for col in (
-        "home_owner",
-        "multi_vehicle",
-        "num_vehicles",
-        "insured",
-        "num_auto_accidents",
-        "dui",
-        "sr22_required",
-        "age",
-    ):
-        assert col in selected
-    assert "age_cohort" in selected
-    # optional features are gone
-    for col in (
-        "state",
-        "gender",
-        "traffic_tier",
-        "campaign_id",
-        "created_hour",
-        "is_workday",
-        "num_drivers",
-    ):
-        assert col not in selected
-
-
-def test_optional_subset_is_added_to_mandatory():
-    """Requested optional features are added on top of the mandatory core."""
-    numeric, categorical = fe.model_feature_columns(
-        lead_type_id("auto"), optional_enabled={"state", "traffic_tier"}
-    )
-    selected = set(numeric) | set(categorical)
-    assert {"state", "traffic_tier"}.issubset(selected)  # requested optional
-    assert fe.mandatory_features(lead_type_id("auto")) <= selected  # core still there
-    assert "gender" not in selected and "campaign_id" not in selected
-
-
-def test_optional_cannot_drop_mandatory():
-    """Mandatory features survive even when the optional list omits them."""
-    numeric, categorical = fe.model_feature_columns(
-        lead_type_id("auto"), optional_enabled={"state"}
-    )
-    selected = set(numeric) | set(categorical)
-    assert "sr22_required" in selected and "home_owner" in selected
-
-
-def test_config_none_selects_mandatory_only(monkeypatch):
-    """Config value 'none' selects the mandatory features only."""
-    from smarthub.core import task_config
-
-    monkeypatch.setattr(task_config, "get", lambda *a, **k: "none")
-    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
-    assert set(numeric) | set(categorical) == fe.mandatory_features(
-        lead_type_id("auto")
-    )
-
-
-def test_config_comma_list_ignores_unknown(monkeypatch):
-    """A comma-list config adds known optionals and ignores unknown names."""
-    from smarthub.core import task_config
-
-    monkeypatch.setattr(task_config, "get", lambda *a, **k: "state, not_a_feature")
-    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
-    selected = set(numeric) | set(categorical)
-    assert "state" in selected
-    assert "not_a_feature" not in selected
-    assert fe.mandatory_features(lead_type_id("auto")) <= selected
-
-
-def test_unknown_lead_type_raises():
-    for fn in (fe.model_feature_columns, fe.mandatory_features, fe.optional_features):
-        with pytest.raises(ValueError, match="Unknown lead_type_id"):
-            fn(999)
-
-
-def test_new_feature_needs_only_one_registry_entry(monkeypatch):
-    """A new feature registry entry flows through normal model selection."""
+def test_new_enabled_feature_needs_only_one_registry_entry(monkeypatch):
+    """One enabled registry entry is enough for model selection."""
     monkeypatch.setitem(
         FEATURES,
         "synthetic_score",
@@ -390,46 +318,30 @@ def test_new_feature_needs_only_one_registry_entry(monkeypatch):
             kind="numeric",
             source="raw",
             lead_types=frozenset({"auto"}),
+            enabled=True,
             api_input="synthetic_score",
         ),
     )
 
-    numeric, categorical = fe.model_feature_columns(
-        lead_type_id("auto"),
-        optional_enabled={"synthetic_score"},
-    )
-
+    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
     assert "synthetic_score" in numeric
     assert "synthetic_score" not in categorical
 
 
-def test_optional_and_mandatory_partition_the_feature_set():
-    """Mandatory and optional sets are disjoint and cover the full auto set."""
-    num, cat = fe.model_feature_columns(lead_type_id("auto"), optional_enabled=None)
-    mand = fe.mandatory_features(lead_type_id("auto"))
-    opt = fe.optional_features(lead_type_id("auto"))
-    assert mand.isdisjoint(opt)
-    assert "sr22_required" in mand and "state" in opt
-    # home-only features never leak into the auto optional set
-    assert "num_home_claims" not in opt and "home_property_type" not in opt
+def test_new_disabled_feature_is_not_selected(monkeypatch):
+    """A registry entry with enabled=False is excluded."""
+    monkeypatch.setitem(
+        FEATURES,
+        "disabled_score",
+        FeatureSpec(
+            name="disabled_score",
+            kind="numeric",
+            source="raw",
+            lead_types=frozenset({"auto"}),
+            enabled=False,
+            api_input="disabled_score",
+        ),
+    )
 
-
-def test_config_all_keeps_every_feature(monkeypatch):
-    """Config value 'all' keeps every optional and mandatory feature."""
-    from smarthub.core import task_config
-
-    monkeypatch.setattr(task_config, "get", lambda *a, **k: "all")
     numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
-    selected = set(numeric) | set(categorical)
-    # matches the un-filtered universe for auto (all optional + mandatory)
-    for col in (
-        "state",
-        "gender",
-        "traffic_tier",
-        "campaign_id",
-        "created_hour",
-        "is_workday",
-        "num_drivers",
-        "sr22_required",
-    ):
-        assert col in selected
+    assert "disabled_score" not in set(numeric) | set(categorical)

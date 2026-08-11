@@ -26,7 +26,10 @@ def configure_logging(level: str | None = None) -> None:
     resolved = (level or os.getenv("LOG_LEVEL") or "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, resolved, logging.INFO),
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        format=(
+            "%(asctime)s | %(levelname)-5s | "
+            "%(filename)s:%(funcName)s:%(lineno)d | %(message)s"
+        ),
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     _CONFIGURED = True

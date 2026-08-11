@@ -8,9 +8,12 @@ from __future__ import annotations
 import pandas as pd
 
 from smarthub.core import io
+from smarthub.core.logging_utils import get_logger
 from smarthub.feature_engineering import features as fe
 
 from . import config
+
+logger = get_logger(__name__)
 
 
 def normalize_model_frame(df, numeric_features, categorical_features):
@@ -36,8 +39,9 @@ def normalize_model_frame(df, numeric_features, categorical_features):
             df[col] = pd.to_numeric(df[col], errors="coerce")
     for col in categorical_features:
         if col in df.columns:
-            s = df[col].astype("string").str.strip()
-            df[col] = s.mask(s.isna() | (s == ""), "NAvail")
+            df[col] = df[col].astype("string").str.strip()
+
+    fe.apply_registered_missing_values(df)
     return df
 
 
@@ -96,7 +100,8 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
         )
 
     # Ensure every model feature exists (a column may be absent if that field
-    # was never pulled); missing ones become all-NA and get imputed.
+    # was never pulled); missing ones become all-NA and then receive the
+    # registry-defined explicit missing sentinel.
     missing = [c for c in feature_cols if c not in table.columns]
     for col in missing:
         table[col] = pd.NA
@@ -109,6 +114,9 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
         keep.append(config.REVENUE_COL)
     if "created_at" in frame.columns:
         keep.append("created_at")
+    for identifier in ("lead_ping_id", "lead_id", "id"):
+        if identifier in frame.columns and identifier not in keep:
+            keep.append(identifier)
 
     frame = frame[keep].dropna(subset=[config.TARGET_COL]).copy()
     if "created_at" in frame.columns:

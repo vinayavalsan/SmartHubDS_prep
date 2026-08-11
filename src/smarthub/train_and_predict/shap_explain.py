@@ -17,9 +17,11 @@ from __future__ import annotations
 import numpy as np
 
 from smarthub.core import task_config
+from smarthub.core.logging_utils import get_logger
 
 from . import config, preprocessing
 
+logger = get_logger(__name__)
 # Task config: smarthub.yaml `explain` section — used only by the explain
 # pipeline, not the live bidding path, so it's kept local rather than in
 # train_and_predict/config.py.

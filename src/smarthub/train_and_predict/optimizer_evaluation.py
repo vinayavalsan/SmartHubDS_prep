@@ -5,15 +5,16 @@ This module compares historical and recommended bids and summarizes results.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
 
+from smarthub.core.logging_utils import get_logger
+
 from . import config, optimizer
 
-logger = logging.getLogger("smarthub.train_and_predict.evaluation")
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -197,47 +198,48 @@ def _format_percent(value):
     return "—" if pd.isna(value) else f"{float(value):.2%}"
 
 
-def log_summary(summary: OptimizerSummary, log=None):
+def log_summary(summary: OptimizerSummary):
     """Log aggregate optimizer evaluation metrics.
 
     Inputs
     ------
     summary : OptimizerSummary
         Optimizer summary to log.
-    log : logging.Logger | None
-        Optional logger for structured output.
     """
-    log = log or logger
-    log.info("Bid Optimizer Evaluation")
-    log.info("  Rows evaluated                     : %s", f"{summary.optimizer_rows:,}")
-    log.info("  Target CM                          : %.2f%%", summary.target_cm * 100)
-    log.info(
+    logger.info("Bid Optimizer Evaluation")
+    logger.info(
+        "  Rows evaluated                     : %s", f"{summary.optimizer_rows:,}"
+    )
+    logger.info(
+        "  Target CM                          : %.2f%%", summary.target_cm * 100
+    )
+    logger.info(
         "  Expected profit, current/recommended: %.4f / %.4f",
         summary.current_bid_total_expected_profit,
         summary.recommended_bid_total_expected_profit,
     )
-    log.info(
+    logger.info(
         "  Expected profit lift               : %.4f (%s)",
         summary.expected_profit_lift_total,
         _format_percent(summary.expected_profit_lift_pct),
     )
-    log.info(
+    logger.info(
         "  Avg predicted win rate, current/reco: %.4f / %.4f",
         summary.avg_current_bid_predicted_win_rate,
         summary.avg_recommended_bid_predicted_win_rate,
     )
-    log.info(
+    logger.info(
         "  Bid increased/decreased/unchanged  : %.2f%% / %.2f%% / %.2f%%",
         summary.bid_increase_pct,
         summary.bid_decrease_pct,
         summary.bid_unchanged_pct,
     )
-    log.info(
+    logger.info(
         "  Avg / median bid change            : %.4f / %.4f",
         summary.avg_bid_change,
         summary.median_bid_change,
     )
-    log.info(
+    logger.info(
         "  Avg recommended CM if won           : %.4f",
         summary.avg_recommended_bid_cm_if_won,
     )
@@ -252,7 +254,6 @@ def run_bid_optimizer_evaluation(
     min_bid,
     bid_step,
     chunk_size,
-    log=None,
     log_summary_result=True,
 ):
     """Run offline bid optimization on held-out rows.
@@ -273,8 +274,6 @@ def run_bid_optimizer_evaluation(
         Increment between candidate bids.
     chunk_size : int
         Maximum rows processed per optimizer scoring chunk.
-    log : logging.Logger | None
-        Optional logger for structured output.
     log_summary_result : bool
         Whether to log the aggregate optimizer summary.
 
@@ -283,7 +282,6 @@ def run_bid_optimizer_evaluation(
     tuple[pandas.DataFrame, OptimizerSummary] | None
         Row-level optimizer results and aggregate summary, or ``None``.
     """
-    log = log or logger
     eval_df = _prepare_frame(test_eval_df)
     if eval_df is None:
         return None
@@ -296,13 +294,12 @@ def run_bid_optimizer_evaluation(
         min_bid,
         bid_step,
         chunk_size,
-        log=log,
     )
     if eval_df is None:
-        log.warning("Optimizer could not create candidate bids.")
+        logger.warning("Optimizer could not create candidate bids.")
         return None
     eval_df = _add_diagnostics(eval_df)
     summary = summarize_results(eval_df, target_cm)
     if log_summary_result:
-        log_summary(summary, log)
+        log_summary(summary)
     return eval_df, summary

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from smarthub.core.lead_types import lead_type_name
+
 from . import field_registry
 from . import validation_rules as rules
 
@@ -202,11 +204,17 @@ def validate_leads(
     rule_violations = rule_violations + _run_custom_rules(df)
     cross = rules.cross_field_checks(df)
     missing = rules.missing_rates(df)
-    out_of_scope = (
-        field_registry.columns_not_for_lead_type(lead_type_id)
-        if lead_type_id is not None
-        else set()
-    )
+    if lead_type_id is None:
+        out_of_scope = set()
+    else:
+        try:
+            resolved_lead_type_name = lead_type_name(lead_type_id)
+        except ValueError:
+            out_of_scope = set()
+        else:
+            out_of_scope = field_registry.columns_not_for_lead_type(
+                resolved_lead_type_name
+            )
     high_missing = sorted(
         c
         for c, r in missing.items()

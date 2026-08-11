@@ -9,12 +9,15 @@ lead-type combinations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 import pandas as pd
 
 FeatureDeriver = Callable[[pd.DataFrame], pd.Series]
+
+MISSING_CATEGORY = "__MISSING__"
+MISSING_NUMERIC = -1
 
 
 @dataclass(frozen=True)
@@ -25,9 +28,19 @@ class FeatureSpec:
     kind: str  # numeric | categorical | binary
     source: str  # raw | derived
     lead_types: frozenset[str]
-    mandatory_for: frozenset[str] = field(default_factory=frozenset)
+    enabled: bool = True
     api_input: str | None = None
     derive: FeatureDeriver | None = None
+    training_include_values: frozenset[object] | None = None
+    missing_value: object | None = None
+
+    def resolved_missing_value(self) -> object:
+        """Return the explicit missing-value representation for the feature."""
+        if self.missing_value is not None:
+            return self.missing_value
+        if self.kind == "categorical":
+            return MISSING_CATEGORY
+        return MISSING_NUMERIC
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +68,7 @@ def _derive_created_dayofweek(frame: pd.DataFrame) -> pd.Series:
 
 
 def _derive_is_workday(frame: pd.DataFrame) -> pd.Series:
-    """Return 1 for a workday and 0 for a weekend or observed holiday."""
+    """Return workday status while preserving a missing timestamp."""
     from smarthub.core import holidays
 
     if "pst_date" in frame.columns:
@@ -63,21 +76,36 @@ def _derive_is_workday(frame: pd.DataFrame) -> pd.Series:
     else:
         date_values = pd.to_datetime(frame["created_at"], errors="coerce")
 
-    return date_values.map(
-        lambda value: (int(holidays.is_workday(value.date())) if pd.notna(value) else 0)
-    ).astype("int64")
+    result = pd.Series(MISSING_NUMERIC, index=frame.index, dtype="int64")
+    known = date_values.notna()
+    if known.any():
+        result.loc[known] = (
+            date_values.loc[known]
+            .map(lambda value: int(holidays.is_workday(value.date())))
+            .astype("int64")
+        )
+    return result
 
 
 def _derive_is_married(frame: pd.DataFrame) -> pd.Series:
-    """Return 1 when marital status is married, otherwise 0."""
+    """Return married status while preserving a missing source value."""
     marital_status = frame["marital_status"].astype("string").str.strip().str.lower()
-    return marital_status.eq("married").fillna(False).astype("int64")
+    marital_status = marital_status.mask(marital_status == "")
+
+    result = pd.Series(MISSING_NUMERIC, index=frame.index, dtype="int64")
+    known = marital_status.notna()
+    result.loc[known] = marital_status.loc[known].eq("married").astype("int64")
+    return result
 
 
 def _derive_multi_vehicle(frame: pd.DataFrame) -> pd.Series:
-    """Return 1 when the lead has more than one vehicle, otherwise 0."""
+    """Return multi-vehicle status while preserving a missing source value."""
     num_vehicles = pd.to_numeric(frame["num_vehicles"], errors="coerce")
-    return num_vehicles.gt(1).fillna(False).astype("int64")
+
+    result = pd.Series(MISSING_NUMERIC, index=frame.index, dtype="int64")
+    known = num_vehicles.notna()
+    result.loc[known] = num_vehicles.loc[known].gt(1).astype("int64")
+    return result
 
 
 def _derive_age_cohort(frame: pd.DataFrame) -> pd.Series:
@@ -87,22 +115,26 @@ def _derive_age_cohort(frame: pd.DataFrame) -> pd.Series:
     cleaned_age = age.where(plausible_age)
 
     # Keep age cleaning identical for training and serving.
-    frame["age"] = cleaned_age.fillna(-1)
+    frame["age"] = cleaned_age.fillna(MISSING_NUMERIC)
 
-    return pd.cut(
-        cleaned_age,
-        bins=[0, 18, 25, 35, 45, 55, 65, 200],
-        labels=[
-            "under_18",
-            "18_24",
-            "25_34",
-            "35_44",
-            "45_54",
-            "55_64",
-            "65_plus",
-        ],
-        right=False,
-    ).astype("string")
+    return (
+        pd.cut(
+            cleaned_age,
+            bins=[0, 18, 25, 35, 45, 55, 65, 200],
+            labels=[
+                "under_18",
+                "18_24",
+                "25_34",
+                "35_44",
+                "45_54",
+                "55_64",
+                "65_plus",
+            ],
+            right=False,
+        )
+        .astype("string")
+        .fillna(MISSING_CATEGORY)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +154,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
-        mandatory_for=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="bid",
     ),
     "age": FeatureSpec(
@@ -130,7 +162,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="age",
     ),
     "continuous_coverage_months": FeatureSpec(
@@ -138,6 +170,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="continuous_coverage_months",
     ),
     "created_hour": FeatureSpec(
@@ -145,6 +178,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="created_at",
         derive=_derive_created_hour,
     ),
@@ -153,6 +187,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="created_at",
         derive=_derive_created_dayofweek,
     ),
@@ -161,6 +196,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="created_at",
         derive=_derive_is_workday,
     ),
@@ -169,6 +205,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="marital_status",
         derive=_derive_is_married,
     ),
@@ -177,7 +214,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="categorical",
         source="derived",
         lead_types=frozenset({"auto", "home"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="age",
         derive=_derive_age_cohort,
     ),
@@ -186,12 +223,14 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="categorical",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="state",
     ),
     "gender": FeatureSpec(
         name="gender",
         kind="categorical",
         source="raw",
+        enabled=True,
         lead_types=frozenset({"auto", "home"}),
         api_input="gender",
     ),
@@ -200,6 +239,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="categorical",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="marital_status",
     ),
     "military_affiliation": FeatureSpec(
@@ -207,6 +247,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="military_affiliation",
     ),
     "insured": FeatureSpec(
@@ -214,7 +255,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="insured",
     ),
     "campaign_id": FeatureSpec(
@@ -223,12 +264,15 @@ FEATURES: dict[str, FeatureSpec] = {
         source="raw",
         lead_types=frozenset({"auto", "home"}),
         api_input="campaign_id",
+        enabled=True,
+        training_include_values=frozenset({13, 3, 6, 16}),
     ),
     "traffic_tier": FeatureSpec(
         name="traffic_tier",
         kind="categorical",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
+        enabled=True,
         api_input="traffic_tier",
     ),
     # -----------------------------------------------------------------------
@@ -239,7 +283,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"auto"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="num_vehicles",
     ),
     "num_drivers": FeatureSpec(
@@ -247,6 +291,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"auto"}),
+        enabled=True,
         api_input="num_drivers",
     ),
     "num_auto_violations": FeatureSpec(
@@ -254,6 +299,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"auto"}),
+        enabled=True,
         api_input="num_auto_violations",
     ),
     "num_auto_accidents": FeatureSpec(
@@ -261,7 +307,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"auto"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="num_auto_accidents",
     ),
     "multi_vehicle": FeatureSpec(
@@ -269,7 +315,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="derived",
         lead_types=frozenset({"auto"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="num_vehicles",
         derive=_derive_multi_vehicle,
     ),
@@ -278,7 +324,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="raw",
         lead_types=frozenset({"auto"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="home_owner",
     ),
     "dui": FeatureSpec(
@@ -286,7 +332,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="raw",
         lead_types=frozenset({"auto"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="dui",
     ),
     "sr22_required": FeatureSpec(
@@ -294,7 +340,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="binary",
         source="raw",
         lead_types=frozenset({"auto"}),
-        mandatory_for=frozenset({"auto"}),
+        enabled=True,
         api_input="sr22_required",
     ),
     # -----------------------------------------------------------------------
@@ -305,6 +351,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="numeric",
         source="raw",
         lead_types=frozenset({"home"}),
+        enabled=True,
         api_input="num_home_claims",
     ),
     "home_property_type": FeatureSpec(
@@ -312,6 +359,7 @@ FEATURES: dict[str, FeatureSpec] = {
         kind="categorical",
         source="raw",
         lead_types=frozenset({"home"}),
+        enabled=True,
         api_input="home_property_type",
     ),
 }

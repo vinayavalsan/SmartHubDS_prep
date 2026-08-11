@@ -5,16 +5,17 @@ This module scores candidate bids and selects the highest expected-profit bid.
 
 from __future__ import annotations
 
-import logging
 import warnings
 from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
 
+from smarthub.core.logging_utils import get_logger
+
 from . import config
 
-logger = logging.getLogger("smarthub.train_and_predict.optimizer")
+logger = get_logger(__name__)
 
 
 @contextmanager
@@ -247,7 +248,6 @@ def score_recommended_bids(
     min_bid: float,
     bid_step: float,
     chunk_size: int,
-    log=None,
 ) -> pd.DataFrame | None:
     """Attach recommended-bid outputs using chunked scoring.
 
@@ -267,17 +267,14 @@ def score_recommended_bids(
         Increment between candidate bids.
     chunk_size : int
         Maximum rows processed per scoring chunk.
-    log : logging.Logger | None
-        Optional logger for structured output.
 
     Returns
     -------
     pandas.DataFrame | None
         Evaluation rows with recommendation columns, or ``None``.
     """
-    log = log or logger
     n_rows = len(eval_df)
-    log.info(
+    logger.info(
         "Optimizing bids for %s rows in chunks of %s",
         f"{n_rows:,}",
         f"{chunk_size:,}",
@@ -296,7 +293,7 @@ def score_recommended_bids(
             )
         )
         if stop == n_rows or stop % (chunk_size * 10) == 0:
-            log.info("Optimized %s / %s rows", f"{stop:,}", f"{n_rows:,}")
+            logger.info("Optimized %s / %s rows", f"{stop:,}", f"{n_rows:,}")
 
     optimizer_df = pd.concat(result_chunks, axis=0)
     result = pd.concat([eval_df, optimizer_df], axis=1)

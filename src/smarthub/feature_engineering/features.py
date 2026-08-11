@@ -60,15 +60,14 @@ LEAKAGE_COLUMNS = [
 ]
 
 _TRUE = "true"
-_OPTIONAL_ALL = "all"
-_OPTIONAL_NONE = "none"
 
 
 def _specs_for_lead_type(lead_type: str | None = None) -> list[FeatureSpec]:
-    """Return applicable feature specs in registry insertion order."""
+    """Return enabled, applicable feature specs in registry order."""
+    specs = [spec for spec in FEATURES.values() if spec.enabled]
     if lead_type is None:
-        return list(FEATURES.values())
-    return [spec for spec in FEATURES.values() if lead_type in spec.lead_types]
+        return specs
+    return [spec for spec in specs if lead_type in spec.lead_types]
 
 
 def _lead_type_for_id(lead_type_id: int) -> str:
@@ -81,76 +80,42 @@ def registered_feature_names(lead_type: str | None = None) -> list[str]:
     return [spec.name for spec in _specs_for_lead_type(lead_type)]
 
 
-def mandatory_features(lead_type_id: int) -> set[str]:
-    """Return model features that cannot be disabled for a lead type."""
-    name = _lead_type_for_id(lead_type_id)
-    return {
-        spec.name for spec in _specs_for_lead_type(name) if name in spec.mandatory_for
-    }
-
-
-def optional_features(lead_type_id: int) -> set[str]:
-    """Return toggleable model features for a lead type."""
-    name = _lead_type_for_id(lead_type_id)
-    return {spec.name for spec in _specs_for_lead_type(name)} - mandatory_features(
-        lead_type_id
-    )
-
-
-def _configured_optional(lead_type_id: int, optional_universe: set[str]) -> set[str]:
-    """Read enabled optional features for a lead type from runtime config."""
-    from smarthub.core import task_config
-
-    lead_type = _lead_type_for_id(lead_type_id)
-    key = f"{lead_type}_optional"
-    raw = (task_config.get("features", key, _OPTIONAL_ALL) or "").strip()
-    token = raw.lower()
-
-    if token in ("", _OPTIONAL_ALL):
-        return set(optional_universe)
-    if token == _OPTIONAL_NONE:
-        return set()
-
-    requested = {column.strip() for column in raw.split(",") if column.strip()}
-    unknown = requested - optional_universe - mandatory_features(lead_type_id)
-    if unknown:
-        logger.warning(
-            "features.%s lists unknown/ineligible feature(s) %s; ignoring them. "
-            "Valid optional features: %s",
-            key,
-            sorted(unknown),
-            sorted(optional_universe),
-        )
-    return requested & optional_universe
-
-
 def model_feature_columns(
     lead_type_id: int,
-    optional_enabled: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return numeric and categorical model columns in registry order.
+    """Return enabled model columns for a lead type in registry order.
 
-    ``binary`` features are returned with the numeric features, matching the
-    existing preprocessing behavior.
+    ``binary`` features are returned with numeric features, matching the
+    existing preprocessing behavior. Feature inclusion is controlled only by
+    ``FeatureSpec.enabled`` and ``FeatureSpec.lead_types``.
     """
     lead_type = _lead_type_for_id(lead_type_id)
     specs = _specs_for_lead_type(lead_type)
-    mandatory = mandatory_features(lead_type_id)
-    optional_universe = {spec.name for spec in specs} - mandatory
 
-    if optional_enabled is None:
-        optional_enabled = _configured_optional(lead_type_id, optional_universe)
-
-    keep = mandatory | (set(optional_enabled) & optional_universe)
-    numeric = [
-        spec.name
-        for spec in specs
-        if spec.name in keep and spec.kind in {"numeric", "binary"}
-    ]
-    categorical = [
-        spec.name for spec in specs if spec.name in keep and spec.kind == "categorical"
-    ]
+    numeric = [spec.name for spec in specs if spec.kind in {"numeric", "binary"}]
+    categorical = [spec.name for spec in specs if spec.kind == "categorical"]
     return numeric, categorical
+
+
+def _apply_training_filters(
+    frame: pd.DataFrame,
+    lead_type: str | None = None,
+) -> pd.DataFrame:
+    """Apply registry-defined row filters used only for model training."""
+    out = frame
+
+    for spec in _specs_for_lead_type(lead_type):
+        allowed = spec.training_include_values
+        if not allowed or spec.name not in out.columns:
+            continue
+
+        values = out[spec.name]
+        if all(isinstance(value, int) for value in allowed):
+            values = pd.to_numeric(values, errors="coerce")
+
+        out = out[values.isin(allowed)].copy()
+
+    return out
 
 
 def _apply_registered_derivations(
@@ -186,6 +151,33 @@ def _apply_registered_derivations(
     return derived
 
 
+def apply_registered_missing_values(
+    frame: pd.DataFrame,
+    lead_type: str | None = None,
+) -> pd.DataFrame:
+    """Replace missing model values using registry-defined sentinels.
+
+    Categorical blanks and nulls become ``MISSING_CATEGORY``. Numeric and
+    binary nulls become each feature's resolved numeric sentinel. The function
+    mutates and returns ``frame`` for convenient pipeline composition.
+    """
+    for spec in _specs_for_lead_type(lead_type):
+        if spec.name not in frame.columns:
+            continue
+
+        missing_value = spec.resolved_missing_value()
+        values = frame[spec.name]
+        if spec.kind == "categorical":
+            values = values.astype("string").str.strip()
+            values = values.mask(values.isna() | (values == ""))
+            frame[spec.name] = values.fillna(str(missing_value))
+        else:
+            values = pd.to_numeric(values, errors="coerce")
+            frame[spec.name] = values.fillna(missing_value)
+
+    return frame
+
+
 def derive_serving_features(
     df: pd.DataFrame,
     lead_type_id: int | None = None,
@@ -194,6 +186,7 @@ def derive_serving_features(
     out = df.copy()
     lead_type = _lead_type_for_id(lead_type_id) if lead_type_id is not None else None
     _apply_registered_derivations(out, lead_type)
+    apply_registered_missing_values(out, lead_type)
     return out
 
 
@@ -247,7 +240,9 @@ def build_training_table(
         out = out[out["lead_type_id"] == lead_type_id].copy()
 
     lead_type = _lead_type_for_id(lead_type_id) if lead_type_id is not None else None
+    out = _apply_training_filters(out, lead_type)
     _apply_registered_derivations(out, lead_type)
+    apply_registered_missing_values(out, lead_type)
 
     model_columns = [
         spec.name

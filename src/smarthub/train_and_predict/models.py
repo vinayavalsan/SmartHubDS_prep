@@ -6,10 +6,13 @@ This module creates preprocessing pipelines and supported classifier families.
 from __future__ import annotations
 
 from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from smarthub.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def build_logistic_regression_model(
@@ -32,19 +35,8 @@ def build_logistic_regression_model(
     sklearn.pipeline.Pipeline
         Unfitted classifier pipeline.
     """
-    numeric_transformer = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
-
-    categorical_transformer = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("encoder", OneHotEncoder(handle_unknown="ignore")),
-        ]
-    )
+    numeric_transformer = StandardScaler()
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
 
     preprocessor = ColumnTransformer(
         [
@@ -85,18 +77,10 @@ def build_xgboost_model(
     from sklearn.preprocessing import OrdinalEncoder
     from xgboost import XGBClassifier
 
-    numeric_transformer = SimpleImputer(strategy="median")
-    categorical_transformer = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            (
-                "encoder",
-                OrdinalEncoder(
-                    handle_unknown="use_encoded_value",
-                    unknown_value=-1,
-                ),
-            ),
-        ]
+    numeric_transformer = "passthrough"
+    categorical_transformer = OrdinalEncoder(
+        handle_unknown="use_encoded_value",
+        unknown_value=-1,
     )
     preprocessor = ColumnTransformer(
         [
@@ -143,15 +127,10 @@ def build_lightgbm_model(
     from lightgbm import LGBMClassifier
     from sklearn.preprocessing import OrdinalEncoder
 
-    numeric_transformer = SimpleImputer(strategy="median")
-    categorical_transformer = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            (
-                "encoder",
-                OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
-            ),
-        ]
+    numeric_transformer = "passthrough"
+    categorical_transformer = OrdinalEncoder(
+        handle_unknown="use_encoded_value",
+        unknown_value=-1,
     )
     preprocessor = ColumnTransformer(
         [
