@@ -53,15 +53,36 @@ _TEXT_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 # Per-request / per-flow fields merged into every JSON log line on this
 # thread/task (see bind_context / request_context).
-_CONTEXT: contextvars.ContextVar[dict] = contextvars.ContextVar("log_context", default={})
+_CONTEXT: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "log_context", default={}
+)
 
 # Standard LogRecord attributes -- anything NOT here that lands on a record
 # (i.e. passed via logging `extra=`) is treated as structured context.
 _RESERVED = {
-    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-    "created", "msecs", "relativeCreated", "thread", "threadName",
-    "processName", "process", "taskName", "message", "asctime",
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "taskName",
+    "message",
+    "asctime",
 }
 
 
@@ -90,9 +111,12 @@ class JsonFormatter(logging.Formatter):
     """Render a LogRecord as a single JSON line matching the schema above."""
 
     def format(self, record: logging.LogRecord) -> str:  # noqa: A003
-        ts = _dt.datetime.fromtimestamp(
-            record.created, _dt.timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%S.") + f"{int(record.msecs):03d}Z"
+        ts = (
+            _dt.datetime.fromtimestamp(record.created, _dt.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S."
+            )
+            + f"{int(record.msecs):03d}Z"
+        )
 
         payload: dict = {
             "ts": ts,
@@ -114,8 +138,9 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, ensure_ascii=False)
 
 
-def configure_logging(level: str | None = None, *, fmt: str | None = None,
-                      service: str | None = None) -> None:
+def configure_logging(
+    level: str | None = None, *, fmt: str | None = None, service: str | None = None
+) -> None:
     """Configure root logging once, idempotently. Subsequent calls are no-ops.
 
     Inputs
@@ -145,7 +170,7 @@ def configure_logging(level: str | None = None, *, fmt: str | None = None,
         handler.setFormatter(logging.Formatter(fmt=_TEXT_FORMAT, datefmt=_TEXT_DATEFMT))
 
     root = logging.getLogger()
-    root.handlers = [handler]          # own the output so the format is consistent
+    root.handlers = [handler]  # own the output so the format is consistent
     root.setLevel(getattr(logging, resolved, logging.INFO))
     _CONFIGURED = True
 
@@ -214,8 +239,14 @@ def request_context(**fields):
         reset_context(token)
 
 
-def log_event(logger: logging.Logger, event: str, msg: str, *,
-              level: int = logging.INFO, **context) -> None:
+def log_event(
+    logger: logging.Logger,
+    event: str,
+    msg: str,
+    *,
+    level: int = logging.INFO,
+    **context,
+) -> None:
     """Emit a log line carrying a machine ``event`` key plus context fields.
 
     Thin sugar over ``logger.log(level, msg, extra={"event": event, **context})``::

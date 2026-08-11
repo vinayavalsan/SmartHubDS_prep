@@ -40,7 +40,7 @@ import time
 from pathlib import Path
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
-_TS = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")   # leading RFC3339 token
+_TS = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")  # leading RFC3339 token
 
 
 def _today() -> str:
@@ -98,21 +98,38 @@ def _to_record(line: str) -> dict:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="date-stamped JSON docker-compose log collector")
+    ap = argparse.ArgumentParser(
+        description="date-stamped JSON docker-compose log collector"
+    )
     ap.add_argument("--logdir", default="logs", help="output directory")
-    ap.add_argument("--retain-days", type=int, default=30, help="delete files older than this")
+    ap.add_argument(
+        "--retain-days", type=int, default=30, help="delete files older than this"
+    )
     ap.add_argument("--compose-file", default="docker-compose.yaml")
     ap.add_argument("--combined-prefix", default="combined")
-    ap.add_argument("--no-per-service", action="store_true",
-                    help="write only the single combined file")
+    ap.add_argument(
+        "--no-per-service",
+        action="store_true",
+        help="write only the single combined file",
+    )
     ap.add_argument("--reconnect-secs", type=float, default=5.0)
     args = ap.parse_args()
 
     logdir = Path(args.logdir)
     logdir.mkdir(parents=True, exist_ok=True)
 
-    cmd = ["docker", "compose", "-f", args.compose_file, "logs",
-           "--follow", "--no-color", "--timestamps", "--tail", "0"]
+    cmd = [
+        "docker",
+        "compose",
+        "-f",
+        args.compose_file,
+        "logs",
+        "--follow",
+        "--no-color",
+        "--timestamps",
+        "--tail",
+        "0",
+    ]
 
     day: str | None = None
     combined = None
@@ -125,19 +142,29 @@ def main() -> None:
         for fh in svc_files.values():
             fh.close()
         svc_files = {}
-        combined = open(logdir / f"{args.combined_prefix}-{today}.log", "a", buffering=1)
+        combined = open(
+            logdir / f"{args.combined_prefix}-{today}.log", "a", buffering=1
+        )
         day = today
         _prune(logdir, args.retain_days)
 
     roll(_today())
-    print(f">> log collector: unified JSON -> {logdir}/ "
-          f"({'combined only' if args.no_per_service else 'combined + per-service'}), "
-          f"retain {args.retain_days} days", flush=True)
+    print(
+        f">> log collector: unified JSON -> {logdir}/ "
+        f"({'combined only' if args.no_per_service else 'combined + per-service'}), "
+        f"retain {args.retain_days} days",
+        flush=True,
+    )
 
     while True:
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
         except Exception as exc:  # noqa: BLE001 -- docker daemon not ready yet
             print(f">> cannot start 'docker compose logs': {exc}; retrying", flush=True)
             time.sleep(args.reconnect_secs)
