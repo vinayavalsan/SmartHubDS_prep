@@ -14,6 +14,8 @@ same pattern as `predict.py`'s lazy joblib/mlflow/fastapi imports.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from smarthub.core import task_config
@@ -22,6 +24,17 @@ from smarthub.core.logging_utils import get_logger
 from . import config, preprocessing
 
 logger = get_logger(__name__)
+
+# Silence a harmless, repetitive SHAP notice on LightGBM binary classifiers
+# ("... TreeExplainer shap values output has changed to a list of ndarray").
+# It fires on EVERY shap_values() call and floods the shap-worker logs; we handle
+# the output shape explicitly below, so the notice is pure noise. Scoped to this
+# exact message so real UserWarnings still surface.
+warnings.filterwarnings(
+    "ignore",
+    message=r"LightGBM binary classifier with TreeExplainer",
+    category=UserWarning,
+)
 # Task config: smarthub.yaml `explain` section — used only by the explain
 # pipeline, not the live bidding path, so it's kept local rather than in
 # train_and_predict/config.py.
