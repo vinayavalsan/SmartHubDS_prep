@@ -92,6 +92,10 @@ services:
     # worker headroom (a too-low cap shows up as flow runs SIGKILL'd / exit -9).
     mem_limit: 4g
     mem_reservation: 2g
+    # Cap CPU so a training run can never starve the live bid API. Training is
+    # CPU-bound (LightGBM); leaving ~4 cores for serving keeps the API responsive
+    # even mid-training. Tune WORKER_CPUS in .env if the mix changes.
+    cpus: ${WORKER_CPUS:-4}
     depends_on:
       prefect-server:
         condition: service_healthy
@@ -103,6 +107,17 @@ services:
       PREFECT_WORK_POOL: smarthub-pool
       PREFECT_WORK_QUEUES: "default features training"
       SMARTHUB_ROOT: /app
+      # Thread caps for training math libs. Without these, LightGBM/BLAS spawn one
+      # OpenMP thread per host core and, on a shared box, busy-wait (spin) at 100%
+      # -- the "all cores pegged, training stuck" symptom. Keep in step with `cpus`
+      # above and lightgbm.n_jobs in config/training.yaml.
+      OMP_NUM_THREADS: ${WORKER_OMP_THREADS:-4}
+      OPENBLAS_NUM_THREADS: ${WORKER_OMP_THREADS:-4}
+      MKL_NUM_THREADS: ${WORKER_OMP_THREADS:-4}
+      OMP_WAIT_POLICY: PASSIVE
+      # Structured JSON logs (see core/logging_utils.py); the collector merges by container.
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_SERVICE: worker
       # Redshift access: tunnel via SSH bastion by default. Set SSH_TUNNEL=false in
       # .env when the host reaches Redshift directly (same-VPC EC2) -- then no key
       # is mounted or required.
@@ -120,6 +135,9 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data
+      # Mount config read-only so training-param edits (lightgbm.n_jobs, calibration.cv)
+      # take effect on `docker compose up -d worker` without an image rebuild.
+      - ./config:/app/config:ro
       # SSH key mounted read-only; defaults to /dev/null so compose still starts
       # with SSH_TUNNEL=false (key never read on the direct-connect path).
       - ${SSH_PRIVATE_KEY_PATH:-/dev/null}:/keys/id_ed25519:ro
@@ -228,6 +246,8 @@ services:
     environment:
       SMARTHUB_ROOT: /app
       STORAGE_BACKEND: parquet
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_SERVICE: dashboard
       SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       # Hardcoded (not ${...}) so a stray export can't repoint the prediction log
       # at a per-container sqlite file -- the stack always shares this Postgres.
@@ -299,6 +319,8 @@ services:
       # Raise for throughput; each worker is a separate process with its own
       # in-memory model cache. On an 8-vCPU shared box, 6 is a good ceiling.
       SERVE_WORKERS: ${SERVE_WORKERS:-4}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_SERVICE: serve
       # Pin math libs to one thread each so worker count is the only parallelism
       # knob -- prevents BLAS/OpenMP oversubscription (N workers x N threads
       # thrashing the cores), which makes throughput WORSE, not better.
@@ -342,6 +364,8 @@ services:
       SMARTHUB_ROOT: /app
       SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       SMARTHUB_SHAP_WORKER_POLL_SECS: ${SMARTHUB_SHAP_WORKER_POLL_SECS:-1.0}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_SERVICE: shap-worker
       SMARTHUB_SHAP_WORKER_BATCH: ${SMARTHUB_SHAP_WORKER_BATCH:-50}
       SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
       SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
@@ -374,6 +398,8 @@ services:
       SMARTHUB_ROOT: /app
       SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       SMARTHUB_SLO_WINDOW_MINUTES: ${SMARTHUB_SLO_WINDOW_MINUTES:-15}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_SERVICE: slo-alerts
     command: ["python", "-m", "smarthub.monitoring.slo_alerts", "--loop", "--interval", "60"]
     # Same as shap-worker: alerter loop, not the HTTP API -> disable the inherited
     # healthcheck (no pgrep/ps in the slim image; restart recovers a crash).

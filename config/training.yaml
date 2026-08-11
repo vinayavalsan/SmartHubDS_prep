@@ -21,7 +21,7 @@ models:
     class_weight: null
   xgboost:
     eval_metric: logloss
-    n_jobs: -1
+    n_jobs: 4
     random_state: 42
     n_estimators: 700
     max_depth: 9
@@ -33,7 +33,7 @@ models:
     reg_lambda: 0.0012514256096931547
   lightgbm:
     verbosity: -1
-    n_jobs: -1
+    n_jobs: 4
     random_state: 42
     n_estimators: 400
     num_leaves: 117
