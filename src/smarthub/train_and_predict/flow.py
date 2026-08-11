@@ -17,7 +17,13 @@ from . import config, train
 
 
 def _feature_breakdown(lead_type_id, feature_cols):
-    """Summarize mandatory and optional features used by a model.
+    """Summarize how the trained columns relate to the feature registry.
+
+    The registry (``feature_engineering.FEATURES``) is the source of truth for a
+    lead type's applicable features; ``feature_cols`` are the columns the model
+    was actually trained on. The old mandatory/optional split was dropped in the
+    feature-registry refactor, so this now reports how many trained columns come
+    from the registry and which registry features went unused.
 
     Inputs
     ------
@@ -29,17 +35,17 @@ def _feature_breakdown(lead_type_id, feature_cols):
     Returns
     -------
     dict
-        Feature counts and optional-feature lists.
+        Feature counts and the list of unused registry features.
     """
     feature_cols = list(feature_cols or [])
-    mandatory = fe.mandatory_features(lead_type_id)
-    optional_all = fe.optional_features(lead_type_id)
+    numeric, categorical = fe.model_feature_columns(lead_type_id)
+    registered = set(numeric) | set(categorical)
     used = set(feature_cols)
     return {
         "total": len(feature_cols),
-        "n_mandatory": len(mandatory & used),
-        "optional_on": sorted(optional_all & used),
-        "optional_off": sorted(optional_all - used),
+        "n_registered": len(registered),
+        "n_registered_used": len(registered & used),
+        "unused": sorted(registered - used),
     }
 
 
@@ -214,10 +220,9 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
 `{lineage.get('data_max_created_at')}` |
 | model path | `{result['model_path']}` |
 | report dir | `{result['report_dir']}` |
-| features | {fb['total']} ({fb['n_mandatory']} mandatory + \
-{len(fb['optional_on'])} optional) |
-| optional included | {', '.join(fb['optional_on']) or '—'} |
-| optional excluded | {', '.join(fb['optional_off']) or '—'} |
+| features | {fb['total']} ({fb['n_registered_used']}/{fb['n_registered']} \
+from registry) |
+| registry features unused | {', '.join(fb['unused']) or '—'} |
 
 ## Model quality (held-out test)
 | metric | value |
@@ -307,10 +312,8 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
         f"{result.get('promotion_reason', '—')}"
     )
 
-    feature_title = (
-        f"Features · {fb['total']} "
-        f"({fb['n_mandatory']} mandatory + {len(fb['optional_on'])} optional)"
-    )
+    reg_used = f"{fb['n_registered_used']}/{fb['n_registered']}"
+    feature_title = f"Features · {fb['total']} ({reg_used} from registry)"
     groups = [
         (
             "Model",
@@ -371,8 +374,8 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
         (
             feature_title,
             {
-                "Optional included": ", ".join(fb["optional_on"]) or "none",
-                "Optional excluded": ", ".join(fb["optional_off"]) or "none",
+                "Registry features used": reg_used,
+                "Registry features unused": ", ".join(fb["unused"]) or "none",
             },
         ),
     ]
