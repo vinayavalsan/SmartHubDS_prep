@@ -1,6 +1,48 @@
 # Changelog
 
 
+## 2026-08-12
+
+### Config-driven campaign scoping for training (unblocks `home`)
+- **Removed the hardcoded `campaign_id` allow-list** from the feature registry
+  (`FeatureSpec("campaign_id", training_include_values=frozenset({13, 3, 6, 16}))`).
+  It was an auto-campaign filter declared for `lead_types={"auto", "home"}`, so it
+  was silently applied to `home` too. Home's campaigns are different (15/4/27/12),
+  so the filter collapsed the home training table to **169 rows, all wins** →
+  training aborted with "only ONE target class". Auto was unaffected because its
+  campaigns overlap the list.
+- **Campaign scoping now lives in config** — `config/smarthub.yaml` →
+  `feature_engineering.training_campaign_ids` (list of ints). **Empty `[]` (the
+  default) = all campaigns**; a non-empty list keeps only rows whose `campaign_id`
+  is in the list. Change it without touching code (the `./config` mount picks it
+  up on a worker restart).
+- **Wiring** — new `training_campaign_ids()` in `core/config.py` (mirrors
+  `training_window_days()`); `build_training_table()` gained a `campaign_ids`
+  param that replaces the registry filter; `run_build_features` passes the config
+  value in.
+- **Result** — rebuilt `home` training table now has both classes
+  (~50.6k losses / 20.1k wins over ~70k rows) and trains through; `auto` unchanged.
+
+### Training resource caps + structured logging (infra)
+- **`_feature_breakdown` fixed** (`train_and_predict/flow.py`) — the feature-
+  registry refactor removed `mandatory_features`/`optional_features`, but the
+  post-training report still called them (crashing with `AttributeError`). It now
+  reports registry coverage via `model_feature_columns`.
+- **Training can't starve/​hang the box** — `config/training.yaml` lightgbm
+  `n_jobs: -1 → 4`; the `worker` service gets `cpus: 4`,
+  `OMP/OPENBLAS/MKL_NUM_THREADS=4`, and `OMP_WAIT_POLICY=PASSIVE`, and mounts
+  `./config` read-only. Fixes runs that pinned all 8 cores and never finished.
+- **Structured JSON logs** — `core/logging_utils.py` adds an opt-in JSON mode
+  (`LOG_FORMAT=json`) with per-line `service`, context binding, and an
+  `error.fingerprint` + full `error.stack`, kept alongside the existing text
+  format. App services set `LOG_FORMAT=json` + `SMARTHUB_SERVICE`.
+- **Persistent logs** — `tools/log_collector.py` + `deploy/smarthub-logs.service`
+  write date-stamped, container-tagged JSON log files (combined + per-container)
+  with 30-day retention.
+- **Noise** — silenced the repetitive LightGBM `TreeExplainer` `UserWarning` in
+  `shap_explain.py` that flooded the shap-worker logs.
+
+
 ## 2026-08-03 (later)
 
 ### Local vs production model storage + MLflow separation

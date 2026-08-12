@@ -99,8 +99,6 @@ services:
     depends_on:
       prefect-server:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     env_file: .env
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
@@ -148,6 +146,10 @@ services:
     container_name: smarthub-minio
     image: minio/minio:latest
     restart: unless-stopped
+    # Local-only object store. Enabled solely via the "minio" profile, so
+    # `docker compose up -d` (AWS/prod) does NOT start it. Bring it up for local
+    # dev with: docker compose --profile minio up -d
+    profiles: ["minio"]
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -167,6 +169,7 @@ services:
   minio-init:
     container_name: smarthub-minio-init
     image: minio/mc:latest
+    profiles: ["minio"]          # local-only; see the minio service above
     depends_on:
       minio:
         condition: service_healthy
@@ -310,8 +313,6 @@ services:
     depends_on:
       ollama:
         condition: service_started
-      minio:
-        condition: service_healthy
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
@@ -356,8 +357,6 @@ services:
     mem_limit: ${SHAP_WORKER_MEM:-2g}
     depends_on:
       postgres:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     env_file: .env
     environment:
