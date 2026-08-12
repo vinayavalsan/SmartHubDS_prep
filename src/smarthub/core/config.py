@@ -228,3 +228,22 @@ def training_window_days() -> int:
     return task_config.get_int(
         "feature_engineering", "training_window_days", DEFAULT_TRAINING_WINDOW_DAYS
     )
+
+
+def training_campaign_ids() -> list[int]:
+    """Campaign IDs to keep when building the training table (empty = all).
+
+    Reads ``[feature_engineering] training_campaign_ids`` from
+    ``config/smarthub.yaml`` (via ``task_config``). When empty or unset, no
+    campaign filter is applied and every campaign is used -- replaces the old
+    hardcoded ``campaign_id`` allow-list in the feature registry.
+
+    Returns
+    -------
+    list[int]
+        Campaign IDs to restrict training rows to; empty means all campaigns.
+    """
+    from smarthub.core import task_config
+
+    raw = task_config.get("feature_engineering", "training_campaign_ids", []) or []
+    return [int(value) for value in raw]

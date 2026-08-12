@@ -20,7 +20,11 @@ import logging
 import pandas as pd
 
 from smarthub.core import io, storage
-from smarthub.core.config import StorageSettings, training_window_days
+from smarthub.core.config import (
+    StorageSettings,
+    training_campaign_ids,
+    training_window_days,
+)
 from smarthub.core.lead_types import lead_type_name as _lead_type_name
 from smarthub.feature_engineering import features as fe
 from smarthub.feature_engineering.feature_registry import FEATURES, MISSING_CATEGORY
@@ -253,7 +257,9 @@ def run_build_features(
 
     raw = _load_raw(window, log)
     raw_rows = int(len(raw))
-    table = build_training_table(raw, lead_type_id=lead_type_id)
+    table = build_training_table(
+        raw, lead_type_id=lead_type_id, campaign_ids=training_campaign_ids()
+    )
     metadata = build_metadata(table, lead_type_id, window, raw_rows=raw_rows)
     path = str(io.save_training_table(table, name, metadata=metadata))
     version = path.rsplit("/", 1)[-1].removesuffix(".parquet")

@@ -199,6 +199,7 @@ def build_training_table(
     df: pd.DataFrame,
     lead_type_id: int | None = None,
     drop_zero_variance: bool = False,
+    campaign_ids: list[int] | None = None,
 ) -> pd.DataFrame:
     """Assemble the leakage-safe training table from raw ``lead_pings`` rows.
 
@@ -238,6 +239,12 @@ def build_training_table(
 
     if lead_type_id is not None and "lead_type_id" in out.columns:
         out = out[out["lead_type_id"] == lead_type_id].copy()
+
+    # Optional campaign scoping (config: feature_engineering.training_campaign_ids).
+    # Empty/None keeps every campaign -- replaces the old hardcoded registry filter.
+    if campaign_ids and "campaign_id" in out.columns:
+        cid = pd.to_numeric(out["campaign_id"], errors="coerce")
+        out = out[cid.isin(campaign_ids)].copy()
 
     lead_type = _lead_type_for_id(lead_type_id) if lead_type_id is not None else None
     out = _apply_training_filters(out, lead_type)

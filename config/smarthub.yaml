@@ -29,6 +29,11 @@ validation:
 feature_engineering:
   # Rolling training window (days) the feature build reads; 0 = all data.
   training_window_days: 21
+  # Campaign IDs to keep when building the training table. EMPTY = all campaigns
+  # (recommended default). Set specific IDs only to scope training, e.g. [3, 6].
+  # Applies to every lead type, so leave empty unless you know each lead type has
+  # both wins and losses within the chosen campaigns.
+  training_campaign_ids: []
   # Observed holidays for is_workday live in config/holidays.json (weekends are
   # handled in code). Override the file path with SMARTHUB_HOLIDAYS.
 
