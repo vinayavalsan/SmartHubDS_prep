@@ -1,13 +1,15 @@
 """Centralised logging configuration.
 
-Two output formats, chosen by the ``LOG_FORMAT`` env var (or the ``fmt`` arg):
+Two independent sinks:
 
-  * ``text`` (default) -- human-readable
-    ``ts | LEVEL | file:func:line | message``.
-  * ``json``           -- one JSON object per line (JSONL) with a stable schema,
-                          built for machine consumption (grep/jq, log stores, and
-                          the error-triage tool). Set ``LOG_FORMAT=json`` in the
-                          container env to switch a service over.
+  * **Console (stdout)** -- what ``docker logs`` shows. Human-readable text by
+    default (``ts | LEVEL | file:func:line | message``); set ``LOG_FORMAT=json``
+    to emit JSON on stdout too.
+  * **JSON file** -- when ``SMARTHUB_LOG_JSON_DIR`` is set, the rich JSON schema
+    below is ALSO written to ``<dir>/<service>.jsonl``, rotated at midnight with
+    ``SMARTHUB_LOG_JSON_RETAIN_DAYS`` (default 30) days of history. This is what
+    keeps ``docker logs`` readable while the persisted file stays machine-parseable
+    (grep/jq, log stores, the error-triage tool).
 
 JSON schema (per line)::
 
@@ -161,16 +163,47 @@ def configure_logging(
         return
 
     resolved = (level or os.getenv("LOG_LEVEL") or "INFO").upper()
+    # Console format: text by default (readable `docker logs`); LOG_FORMAT=json
+    # forces JSON on stdout too.
     chosen_fmt = (fmt or os.getenv("LOG_FORMAT") or "text").lower()
 
-    handler = logging.StreamHandler()
+    handlers: list[logging.Handler] = []
+
+    # 1) Console (stdout) -> what `docker logs` shows.
+    stream = logging.StreamHandler()
     if chosen_fmt == "json":
-        handler.setFormatter(JsonFormatter())
+        stream.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter(fmt=_TEXT_FORMAT, datefmt=_TEXT_DATEFMT))
+        stream.setFormatter(logging.Formatter(fmt=_TEXT_FORMAT, datefmt=_TEXT_DATEFMT))
+    handlers.append(stream)
+
+    # 2) Optional structured sink: when SMARTHUB_LOG_JSON_DIR is set, ALSO write
+    # the rich JSON schema to <dir>/<service>.jsonl, rotated daily with N-day
+    # retention. This keeps `docker logs` human-readable (text on stdout) while
+    # the persisted file stays machine-parseable JSON -- independent of the
+    # console format above.
+    json_dir = os.getenv("SMARTHUB_LOG_JSON_DIR")
+    if json_dir:
+        from logging.handlers import TimedRotatingFileHandler
+
+        try:
+            os.makedirs(json_dir, exist_ok=True)
+            retain = int(os.getenv("SMARTHUB_LOG_JSON_RETAIN_DAYS", "30"))
+            file_handler = TimedRotatingFileHandler(
+                os.path.join(json_dir, f"{_service_name()}.jsonl"),
+                when="midnight",
+                backupCount=retain,
+                utc=True,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(JsonFormatter())
+            handlers.append(file_handler)
+        except OSError:
+            # Never let a logging-sink problem take down the service.
+            pass
 
     root = logging.getLogger()
-    root.handlers = [handler]  # own the output so the format is consistent
+    root.handlers = handlers  # own the output so the format is consistent
     root.setLevel(getattr(logging, resolved, logging.INFO))
     _CONFIGURED = True
 
