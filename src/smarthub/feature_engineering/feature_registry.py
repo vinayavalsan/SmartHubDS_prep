@@ -265,7 +265,9 @@ FEATURES: dict[str, FeatureSpec] = {
         lead_types=frozenset({"auto", "home"}),
         api_input="campaign_id",
         enabled=True,
-        training_include_values=frozenset({13, 3, 6, 16}),
+        # Campaign scoping now lives in config (feature_engineering.
+        # training_campaign_ids) so it can differ per environment and doesn't
+        # silently drop a lead type's data. Empty config = all campaigns.
     ),
     "traffic_tier": FeatureSpec(
         name="traffic_tier",
