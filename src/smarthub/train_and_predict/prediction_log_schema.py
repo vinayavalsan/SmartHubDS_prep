@@ -283,6 +283,12 @@ class PredictionLogStore:
         ``ALTER TABLE ... ADD COLUMN`` for any column defined in the schema but
         absent from the live table -- portable across SQLite (dev/tests) and
         Postgres (prod), both of which support this simple form.
+
+        Race-safe: multiple processes (e.g. the several uvicorn workers in the
+        ``serve`` container) construct a store simultaneously at startup and can
+        all see a column as missing, then all try to add it -- one wins, the rest
+        raise "column already exists". That specific error is swallowed (the
+        column exists either way); anything else re-raises.
         """
         from sqlalchemy import inspect, text
 
@@ -295,10 +301,21 @@ class PredictionLogStore:
             if col.name in existing:
                 continue
             coltype = col.type.compile(dialect=self.engine.dialect)
-            with self.engine.begin() as conn:
-                conn.execute(
-                    text(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {coltype}')
-                )
+            try:
+                with self.engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE {table.name} "
+                            f'ADD COLUMN "{col.name}" {coltype}'
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001
+                # Idempotent: another process added it between our check and here
+                # (Postgres: "already exists"; SQLite: "duplicate column name").
+                msg = str(exc).lower()
+                if "already exists" in msg or "duplicate column" in msg:
+                    continue
+                raise
 
     def log_prediction(
         self,
