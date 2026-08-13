@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import uuid
 from datetime import datetime, timezone
@@ -159,9 +160,33 @@ prediction_log_table = Table(
 )
 
 
+def _nan_to_none(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN/Inf) with ``None``.
+
+    ``json.dumps`` emits bare ``NaN``/``Infinity`` tokens for non-finite floats,
+    which are NOT valid JSON: Postgres ``::jsonb``, JavaScript ``JSON.parse``, and
+    any strict parser reject them. Feature values in the SHAP payload (and model
+    input snapshots) can be NaN for missing inputs, so we normalize them to
+    ``null`` here -- keeping every stored JSON column standards-compliant.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _nan_to_none(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_nan_to_none(v) for v in obj]
+    return obj
+
+
 def _json_or_none(value: Any) -> str | None:
-    """Serialize ``value`` to a JSON string, or ``None`` if ``value`` is ``None``."""
-    return None if value is None else json.dumps(value, default=str)
+    """Serialize ``value`` to a JSON string, or ``None`` if ``value`` is ``None``.
+
+    Non-finite floats are normalized to ``null`` (see :func:`_nan_to_none`) so the
+    result is always valid, portable JSON (``allow_nan=False`` guards regressions).
+    """
+    if value is None:
+        return None
+    return json.dumps(_nan_to_none(value), default=str, allow_nan=False)
 
 
 def _decode_row(mapping) -> dict:
