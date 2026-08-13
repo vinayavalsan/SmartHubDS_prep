@@ -114,7 +114,7 @@ services:
       MKL_NUM_THREADS: ${WORKER_OMP_THREADS:-4}
       OMP_WAIT_POLICY: PASSIVE
       # Structured JSON logs (see core/logging_utils.py); the collector merges by container.
-      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: worker
       # Redshift access: tunnel via SSH bastion by default. Set SSH_TUNNEL=false in
       # .env when the host reaches Redshift directly (same-VPC EC2) -- then no key
@@ -133,6 +133,9 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data
+      # Rich JSON logs (SMARTHUB_LOG_JSON_DIR) land here on the host; docker logs
+      # stays human-readable text. Read-write (the app appends + rotates).
+      - ./logs:/app/logs
       # Mount config read-only so training-param edits (lightgbm.n_jobs, calibration.cv)
       # take effect on `docker compose up -d worker` without an image rebuild.
       - ./config:/app/config:ro
@@ -249,7 +252,7 @@ services:
     environment:
       SMARTHUB_ROOT: /app
       STORAGE_BACKEND: parquet
-      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: dashboard
       SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       # Hardcoded (not ${...}) so a stray export can't repoint the prediction log
@@ -268,6 +271,7 @@ services:
       - "8500:8501"                 # http://<host>:8500  (restrict to your IP)
     volumes:
       - ./data:/app/data
+      - ./logs:/app/logs
 
   # Local LLM for /explain_bid's narrative. No `ports:` -- internal only
   # (serve reaches it at ollama:11434). ollama-data persists pulled models.
@@ -320,7 +324,7 @@ services:
       # Raise for throughput; each worker is a separate process with its own
       # in-memory model cache. On an 8-vCPU shared box, 6 is a good ceiling.
       SERVE_WORKERS: ${SERVE_WORKERS:-4}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: serve
       # Pin math libs to one thread each so worker count is the only parallelism
       # knob -- prevents BLAS/OpenMP oversubscription (N workers x N threads
@@ -342,6 +346,7 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data
+      - ./logs:/app/logs
 
   # Offloaded SHAP enrichment worker: drains prediction-log rows with empty SHAP
   # and backfills the factor breakdown, so the ~1.5s/prediction work runs HERE,
@@ -363,7 +368,7 @@ services:
       SMARTHUB_ROOT: /app
       SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       SMARTHUB_SHAP_WORKER_POLL_SECS: ${SMARTHUB_SHAP_WORKER_POLL_SECS:-1.0}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: shap-worker
       SMARTHUB_SHAP_WORKER_BATCH: ${SMARTHUB_SHAP_WORKER_BATCH:-50}
       SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
@@ -374,6 +379,7 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data
+      - ./logs:/app/logs
     command: ["python", "-m", "smarthub.server.shap_worker"]
     # Runs the drainer loop, NOT the uvicorn API, so the serve image's baked-in
     # HTTP healthcheck (curl :8000/health) would always fail. The slim image has
@@ -397,9 +403,11 @@ services:
       SMARTHUB_ROOT: /app
       SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       SMARTHUB_SLO_WINDOW_MINUTES: ${SMARTHUB_SLO_WINDOW_MINUTES:-15}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: slo-alerts
     command: ["python", "-m", "smarthub.monitoring.slo_alerts", "--loop", "--interval", "60"]
+    volumes:
+      - ./logs:/app/logs
     # Same as shap-worker: alerter loop, not the HTTP API -> disable the inherited
     # healthcheck (no pgrep/ps in the slim image; restart recovers a crash).
     healthcheck:

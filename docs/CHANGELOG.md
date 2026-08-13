@@ -1,6 +1,36 @@
 # Changelog
 
 
+## 2026-08-13
+
+### Canonical package version + per-prediction version provenance
+- **`smarthub.__version__` is now canonical and runtime-resolved.** It reads the
+  installed package metadata (`importlib.metadata.version("smarthub")`), so
+  `pyproject.toml [project].version` is the single source of truth; the literal
+  in `src/smarthub/__init__.py` is only a fallback for an un-installed checkout.
+- **Semver policy documented** (`src/smarthub/__init__.py`): backward-incompatible
+  changes to the serving contract — including the raw `field_registry` and the
+  `feature_registry` (feature set/ordering/semantics that change how a stored
+  model scores) — warrant a MAJOR bump; compatible additions MINOR; fixes PATCH.
+- **Every prediction now records the package version.** Added a `package_version`
+  column to `smarthub_prediction_log`, auto-filled from `smarthub.__version__` in
+  `_row_values` (so success/error, `recommend_bid`/`explain_bid`, and batched
+  writes all capture it), with a `log_prediction(package_version=...)` override.
+  Pairs with the existing `model_version` so a row is traceable to **both** the
+  code contract and the model that produced it. Existing tables pick up the new
+  column via the idempotent `_add_missing_columns` migration — no manual DDL.
+
+### Dual-output logging (readable `docker logs` + machine-parseable file)
+- **`logging_utils` now writes two sinks:** human-readable text on stdout (so
+  `docker logs` is normal again) and, when `SMARTHUB_LOG_JSON_DIR` is set, the
+  rich JSON schema to `<dir>/<service>.jsonl`, rotated daily with
+  `SMARTHUB_LOG_JSON_RETAIN_DAYS` (default 30) days retained.
+- **Compose wiring:** the five app services (`worker`, `serve`, `shap-worker`,
+  `slo-alerts`, `dashboard`) set `SMARTHUB_LOG_JSON_DIR=/app/logs/app` and mount
+  `./logs:/app/logs`. Note: `LOG_FORMAT` must not be `json` in `.env` or stdout
+  stays JSON (env_file overrides compose).
+
+
 ## 2026-08-12
 
 ### Config-driven campaign scoping for training (unblocks `home`)
