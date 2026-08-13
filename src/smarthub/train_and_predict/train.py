@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+from smarthub.core import notifications
 from smarthub.core.logging_utils import get_logger
 
 from . import (
@@ -252,22 +253,6 @@ def run_training(
         "Test partition",
     )
 
-    zero_variance_features = preprocessing.find_zero_variance_features(
-        train_df,
-        numeric,
-        categorical,
-    )
-    logger.info("Feature Diagnostics")
-    logger.info(
-        "  Zero-variance features                : %s",
-        f"{len(zero_variance_features):,}",
-    )
-    logger.info(
-        "  Zero-variance feature names           : %s",
-        ", ".join(zero_variance_features) or "none",
-    )
-    logger.info("  Zero-variance features retained       : yes")
-
     logger.info("Feature columns: %s", feature_cols)
 
     feature_summary_df, feature_counts_df = (
@@ -331,6 +316,66 @@ def run_training(
         test_df["created_at"].dt.day_name().value_counts().sort_index().items()
     ):
         logger.info("    %-10s : %s", day, f"{count:,}")
+
+    binary_numeric = []
+    for column in numeric:
+        if column not in frame.columns:
+            continue
+        values = set(frame[column].dropna().unique().tolist())
+        if values and values.issubset({0, 1}):
+            binary_numeric.append(column)
+
+    diagnostic_features = list(categorical) + binary_numeric
+    split_diagnostics = []
+    for column in diagnostic_features:
+        train_values = set(train_df[column].dropna().unique().tolist())
+        test_values = set(test_df[column].dropna().unique().tolist())
+        split_diagnostics.append(
+            {
+                "feature": column,
+                "train_unique": len(train_values),
+                "test_unique": len(test_values),
+            }
+        )
+
+    split_diagnostics_df = pd.DataFrame(split_diagnostics)
+    differing_split_diagnostics_df = split_diagnostics_df[
+        split_diagnostics_df["train_unique"] != split_diagnostics_df["test_unique"]
+    ]
+    logger.info("Categorical/Binary Feature Split Summary")
+    if differing_split_diagnostics_df.empty:
+        logger.info("  No train/test uniqueness differences.")
+    else:
+        logger.info("\n%s", differing_split_diagnostics_df.to_string(index=False))
+
+    feature_split_diagnostics = differing_split_diagnostics_df.to_dict(orient="records")
+
+    binary_variance_loss = []
+    for row in split_diagnostics:
+        column = row["feature"]
+        overall_unique = frame[column].nunique(dropna=True)
+        if overall_unique == 2 and row["train_unique"] == 1 and row["test_unique"] == 2:
+            binary_variance_loss.append(row)
+
+    if binary_variance_loss:
+        affected = "\n".join(
+            f"{row['feature']}: train={row['train_unique']}, "
+            f"test={row['test_unique']}"
+            for row in binary_variance_loss
+        )
+        notifications.notify_warning(
+            "train-model",
+            {
+                "Lead type": f"{lead_type_name} ({lead_type_id})",
+                "Issue": "Binary feature(s) lost variance in training split",
+                "Affected features": affected,
+                "Action": "Training continues normally",
+            },
+        )
+
+    zero_variance_features = [
+        row["feature"] for row in split_diagnostics if row["train_unique"] <= 1
+    ]
 
     model_type = training_config.model_type
     model_params = training_config.model_parameters
@@ -448,6 +493,7 @@ def run_training(
         "data_max_created_at": prep_summary["data_max_created_at"],
         "source_row_count": prep_summary["source_row_count"],
         "zero_variance_features": list(zero_variance_features),
+        "feature_split_diagnostics": feature_split_diagnostics,
     }
 
     logger.info(
@@ -614,6 +660,7 @@ def run_training(
         },
         "feature_cols": list(feature_cols),
         "zero_variance_features": list(zero_variance_features),
+        "feature_split_diagnostics": feature_split_diagnostics,
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
         "optimizer": optimizer_config.as_dict(),
