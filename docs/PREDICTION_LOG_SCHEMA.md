@@ -115,6 +115,7 @@ different database/schema. See §8 for how it gets populated.
 | `served_at` | timestamptz | When this prediction was served. |
 | `log_date` | date | `served_at::date` - plain indexed column for time-range queries (§3). |
 | `schema_version` | smallint | `2` for this single-table design (v1 was the 3-table version, never wired into a live endpoint - see §11). |
+| `package_version` | text, nullable | SmartHub package version (semver, `smarthub.__version__`) that served the row. Pairs with `model_version` so a prediction is traceable to both the code contract (field/feature registries, serving logic) and the model. Auto-filled at write time. |
 | `request_id` | text, nullable | Caller-supplied correlation id, if the upstream system has one. |
 | `lead_ping_id` | bigint, nullable | Reference to `public.lead_pings.id` - the primary way to map a prediction back to a specific lead. Optional on `BidRequest`; nullable when the caller doesn't supply one (see §8). |
 | `endpoint` | text | `'recommend_bid'` \| `'explain_bid'`. |

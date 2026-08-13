@@ -42,6 +42,14 @@ from sqlalchemy import (
 
 logger = logging.getLogger("smarthub.train_and_predict.prediction_log_schema")
 
+try:
+    # Canonical SmartHub package version (semver), recorded on every row so a
+    # prediction is traceable to the exact code that produced it -- paired with
+    # the per-row model_version. See smarthub/__init__.py for the source policy.
+    from smarthub import __version__ as _PACKAGE_VERSION
+except Exception:  # pragma: no cover - version metadata unavailable
+    _PACKAGE_VERSION = None
+
 DEFAULT_PREDICTION_LOG_DB_URL = (
     "postgresql+psycopg2://prefect:prefect@postgres:5432/prefect"
 )
@@ -77,6 +85,11 @@ prediction_log_table = Table(
     Column("served_at", DateTime, nullable=False),
     Column("log_date", Date, nullable=False),
     Column("schema_version", SmallInteger, nullable=False, default=SCHEMA_VERSION),
+    # SmartHub package version (semver) that served this row -- pairs with
+    # model_version so a prediction is traceable to BOTH the code contract
+    # (field/feature registries, serving logic) and the model that produced it.
+    # Auto-filled from smarthub.__version__ in _row_values when not supplied.
+    Column("package_version", String(64)),
     Column("request_id", String(128)),
     Column("lead_ping_id", Integer),
     Column("endpoint", String(32), nullable=False),
@@ -199,6 +212,7 @@ def _row_values(rec: dict) -> tuple[dict, str]:
         served_at=served_at,
         log_date=log_date,
         schema_version=SCHEMA_VERSION,
+        package_version=rec.get("package_version") or _PACKAGE_VERSION,
         request_id=rec.get("request_id"),
         lead_ping_id=rec.get("lead_ping_id"),
         endpoint=endpoint,
@@ -328,6 +342,7 @@ class PredictionLogStore:
         prediction_id: str | None = None,
         served_at: datetime | None = None,
         tat_seconds: float | None = None,
+        package_version: str | None = None,
     ) -> str:
         """Insert one prediction-log row (one row per API call, §2 of the doc).
 
@@ -393,6 +408,10 @@ class PredictionLogStore:
         served_at : datetime | None
             Explicit timestamp to use (mainly for tests); defaults to now
             (UTC) when omitted.
+        package_version : str | None
+            SmartHub package version (semver) that served this row; defaults to
+            ``smarthub.__version__`` when omitted, so every row records the code
+            version alongside ``model_version``.
 
         Returns
         -------
@@ -445,6 +464,7 @@ class PredictionLogStore:
                 prediction_id=prediction_id,
                 served_at=served_at,
                 tat_seconds=tat_seconds,
+                package_version=package_version,
             )
         )
         with self.engine.begin() as conn:
