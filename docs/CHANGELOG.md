@@ -3,6 +3,20 @@
 
 ## 2026-08-13
 
+### Prediction log: full optimizer sweep + valid-JSON guarantee
+- **`candidate_evaluations`** — new JSON column recording the complete optimizer
+  sweep for every prediction: one entry per candidate bid
+  (`{bid, predicted_win_rate, expected_profit, selected}`), exactly one
+  `selected`. Retains the full optimizer evaluation history so a decision is
+  reconstructable without re-running the model. Logged only (kept out of the
+  `/recommend_bid` response to keep the payload lean); the optimizer already
+  computed these arrays, so no extra model work. See `docs/PREDICTION_LOG_SCHEMA.md`.
+- **Valid-JSON fix** — non-finite floats (`NaN`/`Infinity`) in any JSON column
+  (notably SHAP feature values for missing inputs) are now normalized to `null`
+  at serialization. Bare `NaN` is not valid JSON and was rejecting Postgres
+  `::jsonb` casts / strict parsers; every stored JSON column is now
+  standards-compliant (`allow_nan=False` guards regressions).
+
 ### Canonical package version + per-prediction version provenance
 - **`smarthub.__version__` is now canonical and runtime-resolved.** It reads the
   installed package metadata (`importlib.metadata.version("smarthub")`), so
