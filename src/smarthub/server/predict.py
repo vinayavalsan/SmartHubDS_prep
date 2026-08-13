@@ -1177,6 +1177,12 @@ if _FASTAPI_AVAILABLE:
             )
         )
 
+        # candidate_evaluations is persisted to the prediction log above, but
+        # deliberately NOT returned to the bid caller: it's an audit/explainability
+        # payload (up to a few hundred entries) with no place on the latency- and
+        # bandwidth-sensitive response. Drop it so the response stays lean.
+        result.pop("candidate_evaluations", None)
+
         # SHAP enrichment mode (config.shap_enrichment_mode / $SMARTHUB_SHAP_MODE):
         #   inprocess -> compute SHAP here, in a background task on this worker
         #                (legacy behaviour, kept for A/B TAT comparison).
