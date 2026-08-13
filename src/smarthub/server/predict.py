@@ -399,6 +399,7 @@ def decide_bid(
     bid_step: float,
     created_dayofweek: int | None = None,
     created_hour: int | None = None,
+    include_candidates: bool = False,
 ) -> dict:
     """The one bidding decision -- always one explicit, auditable path.
 
@@ -446,7 +447,9 @@ def decide_bid(
     dict
         `recommended_bid`, `recommended_bid_predicted_win_rate`,
         `recommended_bid_predicted_profit`, `max_bid`, `n_candidate_bids`,
-        `decision_path`, `decision_reason`, `model_data_age_days`.
+        `decision_path`, `decision_reason`, `model_data_age_days`; plus
+        `candidate_evaluations` (the full per-candidate sweep) when
+        `include_candidates` is set and a model actually scored candidates.
     """
     candidate_bids, max_bid = optimizer.candidate_bids_for_revenue(
         expected_revenue, target_cm, min_bid, bid_step
@@ -494,7 +497,13 @@ def decide_bid(
         }
 
     result = optimizer.optimize_bid_for_row(
-        row, model, expected_revenue, target_cm, min_bid, bid_step
+        row,
+        model,
+        expected_revenue,
+        target_cm,
+        min_bid,
+        bid_step,
+        include_candidates=include_candidates,
     )
     # See the empty_result() branch above -- same rename, same reason.
     result["recommended_bid_predicted_profit"] = result.pop(
@@ -1074,6 +1083,7 @@ if _FASTAPI_AVAILABLE:
                 bid_step=request.bid_step,
                 created_dayofweek=request.created_dayofweek,
                 created_hour=request.created_hour,
+                include_candidates=True,
             )
         except Exception as exc:
             # Error path: also enqueued (off the request path) so even failure
@@ -1143,6 +1153,11 @@ if _FASTAPI_AVAILABLE:
                     "bid_step": request.bid_step,
                     "n_candidates": result.get("n_candidate_bids"),
                 },
+                # Full optimizer sweep: every candidate bid the optimizer scored,
+                # with its predicted win rate, expected profit, and whether it was
+                # the selected (argmax-profit) bid. Lets a prediction's optimizer
+                # decision be reconstructed without re-running the model.
+                candidate_evaluations=result.get("candidate_evaluations"),
                 **_manifest_log_fields(manifest),
                 model_data_age_days=result.get("model_data_age_days"),
                 decision_path=result.get("decision_path"),

@@ -97,6 +97,7 @@ def optimize_bid_for_row(
     target_cm: float,
     min_bid: float,
     bid_step: float,
+    include_candidates: bool = False,
 ) -> dict:
     """Select the highest expected-profit bid for one lead.
 
@@ -114,11 +115,19 @@ def optimize_bid_for_row(
         Minimum candidate bid.
     bid_step : float
         Increment between candidate bids.
+    include_candidates : bool
+        When ``True``, also return a ``candidate_evaluations`` list -- one entry
+        per candidate bid evaluated by the sweep, each
+        ``{bid, predicted_win_rate, expected_profit, selected}`` -- so the full
+        optimizer evaluation history can be persisted for auditing/explainability
+        (see docs/PREDICTION_LOG_SCHEMA.md). Off by default so the batch/eval
+        callers pay nothing for it.
 
     Returns
     -------
     dict
-        Recommended bid and predicted business metrics.
+        Recommended bid and predicted business metrics; plus
+        ``candidate_evaluations`` when ``include_candidates`` is set.
     """
     candidate_bids, max_bid = candidate_bids_for_revenue(
         expected_revenue,
@@ -135,13 +144,28 @@ def optimize_bid_for_row(
         predicted_win_rates = model.predict_proba(candidate_rows)[:, 1]
     expected_profits = predicted_win_rates * (expected_revenue - candidate_bids)
     best_idx = int(np.argmax(expected_profits))
-    return {
+    result = {
         "recommended_bid": float(candidate_bids[best_idx]),
         "recommended_bid_predicted_win_rate": float(predicted_win_rates[best_idx]),
         "recommended_bid_expected_profit": float(expected_profits[best_idx]),
         "max_bid": float(max_bid),
         "n_candidate_bids": int(len(candidate_bids)),
     }
+    if include_candidates:
+        # The full per-candidate sweep, ready to serialize. Rounded to keep the
+        # JSON payload compact (win rate 6dp, money 4dp) without losing signal.
+        result["candidate_evaluations"] = [
+            {
+                "bid": round(float(b), 4),
+                "predicted_win_rate": round(float(w), 6),
+                "expected_profit": round(float(p), 4),
+                "selected": i == best_idx,
+            }
+            for i, (b, w, p) in enumerate(
+                zip(candidate_bids, predicted_win_rates, expected_profits)
+            )
+        ]
+    return result
 
 
 def _score_chunk(

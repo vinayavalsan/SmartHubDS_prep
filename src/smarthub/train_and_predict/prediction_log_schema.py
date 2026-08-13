@@ -109,6 +109,12 @@ prediction_log_table = Table(
     Column("min_bid", Numeric(10, 2), nullable=False),
     Column("bid_step", Numeric(10, 2), nullable=False),
     Column("candidate_bid_generation", Text),
+    # Full optimizer sweep (JSON array): every candidate bid the optimizer
+    # evaluated, each {bid, predicted_win_rate, expected_profit, selected}. The
+    # `selected: true` entry is the chosen (argmax-profit) bid. Lets the whole
+    # optimizer decision be reconstructed without re-running the model. Null on
+    # cold start / no-viable-bid (nothing was scored).
+    Column("candidate_evaluations", Text),
     # Human-friendly model identity (e.g. "auto" / production slug), alongside
     # the exact version below.
     Column("model_name", String(128)),
@@ -180,6 +186,7 @@ def _decode_row(mapping) -> dict:
         "model_input_features",
         "feature_cols",
         "candidate_bid_generation",
+        "candidate_evaluations",
         "shap_explanation",
         "serving_config",
     ):
@@ -232,6 +239,7 @@ def _row_values(rec: dict) -> tuple[dict, str]:
         min_bid=rec.get("min_bid"),
         bid_step=rec.get("bid_step"),
         candidate_bid_generation=_json_or_none(rec.get("candidate_bid_generation")),
+        candidate_evaluations=_json_or_none(rec.get("candidate_evaluations")),
         model_name=rec.get("model_name"),
         model_version=rec.get("model_version"),
         model_uri=rec.get("model_uri"),
@@ -336,6 +344,7 @@ class PredictionLogStore:
         model_input_features: dict | None = None,
         feature_cols: list[str] | None = None,
         candidate_bid_generation: dict | None = None,
+        candidate_evaluations: list | None = None,
         model_name: str | None = None,
         model_version: str | None = None,
         model_uri: str | None = None,
@@ -387,8 +396,13 @@ class PredictionLogStore:
         feature_cols : list[str] | None
             Ordered feature columns the serving model version used.
         candidate_bid_generation : dict | None
-            Summary of the candidate-bid sweep (method/bounds/count) -
-            replaces v1's per-candidate table, see the module docstring.
+            Summary of the candidate-bid sweep (method/bounds/count).
+        candidate_evaluations : list | None
+            The full optimizer sweep: one entry per candidate bid, each
+            ``{bid, predicted_win_rate, expected_profit, selected}`` with
+            ``selected=True`` on the chosen bid. Retains the complete optimizer
+            evaluation history so the decision is reconstructable without the
+            model. ``None`` on cold start / no-viable-bid.
         model_version, model_uri, model_type, model_calibrated,
         training_table_version, model_data_min_created_at,
         model_data_max_created_at, model_data_age_days :
@@ -458,6 +472,7 @@ class PredictionLogStore:
                 min_bid=min_bid,
                 bid_step=bid_step,
                 candidate_bid_generation=candidate_bid_generation,
+                candidate_evaluations=candidate_evaluations,
                 model_name=model_name,
                 model_version=model_version,
                 model_uri=model_uri,
