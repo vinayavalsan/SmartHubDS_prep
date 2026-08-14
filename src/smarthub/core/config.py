@@ -7,18 +7,74 @@ clear message instead of a deep ``TypeError``.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
 # Load a local .env if present. Safe to call repeatedly.
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
+
+def get_with_logged_fallback(
+    mapping: dict[str, Any],
+    key: str,
+    default: Any,
+    field_name: str,
+) -> Any:
+    """Return a configured value or log when its fallback is used.
+
+    An explicitly configured value is preserved, including ``0``, ``False``,
+    an empty string, or an empty list. The fallback is used only when ``key``
+    is absent from ``mapping``.
+
+    Inputs
+    ------
+    mapping : dict[str, Any]
+        Configuration mapping containing the key.
+    key : str
+        Key to resolve.
+    default : Any
+        Fallback value used when the key is absent.
+    field_name : str
+        Fully-qualified configuration name used in the warning.
+
+    Returns
+    -------
+    Any
+        Configured value when present; otherwise ``default``.
+    """
+    if key in mapping:
+        return mapping[key]
+
+    logger.warning(
+        "Config fallback used: %s was not set; using default %r.",
+        field_name,
+        default,
+    )
+    return default
+
 
 class ConfigError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
+
+
+def _env_with_fallback(name: str, default: str) -> str:
+    """Return an environment value, logging when the default is used."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        logger.warning(
+            "Config fallback used: environment.%s was not set; using default %r.",
+            name,
+            default,
+        )
+        return default
+    return raw.strip()
 
 
 def _require(name: str) -> str:
@@ -36,6 +92,11 @@ def _env_bool(name: str, default: bool) -> bool:
     """Parse a boolean env var (``true/false/1/0/yes/no/on/off``)."""
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
+        logger.warning(
+            "Config fallback used: environment.%s was not set; using default %r.",
+            name,
+            default,
+        )
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -72,7 +133,7 @@ class SSHSettings:
             host=_require("SSH_HOST"),
             user=_require("SSH_USER"),
             private_key_path=key_path,
-            port=int(os.getenv("SSH_PORT", "22")),
+            port=int(_env_with_fallback("SSH_PORT", "22")),
             private_key_password=passphrase,
         )
 
@@ -107,8 +168,8 @@ class RedshiftSettings:
             database=_require("REDSHIFT_DB"),
             user=_require("REDSHIFT_USER"),
             password=_require("REDSHIFT_PASSWORD"),
-            port=int(os.getenv("REDSHIFT_PORT", "5439")),
-            connect_timeout=int(os.getenv("REDSHIFT_CONNECT_TIMEOUT", "10")),
+            port=int(_env_with_fallback("REDSHIFT_PORT", "5439")),
+            connect_timeout=int(_env_with_fallback("REDSHIFT_CONNECT_TIMEOUT", "10")),
         )
 
 
@@ -182,7 +243,7 @@ class StorageSettings:
         ConfigError
             If ``STORAGE_BACKEND`` is not duckdb, parquet or both.
         """
-        backend = os.getenv("STORAGE_BACKEND", "both").strip().lower()
+        backend = _env_with_fallback("STORAGE_BACKEND", "both").lower()
         if backend not in _VALID_BACKENDS:
             raise ConfigError(
                 f"STORAGE_BACKEND must be one of {sorted(_VALID_BACKENDS)}, "
@@ -191,10 +252,12 @@ class StorageSettings:
         return cls(
             backend=backend,
             duckdb_path=Path(
-                os.getenv("DUCKDB_PATH", "data/raw_datasets/leads.duckdb")
+                _env_with_fallback("DUCKDB_PATH", "data/raw_datasets/leads.duckdb")
             ),
-            parquet_dir=Path(os.getenv("PARQUET_DIR", "data/raw_datasets/leads")),
-            partition_date_col=os.getenv("PARTITION_DATE_COL", "created_at"),
+            parquet_dir=Path(
+                _env_with_fallback("PARQUET_DIR", "data/raw_datasets/leads")
+            ),
+            partition_date_col=_env_with_fallback("PARTITION_DATE_COL", "created_at"),
         )
 
     @property
@@ -225,9 +288,20 @@ def training_window_days() -> int:
     """
     from smarthub.core import task_config
 
-    return task_config.get_int(
-        "feature_engineering", "training_window_days", DEFAULT_TRAINING_WINDOW_DAYS
+    missing = object()
+    raw = task_config.get(
+        "feature_engineering",
+        "training_window_days",
+        missing,
     )
+    values = {} if raw is missing else {"training_window_days": raw}
+    resolved = get_with_logged_fallback(
+        values,
+        "training_window_days",
+        DEFAULT_TRAINING_WINDOW_DAYS,
+        "feature_engineering.training_window_days",
+    )
+    return int(resolved)
 
 
 def training_campaign_ids() -> list[int]:
@@ -245,5 +319,17 @@ def training_campaign_ids() -> list[int]:
     """
     from smarthub.core import task_config
 
-    raw = task_config.get("feature_engineering", "training_campaign_ids", []) or []
-    return [int(value) for value in raw]
+    missing = object()
+    raw = task_config.get(
+        "feature_engineering",
+        "training_campaign_ids",
+        missing,
+    )
+    values = {} if raw is missing else {"training_campaign_ids": raw}
+    resolved = get_with_logged_fallback(
+        values,
+        "training_campaign_ids",
+        [],
+        "feature_engineering.training_campaign_ids",
+    )
+    return [int(value) for value in resolved]

@@ -54,24 +54,34 @@ def test_ssh_settings_missing_key_file_raises(monkeypatch, tmp_path):
 
 
 def test_training_window_days_from_config_and_default(monkeypatch, tmp_path):
-    """training_window_days comes from the YAML; defaults to 21 when absent."""
+    """training_window_days comes from YAML without leaking test config state."""
     from smarthub.core import task_config
     from smarthub.core.config import training_window_days
 
-    monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(tmp_path / "absent.yaml"))
-    task_config.reload()
-    assert training_window_days() == 21  # default
+    # task_config caches the loaded YAML. Use a nested monkeypatch context so
+    # SMARTHUB_TASK_CONFIG is restored before the final cache clear; otherwise
+    # later prediction tests keep reading this temporary feature-only YAML.
+    with monkeypatch.context() as config_patch:
+        config_patch.setenv(
+            "SMARTHUB_TASK_CONFIG",
+            str(tmp_path / "absent.yaml"),
+        )
+        task_config.reload()
+        assert training_window_days() == 21
 
-    cfg = tmp_path / "t.yaml"
-    cfg.write_text("feature_engineering:\n  training_window_days: 45\n")
-    monkeypatch.setenv("SMARTHUB_TASK_CONFIG", str(cfg))
-    task_config.reload()
-    assert training_window_days() == 45
+        cfg = tmp_path / "t.yaml"
+        cfg.write_text("feature_engineering:\n  training_window_days: 45\n")
+        config_patch.setenv("SMARTHUB_TASK_CONFIG", str(cfg))
+        task_config.reload()
+        assert training_window_days() == 45
 
-    cfg.write_text("feature_engineering:\n  training_window_days: 0\n")  # all data
+        cfg.write_text("feature_engineering:\n  training_window_days: 0\n")
+        task_config.reload()
+        assert training_window_days() == 0
+
+    # The nested monkeypatch context has now restored the real config path.
+    # Clear the cached temporary YAML so subsequent tests load the repo config.
     task_config.reload()
-    assert training_window_days() == 0
-    task_config.reload()  # restore real config for other tests
 
 
 def test_training_config_defaults_to_repo_yaml(monkeypatch):
