@@ -5,14 +5,33 @@ This module creates preprocessing pipelines and supported classifier families.
 
 from __future__ import annotations
 
+import warnings
+
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
 
 from smarthub.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+# sklearn/LightGBM interoperability warning:
+# CalibratedClassifierCV may call a fitted LGBMClassifier with an ndarray even
+# when LightGBM recorded feature names during fit. Our pipeline fixes feature
+# order explicitly through ColumnTransformer and the warning does not indicate
+# a schema mismatch. Suppress only this exact warning; all other warnings remain.
+warnings.filterwarnings(
+    "ignore",
+    message=r"X does not have valid feature names, "
+    "but LGBMClassifier was fitted with feature names",
+    category=UserWarning,
+)
+
+
+def _to_numpy_array(value):
+    """Return model input as a NumPy-compatible array."""
+    return value.to_numpy() if hasattr(value, "to_numpy") else value
 
 
 def build_logistic_regression_model(
@@ -138,6 +157,13 @@ def build_lightgbm_model(
             ("categorical", categorical_transformer, list(categorical_features)),
         ]
     )
+    # Explicitly convert the transformed feature matrix to an array before
+    # LightGBM. This keeps fit and predict input types identical even when a
+    # global sklearn setting requests pandas transformer output.
+    to_numpy = FunctionTransformer(
+        _to_numpy_array,
+        validate=False,
+    )
 
     # ColumnTransformer output order = numeric block then categorical block,
     # one column each -> aligns with this ordered list, so the constraint vector
@@ -146,7 +172,13 @@ def build_lightgbm_model(
     monotone = [1 if col == "bid" else 0 for col in ordered]
 
     classifier = LGBMClassifier(monotone_constraints=monotone, **model_params)
-    pipeline = Pipeline([("preprocessor", preprocessor), ("classifier", classifier)])
+    pipeline = Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("to_numpy", to_numpy),
+            ("classifier", classifier),
+        ]
+    )
     return pipeline
 
 

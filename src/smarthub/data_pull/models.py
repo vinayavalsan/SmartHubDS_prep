@@ -33,6 +33,7 @@ from . import query_builder
 
 _DT_FORMAT = "%Y-%m-%d %H:%M:%S"
 DateLike = Union[str, datetime]
+LeadTypeIds = int | Sequence[int] | None
 
 # String tokens (varchar booleans) that mean "yes" in this warehouse.
 TRUE_TOKEN = "true"
@@ -222,7 +223,7 @@ def coerce_leads_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 def leads_select(
     min_created_at: DateLike,
     max_created_at: DateLike,
-    lead_type_id: int | None = None,
+    lead_type_ids: LeadTypeIds = None,
 ) -> Select:
     """Build the base leads query: selected columns within a created_at range.
 
@@ -233,8 +234,8 @@ def leads_select(
         string or a ``datetime``).
     max_created_at : str | datetime
         Exclusive upper bound for ``created_at``.
-    lead_type_id : int | None
-        Restrict to one lead type (e.g. 6=auto, 1=home); ``None`` pulls all.
+    lead_type_ids : int | Sequence[int] | None
+        Restrict to one or more lead types. ``None`` applies no lead-type filter.
 
     Returns
     -------
@@ -247,8 +248,9 @@ def leads_select(
         .where(LeadPing.created_at >= lower)
         .where(LeadPing.created_at < upper)
     )
-    if lead_type_id is not None:
-        stmt = stmt.where(LeadPing.lead_type_id == lead_type_id)
+    if lead_type_ids is not None:
+        ids = [lead_type_ids] if isinstance(lead_type_ids, int) else list(lead_type_ids)
+        stmt = stmt.where(LeadPing.lead_type_id.in_(ids))
     return stmt.order_by(LeadPing.created_at)
 
 
@@ -286,7 +288,7 @@ def leads_with_expected_revenue_select(
     min_created_at: DateLike,
     max_created_at: DateLike,
     selected_only: bool = True,
-    lead_type_id: int | None = None,
+    lead_type_ids: LeadTypeIds = None,
 ) -> Select:
     """Leads query LEFT JOINed to per-ping expected revenue from the listings.
 
@@ -302,8 +304,8 @@ def leads_with_expected_revenue_select(
         Exclusive upper bound for ``created_at``.
     selected_only : bool
         Aggregate expected revenue over selected listings only.
-    lead_type_id : int | None
-        Restrict to one lead type; ``None`` pulls all types.
+    lead_type_ids : int | Sequence[int] | None
+        Restrict to one or more lead types. ``None`` applies no lead-type filter.
 
     Returns
     -------
@@ -323,6 +325,7 @@ def leads_with_expected_revenue_select(
         .where(LeadPing.created_at >= lower)
         .where(LeadPing.created_at < upper)
     )
-    if lead_type_id is not None:
-        stmt = stmt.where(LeadPing.lead_type_id == lead_type_id)
+    if lead_type_ids is not None:
+        ids = [lead_type_ids] if isinstance(lead_type_ids, int) else list(lead_type_ids)
+        stmt = stmt.where(LeadPing.lead_type_id.in_(ids))
     return stmt.order_by(LeadPing.created_at)

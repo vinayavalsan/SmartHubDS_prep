@@ -43,8 +43,12 @@ class ValidationReport:
     cross_field: dict[str, int]
     missing: dict[str, float]
     high_missing: list[str]
+    constant_columns: dict[str, dict]
     metrics: dict
     schema_checked: bool  # False if pandera wasn't available
+    erred_rows: int = 0
+    auction_excluded_rows: int = 0
+    validated_rows: int = 0
 
     @property
     def cross_field_hits(self) -> dict[str, int]:
@@ -199,11 +203,46 @@ def validate_leads(
         Structured findings for artifact / Slack / log rendering.
     """
     total = len(df)
+
+    # Count errored rows first. These are reported but excluded from all
+    # ordinary validation because they are not usable training observations.
+    erred = rules.erred_mask(df)
+    erred_rows = int(erred.sum())
+    non_erred_df = df.loc[~erred].copy()
+
+    # Apply the same auction-eligibility rule used by feature engineering:
+    # keep rows where bid > 0 or won == true. Rows excluded here are reported
+    # separately and do not distort downstream feature-quality validation.
+    auction_eligible = rules.auction_eligible_mask(non_erred_df)
+    auction_excluded_rows = int((~auction_eligible).sum())
+    validation_df = non_erred_df.loc[auction_eligible].copy()
+    validated_rows = len(validation_df)
+
+    # Schema drift is a property of the pulled payload, so keep it on the full
+    # batch. Row-level validation runs on the training-eligible population.
     schema_issues = rules.schema_drift(df)
-    rule_violations, schema_checked = _run_schema_checks(df)
-    rule_violations = rule_violations + _run_custom_rules(df)
-    cross = rules.cross_field_checks(df)
-    missing = rules.missing_rates(df)
+    rule_violations, schema_checked = _run_schema_checks(validation_df)
+    rule_violations = rule_violations + _run_custom_rules(validation_df)
+
+    # Checks that depend on rows removed by the pre-validation filters must run
+    # before those rows are excluded.
+    cross = rules.erred_cross_field_checks(df)
+    cross.update(rules.auction_cross_field_checks(non_erred_df))
+    cross.update(rules.cross_field_checks(validation_df))
+
+    missing = rules.missing_rates(validation_df)
+
+    # These operational error fields are no longer informative once errored
+    # rows have been explicitly counted and removed from the validation
+    # population. Keep the top-level errored-row summary, but omit these fields
+    # from post-filter missingness reporting.
+    for column in ("erred", "error_reason_id"):
+        missing.pop(column, None)
+
+    constants = rules.constant_columns(validation_df)
+    for column in ("erred", "error_reason_id"):
+        constants.pop(column, None)
+
     if lead_type_id is None:
         out_of_scope = set()
     else:
@@ -220,7 +259,19 @@ def validate_leads(
         for c, r in missing.items()
         if r >= high_missing_threshold and c not in out_of_scope
     )
-    metrics = rules.batch_metrics(df)
+    constants = {
+        c: profile for c, profile in constants.items() if c not in out_of_scope
+    }
+
+    metrics = rules.batch_metrics(validation_df)
+    metrics["pulled_rows"] = total
+    metrics["erred_rows"] = erred_rows
+    metrics["auction_excluded_rows"] = auction_excluded_rows
+    metrics["validated_rows"] = validated_rows
+    metrics["erred_rate"] = float(erred_rows / total) if total else 0.0
+    metrics["auction_excluded_rate_of_non_erred"] = (
+        float(auction_excluded_rows / len(non_erred_df)) if len(non_erred_df) else 0.0
+    )
 
     return ValidationReport(
         total_rows=total,
@@ -229,6 +280,10 @@ def validate_leads(
         cross_field=cross,
         missing=missing,
         high_missing=high_missing,
+        constant_columns=constants,
         metrics=metrics,
         schema_checked=schema_checked,
+        erred_rows=erred_rows,
+        auction_excluded_rows=auction_excluded_rows,
+        validated_rows=validated_rows,
     )

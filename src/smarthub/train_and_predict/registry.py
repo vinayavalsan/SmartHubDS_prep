@@ -549,29 +549,24 @@ def decide_promotion(
     max_log_loss_regression: float,
     min_profit_ratio: float,
     max_absolute_profit_loss_tolerance: float,
-    target_cm: float,
     max_log_loss: float,
     min_expected_profit: float,
 ) -> PromotionDecision:
     """Compare challenger and serving performance and decide promotion.
 
-    Every challenger must pass absolute log-loss, expected-profit, and
-    contribution-margin gates. When a serving model exists, the challenger
-    must also satisfy the relative profit and log-loss requirements.
+    Every challenger must pass absolute log-loss and expected-profit gates.
+    When a serving model exists, the challenger must also satisfy the relative
+    profit and log-loss requirements.
     """
     challenger_log_loss = challenger_metrics.get("log_loss")
     challenger_profit = (challenger_optimizer or {}).get(
         "recommended_bid_total_expected_profit"
     )
-    challenger_cm = (challenger_optimizer or {}).get("avg_recommended_bid_cm_if_won")
-
     comparison = {
         "challenger_log_loss": challenger_log_loss,
         "maximum_log_loss": max_log_loss,
         "challenger_profit": challenger_profit,
         "minimum_expected_profit": min_expected_profit,
-        "challenger_recommended_cm": challenger_cm,
-        "target_cm": target_cm,
     }
 
     if challenger_log_loss is None:
@@ -602,27 +597,12 @@ def decide_promotion(
             comparison,
         )
 
-    if challenger_cm is None:
-        return PromotionDecision(
-            False,
-            "Challenger recommended contribution margin is unavailable.",
-            comparison,
-        )
-    if challenger_cm < target_cm:
-        return PromotionDecision(
-            False,
-            f"Challenger recommended CM ({challenger_cm:.2%}) is below the "
-            f"optimizer target CM ({target_cm:.2%}).",
-            comparison,
-        )
-
     if currently_serving_metrics is None:
         return PromotionDecision(
             True,
             f"First model passed all absolute promotion thresholds: log loss "
-            f"{challenger_log_loss:.4f}, expected profit "
-            f"{challenger_profit:.2f}, and recommended CM "
-            f"{challenger_cm:.2%}.",
+            f"{challenger_log_loss:.4f} and expected profit "
+            f"{challenger_profit:.2f}.",
             comparison,
         )
 
@@ -701,8 +681,7 @@ def decide_promotion(
         f"Challenger passed the absolute thresholds and satisfies the "
         f"{min_profit_ratio:.0%} relative profit requirement and the "
         f"{max_absolute_profit_loss_tolerance:.2f} absolute profit-loss "
-        f"tolerance; recommended CM "
-        f"is {challenger_cm:.2%}, and log-loss regression "
+        f"tolerance; log-loss regression "
         f"{log_loss_regression:.4f} is within tolerance.",
         comparison,
     )

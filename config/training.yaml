@@ -1,10 +1,9 @@
 training:
   model_type: lightgbm
-  drop_zero_variance: true
   random_seed: 42
 calibration:
-  enabled: false
-  method: isotonic
+  enabled: true
+  method: sigmoid
   cv: 3
 split:
   strategy: time
@@ -35,15 +34,15 @@ models:
     verbosity: -1
     n_jobs: 4
     random_state: 42
-    n_estimators: 400
-    num_leaves: 117
-    max_depth: 11
-    learning_rate: 0.10690364240266181
-    min_child_samples: 103
-    subsample: 0.6661479368006373
-    colsample_bytree: 0.7330250255411243
-    reg_alpha: 0.0009993286919307933
-    reg_lambda: 6.900268420981573
+    n_estimators: 500
+    num_leaves: 102
+    max_depth: 10
+    learning_rate: 0.04468207810538316
+    min_child_samples: 100
+    subsample: 0.6712372711931107
+    colsample_bytree: 0.6853618912618956
+    reg_alpha: 2.317541364741477
+    reg_lambda: 9.365054394785407
 optimizer:
   target_cm: 0.25
   minimum_bid: 0.25
@@ -57,6 +56,10 @@ promotion:
     min_profit_ratio: 0.95
     max_absolute_profit_loss_tolerance: 5000.0
     max_log_loss_regression: 0.01
+    monotonicity:
+      enabled: true
+      tolerance: 1.0e-08
+      max_violation_rate: 0.0
 output:
   report_root: data/model_evaluations
   model_root: data/models

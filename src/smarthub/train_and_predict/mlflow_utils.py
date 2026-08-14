@@ -177,9 +177,31 @@ def log_training_run(
 
         mlflow.log_artifacts(report_dir, artifact_path="reports")
         if comparison_artifact_dir:
+            comparison_artifact_path = "comparison"
             mlflow.log_artifacts(
                 comparison_artifact_dir,
-                artifact_path="comparison",
+                artifact_path=comparison_artifact_path,
+            )
+            logger.info("Saved Model Comparison Artifacts")
+            logger.info(
+                "  MLflow run ID                         : %s",
+                run.info.run_id,
+            )
+            logger.info(
+                "  Artifact directory                    : %s/",
+                comparison_artifact_path,
+            )
+            logger.info(
+                "  Evaluation dataset                    : %s",
+                f"{comparison_artifact_path}/evaluation_dataset.parquet",
+            )
+            logger.info(
+                "  Optimizer results                     : %s",
+                f"{comparison_artifact_path}/optimizer_results.parquet",
+            )
+            logger.info(
+                "  Metadata                              : %s",
+                f"{comparison_artifact_path}/evaluation_metadata.json",
             )
         mlflow.log_artifact(
             str(training_config_path),

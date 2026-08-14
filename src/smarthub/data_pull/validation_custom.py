@@ -17,69 +17,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pandas as pd
+import us
 
-# US states + territories (2-letter). Data for validate_us_state; kept here with
-# the rule that uses it rather than in validation_rules, per the registry design.
-US_STATES = frozenset(
-    {
-        "AL",
-        "AK",
-        "AZ",
-        "AR",
-        "CA",
-        "CO",
-        "CT",
-        "DE",
-        "FL",
-        "GA",
-        "HI",
-        "ID",
-        "IL",
-        "IN",
-        "IA",
-        "KS",
-        "KY",
-        "LA",
-        "ME",
-        "MD",
-        "MA",
-        "MI",
-        "MN",
-        "MS",
-        "MO",
-        "MT",
-        "NE",
-        "NV",
-        "NH",
-        "NJ",
-        "NM",
-        "NY",
-        "NC",
-        "ND",
-        "OH",
-        "OK",
-        "OR",
-        "PA",
-        "RI",
-        "SC",
-        "SD",
-        "TN",
-        "TX",
-        "UT",
-        "VT",
-        "VA",
-        "WA",
-        "WV",
-        "WI",
-        "WY",
-        "DC",
-        "PR",
-        "GU",
-        "VI",
-        "AS",
-        "MP",
-    }
-)
+# Valid US states + DC abbreviations. Territories and
+# military regions are intentionally excluded
+US_STATES = frozenset(state.abbr for state in (*us.states.STATES, us.states.DC))
 
 
 @dataclass(frozen=True)
@@ -109,7 +51,7 @@ def _present_values(series: pd.Series) -> pd.Series:
 
 
 def validate_us_state(series: pd.Series) -> ValidationResult:
-    """Flag present values that aren't a valid US state / territory code.
+    """Flag present values that aren't a valid US state abbreviation.
 
     Null/blank values are ignored (missingness is catalogued separately),
     matching the previous pandera ``isin(..., nullable=True)`` behaviour.

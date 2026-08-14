@@ -25,6 +25,7 @@ dependencies = [
     "duckdb>=0.10",
     "psycopg2-binary>=2.9",
     "PyYAML>=6.0",
+    "us>=3.2",
 ]
 
 [project.optional-dependencies]

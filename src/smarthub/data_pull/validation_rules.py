@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from smarthub.core import auction
 from smarthub.core.lead_types import all_lead_types
 
 from . import field_registry
@@ -96,6 +97,42 @@ def _lower(series: pd.Series) -> pd.Series:
     return series.astype("string").str.strip().str.lower()
 
 
+def erred_mask(df: pd.DataFrame) -> pd.Series:
+    """Return the shared SmartHub errored-row mask."""
+    return auction.erred_mask(df)
+
+
+def erred_cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
+    """Run integrity checks that specifically require errored rows."""
+    if df.empty:
+        return {}
+
+    out: dict[str, int] = {}
+    if "erred" in df.columns and "bid" in df.columns:
+        erred = auction.erred_mask(df)
+        bid = pd.to_numeric(df["bid"], errors="coerce")
+        out["erred_with_bid"] = int((erred & (bid > 0)).sum())
+    return out
+
+
+def auction_eligible_mask(df: pd.DataFrame) -> pd.Series:
+    """Return the shared SmartHub auction-eligibility mask."""
+    return auction.auction_eligible_mask(df)
+
+
+def auction_cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
+    """Run integrity checks that require rows before auction filtering."""
+    if df.empty:
+        return {}
+
+    out: dict[str, int] = {}
+    if "bid" in df.columns and "won" in df.columns:
+        won_true = auction.won_true_mask(df)
+        placed_bid = auction.placed_bid_mask(df)
+        out["won_true_without_bid"] = int((won_true & ~placed_bid).sum())
+    return out
+
+
 def missing_rates(df: pd.DataFrame) -> dict[str, float]:
     """Compute the null/blank rate per column.
 
@@ -113,6 +150,44 @@ def missing_rates(df: pd.DataFrame) -> dict[str, float]:
     if not n:
         return {c: 0.0 for c in df.columns}
     return {c: float(_null_or_blank(df[c]).mean()) for c in df.columns}
+
+
+def constant_columns(df: pd.DataFrame) -> dict[str, dict]:
+    """Profile columns with zero or one distinct non-missing value.
+
+    Missing values include nulls and blank/whitespace-only strings. A column
+    is reported when it is entirely missing or when all populated rows contain
+    the same value.
+
+    Returns
+    -------
+    dict[str, dict]
+        Column name to ``kind``, ``value``, and ``missing_rate``.
+    """
+    n = len(df)
+    out: dict[str, dict] = {}
+    if not n:
+        return out
+
+    for column in df.columns:
+        missing = _null_or_blank(df[column])
+        populated = df.loc[~missing, column]
+        distinct = populated.nunique(dropna=True)
+
+        if distinct > 1:
+            continue
+
+        value = None
+        if distinct == 1:
+            value = populated.iloc[0]
+
+        out[column] = {
+            "kind": "all_missing" if distinct == 0 else "single_value",
+            "value": value,
+            "missing_rate": float(missing.mean()),
+        }
+
+    return out
 
 
 def _completeness_rule_name(type_name: str, col: str) -> str:
@@ -154,26 +229,31 @@ def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
         not_insured = _lower(df["insured"]).isin({"false", "f", "0", "no", "n"})
         out["current_carrier_when_not_insured"] = int((cc & not_insured).sum())
 
-    bid = pd.to_numeric(df["bid"], errors="coerce") if present("bid") else None
     won = _lower(df["won"]) if present("won") else None
-
-    # won == true but no bid placed.
-    if bid is not None and won is not None:
-        out["won_true_without_bid"] = int(((won == "true") & (bid <= 0)).sum())
-
-    # erred == true but a bid was placed (should have short-circuited).
-    if present("erred") and bid is not None:
-        erred = _lower(df["erred"]).isin({"true", "t", "1", "yes", "y"})
-        out["erred_with_bid"] = int((erred & (bid > 0)).sum())
 
     # accepted == true but won is null/blank.
     if present("accepted") and won is not None:
         accepted = _lower(df["accepted"]).isin({"true", "t", "1", "yes", "y"})
         out["accepted_but_won_null"] = int((accepted & (won == "")).sum())
 
+    # num_vehicles and multi_vehicle must agree when both are present.
+    # Missing values are handled separately by the missingness rules.
+    if present("num_vehicles") and present("multi_vehicle"):
+        num_vehicles = pd.to_numeric(df["num_vehicles"], errors="coerce")
+        multi_vehicle = _lower(df["multi_vehicle"])
+
+        known = num_vehicles.notna() & ~_null_or_blank(df["multi_vehicle"])
+        expected_multi = num_vehicles.gt(1)
+        actual_multi = multi_vehicle.isin({"true", "t", "1", "yes", "y"})
+
+        out["multi_vehicle_inconsistent_with_num_vehicles"] = int(
+            (known & actual_multi.ne(expected_multi)).sum()
+        )
+
     # Lead-type completeness belongs to the raw-data validation layer, not
-    # the model feature registry. Only fields that explicitly disallow
-    # missing values are checked row-by-row for the lead types they apply to.
+    # the model feature registry. Only fields configured to
+    # flag missing values are checked row-by-row for
+    # the lead types they apply to.
     if present("lead_type_id"):
         lt = pd.to_numeric(df["lead_type_id"], errors="coerce")
 
@@ -182,7 +262,7 @@ def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
             required_raw_columns = {
                 spec.name
                 for spec in field_registry.fields_for_lead_type(lead_type_name)
-                if not spec.validation.allow_missing
+                if spec.validation.flag_missing
             }
 
             for col in sorted(required_raw_columns):
@@ -218,9 +298,6 @@ def batch_metrics(df: pd.DataFrame) -> dict:
     if not n:
         return m
 
-    if "erred" in df.columns:
-        erred = _lower(df["erred"]).isin({"true", "t", "1", "yes", "y"})
-        m["erred_rate"] = _rate(int(erred.sum()), n)
     if "bid" in df.columns:
         bid = pd.to_numeric(df["bid"], errors="coerce")
         m["bid_zero_rate"] = _rate(int((bid <= 0).sum()), n)

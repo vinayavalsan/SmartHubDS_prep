@@ -42,24 +42,39 @@ def test_leads_select_applies_date_range():
 
 
 def test_leads_select_lead_type_filter():
-    """leads_select adds a lead_type_id filter only when requested."""
+    """leads_select applies the current one-or-many lead-type filter."""
     sql_all = _compiled_sql(leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00"))
-    assert "lead_pings.lead_type_id =" not in sql_all
+    assert "lead_pings.lead_type_id IN" not in sql_all
 
     sql_auto = _compiled_sql(
-        leads_select("2026-06-07 00:00:00", "2026-06-20 00:00:00", lead_type_id=6)
+        leads_select(
+            "2026-06-07 00:00:00",
+            "2026-06-20 00:00:00",
+            lead_type_ids=[6],
+        )
     )
-    assert "lead_pings.lead_type_id = 6" in sql_auto
+    assert "lead_pings.lead_type_id IN (6)" in sql_auto
+
+    sql_both = _compiled_sql(
+        leads_select(
+            "2026-06-07 00:00:00",
+            "2026-06-20 00:00:00",
+            lead_type_ids=[6, 1],
+        )
+    )
+    assert "lead_pings.lead_type_id IN (6, 1)" in sql_both
 
 
 def test_expected_revenue_join_lead_type_filter():
-    """Expected-revenue query applies the lead_type_id filter over the join."""
+    """Expected-revenue query applies one-or-many lead-type filters."""
     sql = _compiled_sql(
         leads_with_expected_revenue_select(
-            "2026-06-07 00:00:00", "2026-06-20 00:00:00", lead_type_id=1
+            "2026-06-07 00:00:00",
+            "2026-06-20 00:00:00",
+            lead_type_ids=[1],
         )
     )
-    assert "lead_pings.lead_type_id = 1" in sql
+    assert "lead_pings.lead_type_id IN (1)" in sql
     assert "lead_ping_listings" in sql
 
 

@@ -18,6 +18,26 @@ logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
+class MonotonicitySummary:
+    """Store bid-response monotonicity evaluation metrics."""
+
+    enabled: bool
+    checked_rows: int
+    checked_steps: int
+    violation_count: int
+    violation_rate: float
+    rows_with_violation_pct: float
+    mean_violation_magnitude: float
+    max_violation_magnitude: float
+    max_allowed_violation_rate: float
+    passed: bool | None
+
+    def to_dict(self) -> dict:
+        """Return a serializable dictionary representation."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class OptimizerSummary:
     """Store the main offline bid-optimization metrics."""
 
@@ -245,6 +265,93 @@ def log_summary(summary: OptimizerSummary):
     )
 
 
+def _summarize_monotonicity(
+    diagnostics: dict,
+    *,
+    enabled: bool,
+    max_violation_rate: float,
+) -> MonotonicitySummary:
+    """Build aggregate monotonicity metrics from optimizer diagnostics."""
+    if not enabled:
+        return MonotonicitySummary(
+            enabled=False,
+            checked_rows=0,
+            checked_steps=0,
+            violation_count=0,
+            violation_rate=0.0,
+            rows_with_violation_pct=0.0,
+            mean_violation_magnitude=0.0,
+            max_violation_magnitude=0.0,
+            max_allowed_violation_rate=float(max_violation_rate),
+            passed=None,
+        )
+
+    checked_rows = int(diagnostics.get("checked_rows", 0))
+    checked_steps = int(diagnostics.get("checked_steps", 0))
+    violation_count = int(diagnostics.get("violation_count", 0))
+    rows_with_violation = int(diagnostics.get("rows_with_violation", 0))
+    magnitude_sum = float(diagnostics.get("violation_magnitude_sum", 0.0))
+    violation_rate = float(violation_count / checked_steps) if checked_steps else 0.0
+    rows_with_violation_pct = (
+        float(rows_with_violation / checked_rows) if checked_rows else 0.0
+    )
+    mean_magnitude = float(magnitude_sum / violation_count) if violation_count else 0.0
+    return MonotonicitySummary(
+        enabled=True,
+        checked_rows=checked_rows,
+        checked_steps=checked_steps,
+        violation_count=violation_count,
+        violation_rate=violation_rate,
+        rows_with_violation_pct=rows_with_violation_pct,
+        mean_violation_magnitude=mean_magnitude,
+        max_violation_magnitude=float(diagnostics.get("max_violation_magnitude", 0.0)),
+        max_allowed_violation_rate=float(max_violation_rate),
+        passed=violation_rate <= float(max_violation_rate),
+    )
+
+
+def _log_monotonicity_summary(summary: MonotonicitySummary) -> None:
+    """Log bid-response monotonicity PASS/FAIL and diagnostics."""
+    logger.info("Bid Monotonicity Evaluation")
+    if not summary.enabled:
+        logger.info("  Status                                : SKIPPED")
+        logger.info("  Reason                                : disabled in config")
+        return
+
+    logger.info(
+        "  Status                                : %s",
+        "PASS" if summary.passed else "FAIL",
+    )
+    logger.info(
+        "  Rows evaluated                        : %s",
+        f"{summary.checked_rows:,}",
+    )
+    logger.info(
+        "  Bid transitions checked               : %s",
+        f"{summary.checked_steps:,}",
+    )
+    if summary.passed:
+        return
+
+    logger.info(
+        "  Violation rate                        : %.6f%%",
+        summary.violation_rate * 100.0,
+    )
+    logger.info(
+        "  Violations                            : %s",
+        f"{summary.violation_count:,}",
+    )
+    logger.info(
+        "  Rows with >=1 violation               : %.6f%%",
+        summary.rows_with_violation_pct * 100.0,
+    )
+    logger.info(
+        "  Mean / max violation magnitude        : %.8f / %.8f",
+        summary.mean_violation_magnitude,
+        summary.max_violation_magnitude,
+    )
+
+
 def run_bid_optimizer_evaluation(
     test_eval_df,
     model,
@@ -254,6 +361,9 @@ def run_bid_optimizer_evaluation(
     min_bid,
     bid_step,
     chunk_size,
+    monotonicity_enabled,
+    monotonicity_tolerance,
+    monotonicity_max_violation_rate,
     log_summary_result=True,
 ):
     """Run offline bid optimization on held-out rows.
@@ -274,6 +384,12 @@ def run_bid_optimizer_evaluation(
         Increment between candidate bids.
     chunk_size : int
         Maximum rows processed per optimizer scoring chunk.
+    monotonicity_enabled : bool
+        Whether to evaluate bid-response monotonicity.
+    monotonicity_tolerance : float
+        Maximum probability decrease treated as numerical noise.
+    monotonicity_max_violation_rate : float
+        Maximum allowed violating bid-step fraction for a pass.
     log_summary_result : bool
         Whether to log the aggregate optimizer summary.
 
@@ -294,12 +410,24 @@ def run_bid_optimizer_evaluation(
         min_bid,
         bid_step,
         chunk_size,
+        monotonicity_tolerance=(
+            monotonicity_tolerance if monotonicity_enabled else None
+        ),
     )
     if eval_df is None:
         logger.warning("Optimizer could not create candidate bids.")
         return None
+
+    monotonicity = _summarize_monotonicity(
+        eval_df.attrs.get("monotonicity_diagnostics", {}),
+        enabled=monotonicity_enabled,
+        max_violation_rate=monotonicity_max_violation_rate,
+    )
     eval_df = _add_diagnostics(eval_df)
+    eval_df.attrs["monotonicity_summary"] = monotonicity.to_dict()
+
     summary = summarize_results(eval_df, target_cm)
     if log_summary_result:
         log_summary(summary)
+        _log_monotonicity_summary(monotonicity)
     return eval_df, summary

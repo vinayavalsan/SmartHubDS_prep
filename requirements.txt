@@ -14,3 +14,4 @@ duckdb>=0.10
 psycopg2-binary>=2.9   # Postgres driver for the config store
 PyYAML>=6.0            # task-config loader (config/smarthub.yaml)
 shap
+us

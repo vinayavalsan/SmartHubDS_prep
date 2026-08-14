@@ -15,6 +15,7 @@ from collections.abc import Iterable
 
 import pandas as pd
 
+from smarthub.core import auction
 from smarthub.core.lead_types import lead_type_name
 from smarthub.feature_engineering.feature_registry import FEATURES, FeatureSpec
 
@@ -24,19 +25,8 @@ logger = logging.getLogger(__name__)
 # analysis. They are not model inputs and therefore do not belong in the model
 # feature registry.
 RETAINED_NON_MODEL_COLUMNS = [
-    "zip",
-    "city",
-    "num_auto_claims",
-    "current_carrier",
-    "credit",
-    "household_income",
-    "pnc_bundle",
-    "device_type",
     "lead_type_id",
     "account_id",
-    "source_type_id",
-    "total_listings",
-    "num_selected_listings",
 ]
 
 REVENUE_COLUMN = "expected_revenue"
@@ -59,15 +49,38 @@ LEAKAGE_COLUMNS = [
     "bidding_strategy_id",
 ]
 
-_TRUE = "true"
+
+def _validate_column_contracts() -> None:
+    """Fail fast when model and retained non-model column roles overlap."""
+    overlap = sorted(set(RETAINED_NON_MODEL_COLUMNS) & set(FEATURES))
+    if overlap:
+        raise ValueError(
+            "Columns cannot be both model features and retained non-model "
+            f"columns: {overlap}"
+        )
+
+
+_validate_column_contracts()
 
 
 def _specs_for_lead_type(lead_type: str | None = None) -> list[FeatureSpec]:
-    """Return enabled, applicable feature specs in registry order."""
-    specs = [spec for spec in FEATURES.values() if spec.enabled]
+    """Return all applicable feature specs in registry order.
+
+    This intentionally does not filter on ``enabled``. Row-level requirements
+    such as ``mandatory`` and ``training_include_values`` are enforced before
+    enabled model-feature selection.
+    """
+    specs = list(FEATURES.values())
     if lead_type is None:
         return specs
     return [spec for spec in specs if lead_type in spec.lead_types]
+
+
+def _enabled_specs_for_lead_type(
+    lead_type: str | None = None,
+) -> list[FeatureSpec]:
+    """Return enabled, applicable model-feature specs in registry order."""
+    return [spec for spec in _specs_for_lead_type(lead_type) if spec.enabled]
 
 
 def _lead_type_for_id(lead_type_id: int) -> str:
@@ -77,7 +90,7 @@ def _lead_type_for_id(lead_type_id: int) -> str:
 
 def registered_feature_names(lead_type: str | None = None) -> list[str]:
     """Return model-feature names in registry insertion order."""
-    return [spec.name for spec in _specs_for_lead_type(lead_type)]
+    return [spec.name for spec in _enabled_specs_for_lead_type(lead_type)]
 
 
 def model_feature_columns(
@@ -90,30 +103,114 @@ def model_feature_columns(
     ``FeatureSpec.enabled`` and ``FeatureSpec.lead_types``.
     """
     lead_type = _lead_type_for_id(lead_type_id)
-    specs = _specs_for_lead_type(lead_type)
+    specs = _enabled_specs_for_lead_type(lead_type)
 
     numeric = [spec.name for spec in specs if spec.kind in {"numeric", "binary"}]
     categorical = [spec.name for spec in specs if spec.kind == "categorical"]
     return numeric, categorical
 
 
+def _missing_mask(values: pd.Series) -> pd.Series:
+    """Return rows whose value is null, empty, or whitespace-only."""
+    if pd.api.types.is_string_dtype(values.dtype) or values.dtype == object:
+        normalized = values.astype("string").str.strip()
+        return normalized.isna() | normalized.eq("")
+    return values.isna()
+
+
+def _log_drop(
+    lead_type: str | None,
+    reason: str,
+    before: int,
+    after: int,
+    *,
+    examples: list[object] | None = None,
+) -> None:
+    """Log rows removed by one feature-engineering filter."""
+    dropped = before - after
+    if dropped <= 0:
+        return
+
+    prefix = f"[{lead_type}] " if lead_type else ""
+    message = f"{prefix}{reason}: dropped {dropped:,} row(s); " f"{after:,} remaining"
+    if examples:
+        message += f"; examples={examples}"
+    logger.info(message)
+
+
+def _log_transformation(
+    lead_type: str | None,
+    message: str,
+) -> None:
+    """Log one feature-engineering transformation."""
+    prefix = f"[{lead_type}] " if lead_type else ""
+    logger.info("%s%s", prefix, message)
+
+
 def _apply_training_filters(
     frame: pd.DataFrame,
     lead_type: str | None = None,
 ) -> pd.DataFrame:
-    """Apply registry-defined row filters used only for model training."""
+    """Apply mandatory and registry-defined training row filters.
+
+    Every actual row-removal operation is logged with its reason and the
+    remaining row count. Mandatory checks apply to all applicable registry
+    entries, including disabled ones. Missing non-mandatory features survive
+    for later sentinel replacement.
+    """
     out = frame
 
     for spec in _specs_for_lead_type(lead_type):
+        required_column = (
+            spec.api_input
+            if spec.source == "derived" and spec.api_input is not None
+            else spec.name
+        )
+
+        if spec.mandatory and required_column in out.columns:
+            before = len(out)
+            missing = _missing_mask(out[required_column])
+            out = out[~missing].copy()
+            _log_drop(
+                lead_type,
+                f"mandatory feature '{required_column}' missing/blank",
+                before,
+                len(out),
+            )
+
         allowed = spec.training_include_values
         if not allowed or spec.name not in out.columns:
             continue
 
-        values = out[spec.name]
+        raw_values = out[spec.name]
+        missing = _missing_mask(raw_values)
+
+        values = raw_values
         if all(isinstance(value, int) for value in allowed):
             values = pd.to_numeric(values, errors="coerce")
 
-        out = out[values.isin(allowed)].copy()
+        keep = values.isin(allowed)
+        if not spec.mandatory:
+            keep = keep | missing
+
+        before = len(out)
+        dropped_values = raw_values.loc[~keep]
+        examples = (
+            dropped_values.astype("string")
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .drop_duplicates()
+            .tolist()[:5]
+        )
+        out = out[keep].copy()
+        _log_drop(
+            lead_type,
+            f"feature '{spec.name}' outside training_include_values",
+            before,
+            len(out),
+            examples=examples,
+        )
 
     return out
 
@@ -122,17 +219,25 @@ def _apply_registered_derivations(
     frame: pd.DataFrame,
     lead_type: str | None = None,
 ) -> list[str]:
-    """Apply applicable registry-defined derivations in registry order.
-
-    A derivation is skipped when its required raw input is absent. This keeps
-    the same function usable for stored training rows and live scoring frames,
-    where a derived value may already be present.
-    """
+    """Apply and log applicable registry-defined derivations."""
     derived: list[str] = []
 
-    for spec in _specs_for_lead_type(lead_type):
+    for spec in _enabled_specs_for_lead_type(lead_type):
         if spec.source != "derived" or spec.derive is None:
             continue
+
+        age_missing_count = 0
+        age_implausible_count = 0
+        age_implausible_examples: list[object] = []
+        if spec.name == "age_cohort" and "age" in frame.columns:
+            raw_age = pd.to_numeric(frame["age"], errors="coerce")
+            raw_missing = _missing_mask(frame["age"]) | raw_age.isna()
+            implausible = raw_age.notna() & ~raw_age.between(1, 130)
+            age_missing_count = int(raw_missing.sum())
+            age_implausible_count = int(implausible.sum())
+            age_implausible_examples = (
+                frame.loc[implausible, "age"].dropna().drop_duplicates().tolist()[:5]
+            )
 
         try:
             frame[spec.name] = spec.derive(frame)
@@ -146,6 +251,27 @@ def _apply_registered_derivations(
                 )
             continue
 
+        if age_implausible_count:
+            message = (
+                f"feature 'age': replaced {age_implausible_count:,} "
+                "implausible value(s) outside [1, 130] with -1"
+            )
+            if age_implausible_examples:
+                message += f"; examples={age_implausible_examples}"
+            _log_transformation(lead_type, message)
+
+        if age_missing_count:
+            _log_transformation(
+                lead_type,
+                f"feature 'age': replaced {age_missing_count:,} "
+                "missing/non-numeric value(s) with -1",
+            )
+
+        source = spec.api_input or "registered inputs"
+        _log_transformation(
+            lead_type,
+            f"derived feature '{spec.name}' from '{source}'; {len(frame):,} row(s)",
+        )
         derived.append(spec.name)
 
     return derived
@@ -155,39 +281,87 @@ def apply_registered_missing_values(
     frame: pd.DataFrame,
     lead_type: str | None = None,
 ) -> pd.DataFrame:
-    """Replace missing model values using registry-defined sentinels.
-
-    Categorical blanks and nulls become ``MISSING_CATEGORY``. Numeric and
-    binary nulls become each feature's resolved numeric sentinel. The function
-    mutates and returns ``frame`` for convenient pipeline composition.
-    """
-    for spec in _specs_for_lead_type(lead_type):
+    """Replace and log missing model values using registry-defined sentinels."""
+    for spec in _enabled_specs_for_lead_type(lead_type):
         if spec.name not in frame.columns:
             continue
 
         missing_value = spec.resolved_missing_value()
         values = frame[spec.name]
+
         if spec.kind == "categorical":
-            values = values.astype("string").str.strip()
-            values = values.mask(values.isna() | (values == ""))
-            frame[spec.name] = values.fillna(str(missing_value))
+            normalized = values.astype("string").str.strip()
+            missing = normalized.isna() | normalized.eq("")
+            affected = int(missing.sum())
+            normalized = normalized.mask(missing)
+            frame[spec.name] = normalized.fillna(str(missing_value))
         else:
-            values = pd.to_numeric(values, errors="coerce")
-            frame[spec.name] = values.fillna(missing_value)
+            numeric = pd.to_numeric(values, errors="coerce")
+            missing = numeric.isna()
+            affected = int(missing.sum())
+            frame[spec.name] = numeric.fillna(missing_value)
+
+        if affected:
+            _log_transformation(
+                lead_type,
+                f"feature '{spec.name}': replaced {affected:,} "
+                f"missing/blank value(s) with {missing_value!r}",
+            )
 
     return frame
+
+
+def transform_model_features(
+    df: pd.DataFrame,
+    lead_type_id: int | None = None,
+) -> pd.DataFrame:
+    """Apply the shared model-input transformations for training and serving.
+
+    This is the single transformation path for model inputs. It applies
+    registry-defined derivations, ensures every enabled feature column exists,
+    and applies the registry-defined type/missing-value normalization.
+
+    Training-only row filtering and target construction intentionally happen
+    outside this function.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Raw or partially engineered rows.
+    lead_type_id : int | None
+        Lead type used to scope registry features.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy containing consistently transformed model features.
+    """
+    out = df.copy()
+    lead_type = _lead_type_for_id(lead_type_id) if lead_type_id is not None else None
+
+    _apply_registered_derivations(out, lead_type)
+
+    # Training and serving must see the same feature schema. If an enabled
+    # feature is absent, create it as missing and let the registry-defined
+    # missing-value handling assign the correct sentinel.
+    for spec in _enabled_specs_for_lead_type(lead_type):
+        if spec.name not in out.columns:
+            out[spec.name] = pd.NA
+
+    apply_registered_missing_values(out, lead_type)
+    return out
 
 
 def derive_serving_features(
     df: pd.DataFrame,
     lead_type_id: int | None = None,
 ) -> pd.DataFrame:
-    """Apply registry-defined feature engineering to a scoring frame."""
-    out = df.copy()
-    lead_type = _lead_type_for_id(lead_type_id) if lead_type_id is not None else None
-    _apply_registered_derivations(out, lead_type)
-    apply_registered_missing_values(out, lead_type)
-    return out
+    """Apply the shared model-input transformations to a scoring frame.
+
+    Kept as a compatibility wrapper; training and serving now share
+    ``transform_model_features``.
+    """
+    return transform_model_features(df, lead_type_id=lead_type_id)
 
 
 def _unique_columns(columns: Iterable[str]) -> list[str]:
@@ -211,12 +385,40 @@ def build_training_table(
     ``FEATURES``. When ``lead_type_id`` is supplied, only registry features
     applicable to that lead type are retained.
     """
+
     out = df.copy()
+    lead_type = _lead_type_for_id(lead_type_id) if lead_type_id is not None else None
+
+    if lead_type_id is not None and "lead_type_id" in out.columns:
+        before = len(out)
+        out = out[out["lead_type_id"] == lead_type_id].copy()
+        logger.info(
+            "[%s] selected %s rows for lead_type_id=%s from %s stored rows",
+            lead_type,
+            f"{len(out):,}",
+            lead_type_id,
+            f"{before:,}",
+        )
+
+    input_rows = len(out)
+    if lead_type:
+        logger.info(
+            "[%s] starting feature engineering: %s rows",
+            lead_type,
+            f"{input_rows:,}",
+        )
+    else:
+        logger.info("starting feature engineering: %s rows", f"{input_rows:,}")
 
     # Errored pings are not valid auction outcomes.
-    if "erred" in out.columns:
-        err = out["erred"].astype("string").str.strip().str.lower()
-        out = out[~err.isin(["1", "true", "t", "yes", "y"])].copy()
+    before = len(out)
+    out = out.loc[~auction.erred_mask(out)].copy()
+    _log_drop(
+        lead_type,
+        "errored ping filter",
+        before,
+        len(out),
+    )
 
     # Prefer the backend expected revenue when populated; otherwise retain the
     # existing expected_revenue value.
@@ -228,38 +430,40 @@ def build_training_table(
             fallback = pd.Series(float("nan"), index=out.index)
         out[REVENUE_COLUMN] = native.where(native > 0, fallback)
 
-    won_true = out["won"].astype("string").str.strip().str.lower().eq(_TRUE)
-    bid_default = pd.Series(float("nan"), index=out.index, dtype="float64")
-    bid_num = pd.to_numeric(out.get(DECISION_COLUMN, bid_default), errors="coerce")
-    placed = bid_num.gt(0).fillna(False)
-    keep_rows = placed | won_true.fillna(False)
+    won_true = auction.won_true_mask(out)
+    keep_rows = auction.auction_eligible_mask(out, bid_column=DECISION_COLUMN)
 
-    out = out[keep_rows].copy()
-    out[TARGET_COLUMN] = won_true[keep_rows].fillna(False).astype("int64").to_numpy()
-
-    if lead_type_id is not None and "lead_type_id" in out.columns:
-        out = out[out["lead_type_id"] == lead_type_id].copy()
+    before = len(out)
+    out = out.loc[keep_rows].copy()
+    _log_drop(
+        lead_type,
+        "invalid auction/bid filter",
+        before,
+        len(out),
+    )
+    out[TARGET_COLUMN] = won_true.loc[keep_rows].astype("int64").to_numpy()
 
     # Optional campaign scoping (config: feature_engineering.training_campaign_ids).
-    # Empty/None keeps every campaign -- replaces the old hardcoded registry filter.
+    # Empty/None keeps every campaign.
     if campaign_ids and "campaign_id" in out.columns:
+        before = len(out)
         cid = pd.to_numeric(out["campaign_id"], errors="coerce")
         out = out[cid.isin(campaign_ids)].copy()
+        _log_drop(lead_type, "campaign scope filter", before, len(out))
 
-    lead_type = _lead_type_for_id(lead_type_id) if lead_type_id is not None else None
     out = _apply_training_filters(out, lead_type)
-    _apply_registered_derivations(out, lead_type)
-    apply_registered_missing_values(out, lead_type)
+
+    # All transformations that change model inputs go through the same shared
+    # path used by online prediction.
+    out = transform_model_features(out, lead_type_id=lead_type_id)
 
     model_columns = [
         spec.name
-        for spec in _specs_for_lead_type(lead_type)
+        for spec in _enabled_specs_for_lead_type(lead_type)
         if spec.name in out.columns
     ]
     retained_columns = [
-        column
-        for column in RETAINED_NON_MODEL_COLUMNS
-        if column in out.columns and column not in model_columns
+        column for column in RETAINED_NON_MODEL_COLUMNS if column in out.columns
     ]
 
     keep = _unique_columns(
@@ -284,5 +488,19 @@ def build_training_table(
             and table[column].nunique(dropna=True) <= 1
         ]
         table = table.drop(columns=constant)
+
+    output_rows = len(table)
+    dropped_rows = input_rows - output_rows
+    dropped_pct = (dropped_rows / input_rows) if input_rows else 0.0
+    prefix = f"[{lead_type}] " if lead_type else ""
+    logger.info(
+        "%sfeature-engineering row filtering summary: "
+        "input=%s, dropped=%s (%.2f%%), output=%s",
+        prefix,
+        f"{input_rows:,}",
+        f"{dropped_rows:,}",
+        dropped_pct * 100,
+        f"{output_rows:,}",
+    )
 
     return table.reset_index(drop=True)
