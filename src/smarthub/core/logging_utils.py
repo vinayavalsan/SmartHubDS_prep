@@ -3,7 +3,7 @@
 Two independent sinks:
 
   * **Console (stdout)** -- what ``docker logs`` shows. Human-readable text by
-    default (``ts | LEVEL | file:func:line | message``); set ``LOG_FORMAT=json``
+    default (``ts | LEVEL | project call path | message``); set ``LOG_FORMAT=json``
     to emit JSON on stdout too.
   * **JSON file** -- when ``SMARTHUB_LOG_JSON_DIR`` is set, the rich JSON schema
     below is ALSO written to ``<dir>/<service>.jsonl``, rotated at midnight with
@@ -39,6 +39,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import traceback
 import uuid
 from contextlib import contextmanager
@@ -47,10 +48,7 @@ _CONFIGURED = False
 _SERVICE: str | None = None
 
 # Human-readable text format (kept from the shared logging setup).
-_TEXT_FORMAT = (
-    "%(asctime)s | %(levelname)-5s | "
-    "%(filename)s:%(funcName)s:%(lineno)d | %(message)s"
-)
+_TEXT_FORMAT = "%(asctime)s | %(levelname)-5s | " "%(call_path)s | %(message)s"
 _TEXT_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 # Per-request / per-flow fields merged into every JSON log line on this
@@ -85,7 +83,95 @@ _RESERVED = {
     "taskName",
     "message",
     "asctime",
+    "call_path",
 }
+
+
+_CALL_PATH_MAX_FRAMES = 2
+
+# Third-party libraries that are useful on WARNING/ERROR but too noisy at INFO.
+_QUIET_THIRD_PARTY_LOGGERS = (
+    "paramiko",
+    "alembic",
+)
+
+
+def _project_call_path(record: logging.LogRecord) -> str:
+    """Return a short SmartHub call path for a log record.
+
+    SmartHub logs show at most the direct project caller followed by the
+    emitting function. Third-party logs keep their normal single
+    ``file:function:line`` location.
+
+    Inputs
+    ------
+    record : logging.LogRecord
+        Record being formatted.
+
+    Returns
+    -------
+    str
+        Compact log location or two-frame SmartHub call path.
+    """
+    emitted = f"{record.filename}:{record.funcName}:{record.lineno}"
+    record_path = os.path.abspath(record.pathname).replace("\\", "/")
+
+    # Do not build call chains for third-party / stdlib records.
+    if "/smarthub/" not in record_path:
+        return emitted
+
+    project_frames: list[str] = []
+    frame = sys._getframe()
+
+    while frame is not None:
+        filename = os.path.abspath(frame.f_code.co_filename)
+        normalized = filename.replace("\\", "/")
+
+        function_name = frame.f_code.co_name
+        if (
+            "/smarthub/" in normalized
+            and os.path.basename(filename) != "logging_utils.py"
+            and not function_name.startswith("_")
+        ):
+            entry = f"{os.path.basename(filename)}:" f"{function_name}:{frame.f_lineno}"
+            if not project_frames or project_frames[-1] != entry:
+                project_frames.append(entry)
+
+        frame = frame.f_back
+
+    project_frames.reverse()
+
+    # Locate the emitting function in the captured project stack and include
+    # only its direct SmartHub caller, if one exists.
+    # Private emitters are intentionally hidden from normal console paths.
+    # Show the closest public SmartHub frame instead; exception tracebacks still
+    # retain the complete private/helper stack.
+    if record.funcName.startswith("_"):
+        return project_frames[-1] if project_frames else emitted
+
+    emitted_prefix = f"{record.filename}:{record.funcName}:"
+    emitter_index = None
+    for index, entry in enumerate(project_frames):
+        if entry.startswith(emitted_prefix):
+            emitter_index = index
+
+    if emitter_index is None:
+        return emitted
+
+    chain: list[str] = []
+    if emitter_index > 0:
+        chain.append(project_frames[emitter_index - 1])
+    chain.append(emitted)
+
+    return " -> ".join(chain[-_CALL_PATH_MAX_FRAMES:])
+
+
+class CallPathFilter(logging.Filter):
+    """Attach a compact SmartHub call chain to each log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.call_path = _project_call_path(record)
+        return True
 
 
 def _service_name() -> str:
@@ -125,6 +211,11 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "service": _service_name(),
             "logger": record.name,
+            "call_path": getattr(
+                record,
+                "call_path",
+                f"{record.filename}:{record.funcName}:{record.lineno}",
+            ),
             "msg": record.getMessage(),
         }
 
@@ -171,6 +262,7 @@ def configure_logging(
 
     # 1) Console (stdout) -> what `docker logs` shows.
     stream = logging.StreamHandler()
+    stream.addFilter(CallPathFilter())
     if chosen_fmt == "json":
         stream.setFormatter(JsonFormatter())
     else:
@@ -196,6 +288,7 @@ def configure_logging(
                 utc=True,
                 encoding="utf-8",
             )
+            file_handler.addFilter(CallPathFilter())
             file_handler.setFormatter(JsonFormatter())
             handlers.append(file_handler)
         except OSError:
@@ -205,6 +298,12 @@ def configure_logging(
     root = logging.getLogger()
     root.handlers = handlers  # own the output so the format is consistent
     root.setLevel(getattr(logging, resolved, logging.INFO))
+
+    # Keep dependency INFO/DEBUG chatter out of SmartHub logs while preserving
+    # third-party warnings and errors that may be operationally important.
+    for logger_name in _QUIET_THIRD_PARTY_LOGGERS:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
     _CONFIGURED = True
 
 

@@ -25,8 +25,13 @@ ENV_LABEL_ENV = "SLACK_ENV_LABEL"
 MENTION_ENV = "SLACK_MENTION_ON_FAILURE"
 
 _SUCCESS = "success"
+_WARNING = "warning"
 _FAILURE = "failure"
-_EMOJI = {_SUCCESS: ":white_check_mark:", _FAILURE: ":red_circle:"}
+_EMOJI = {
+    _SUCCESS: ":white_check_mark:",
+    _WARNING: ":warning:",
+    _FAILURE: ":red_circle:",
+}
 _TIMEOUT_SECONDS = 10
 
 
@@ -104,7 +109,11 @@ def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) 
         A payload with ``text`` and ``blocks`` keys.
     """
     emoji = _EMOJI.get(status, "")
-    verb = "completed" if status == _SUCCESS else "FAILED"
+    verb = {
+        _SUCCESS: "completed",
+        _WARNING: "WARNING",
+        _FAILURE: "FAILED",
+    }.get(status, status.upper())
     header = f"SmartHub · {pipeline} · {verb}"
 
     blocks: list[dict] = [
@@ -221,6 +230,24 @@ def notify_success(pipeline: str, fields: dict) -> bool:
         True when delivered.
     """
     return notify(_SUCCESS, pipeline, fields)
+
+
+def notify_warning(pipeline: str, fields: dict) -> bool:
+    """Notify about a non-fatal pipeline warning.
+
+    Inputs
+    ------
+    pipeline : str
+        Pipeline name shown in the header.
+    fields : dict
+        Label/value pairs to display.
+
+    Returns
+    -------
+    bool
+        True when delivered.
+    """
+    return notify(_WARNING, pipeline, fields)
 
 
 def notify_failure(pipeline: str, fields: dict, error: str | None = None) -> bool:

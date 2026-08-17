@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from smarthub.core import paths, task_config
+from smarthub.core.config import get_with_logged_fallback
 from smarthub.core.lead_types import lead_type_name as canonical_lead_type_name
 from smarthub.core.logging_utils import get_logger
 from smarthub.feature_engineering import features as fe
@@ -581,14 +582,21 @@ def load_training_config(
             "optimizer.bid_step",
         ),
         chunk_size=_positive_int(
-            optimizer_root.get("chunk_size", _DEFAULT_OPTIMIZER_CHUNK_SIZE),
+            get_with_logged_fallback(
+                optimizer_root,
+                "chunk_size",
+                _DEFAULT_OPTIMIZER_CHUNK_SIZE,
+                "optimizer.chunk_size",
+            ),
             "optimizer.chunk_size",
         ),
     )
 
-    promotion_monotonicity_enabled = promotion_monotonicity_root.get(
+    promotion_monotonicity_enabled = get_with_logged_fallback(
+        promotion_monotonicity_root,
         "enabled",
         _DEFAULT_PROMOTION_MONOTONICITY_ENABLED,
+        "promotion.criteria.monotonicity.enabled",
     )
     if not isinstance(promotion_monotonicity_enabled, bool):
         raise TypeError(
@@ -596,16 +604,20 @@ def load_training_config(
         )
 
     promotion_monotonicity_tolerance = _non_negative_float(
-        promotion_monotonicity_root.get(
+        get_with_logged_fallback(
+            promotion_monotonicity_root,
             "tolerance",
             _DEFAULT_MONOTONICITY_TOLERANCE,
+            "promotion.criteria.monotonicity.tolerance",
         ),
         "promotion.criteria.monotonicity.tolerance",
     )
     promotion_monotonicity_max_violation_rate = _non_negative_float(
-        promotion_monotonicity_root.get(
+        get_with_logged_fallback(
+            promotion_monotonicity_root,
             "max_violation_rate",
             _DEFAULT_MONOTONICITY_MAX_VIOLATION_RATE,
+            "promotion.criteria.monotonicity.max_violation_rate",
         ),
         "promotion.criteria.monotonicity.max_violation_rate",
     )
@@ -643,23 +655,29 @@ def load_training_config(
         "promotion.criteria.min_profit_ratio",
     )
     promotion_max_log_loss = _positive_float(
-        promotion_criteria.get(
+        get_with_logged_fallback(
+            promotion_criteria,
             "max_log_loss",
             _DEFAULT_PROMOTION_MAX_LOG_LOSS,
+            "promotion.criteria.max_log_loss",
         ),
         "promotion.criteria.max_log_loss",
     )
     promotion_min_expected_profit = _non_negative_float(
-        promotion_criteria.get(
+        get_with_logged_fallback(
+            promotion_criteria,
             "min_expected_profit",
             _DEFAULT_PROMOTION_MIN_EXPECTED_PROFIT,
+            "promotion.criteria.min_expected_profit",
         ),
         "promotion.criteria.min_expected_profit",
     )
     promotion_max_absolute_profit_loss_tolerance = _non_negative_float(
-        promotion_criteria.get(
+        get_with_logged_fallback(
+            promotion_criteria,
             "max_absolute_profit_loss_tolerance",
             _DEFAULT_PROMOTION_MAX_ABSOLUTE_PROFIT_LOSS_TOLERANCE,
+            "promotion.criteria.max_absolute_profit_loss_tolerance",
         ),
         "promotion.criteria.max_absolute_profit_loss_tolerance",
     )
@@ -1132,7 +1150,14 @@ def load_hyperparameter_search_config(
     )
 
     validation_strategy = (
-        str(validation.get("strategy", _DEFAULT_HPO_VALIDATION_STRATEGY))
+        str(
+            get_with_logged_fallback(
+                validation,
+                "strategy",
+                _DEFAULT_HPO_VALIDATION_STRATEGY,
+                "validation.strategy",
+            )
+        )
         .strip()
         .lower()
     )
@@ -1140,40 +1165,58 @@ def load_hyperparameter_search_config(
         raise ValueError("validation.strategy must be 'time' or 'stratified_random'.")
 
     holdout_fraction = float(
-        finalists.get(
+        get_with_logged_fallback(
+            finalists,
             "holdout_fraction",
             _DEFAULT_HPO_FINALIST_HOLDOUT_FRACTION,
+            "finalists.holdout_fraction",
         )
     )
     if not 0.0 < holdout_fraction < 0.5:
         raise ValueError("finalists.holdout_fraction must be between 0 and 0.5.")
 
     probability_shortlist_top_n = _positive_int(
-        finalists.get(
+        get_with_logged_fallback(
+            finalists,
             "probability_shortlist_top_n",
             _DEFAULT_HPO_PROBABILITY_SHORTLIST_TOP_N,
+            "finalists.probability_shortlist_top_n",
         ),
         "finalists.probability_shortlist_top_n",
     )
     optimizer_top_n = _positive_int(
-        finalists.get("optimizer_top_n", _DEFAULT_HPO_OPTIMIZER_TOP_N),
+        get_with_logged_fallback(
+            finalists,
+            "optimizer_top_n",
+            _DEFAULT_HPO_OPTIMIZER_TOP_N,
+            "finalists.optimizer_top_n",
+        ),
         "finalists.optimizer_top_n",
     )
     max_log_loss_regression = _non_negative_float(
-        finalists.get(
+        get_with_logged_fallback(
+            finalists,
             "max_log_loss_regression_from_best",
             _DEFAULT_HPO_MAX_LOG_LOSS_REGRESSION,
+            "finalists.max_log_loss_regression_from_best",
         ),
         "finalists.max_log_loss_regression_from_best",
     )
 
     calibration_enabled = bool(
-        calibration_cfg.get("enabled", _DEFAULT_HPO_CALIBRATION_ENABLED)
+        get_with_logged_fallback(
+            calibration_cfg,
+            "enabled",
+            _DEFAULT_HPO_CALIBRATION_ENABLED,
+            "calibration.enabled",
+        )
     )
     if calibration_enabled:
-        methods = calibration_cfg.get(
+        methods = get_with_logged_fallback(
+            calibration_cfg,
             "methods",
             list(_DEFAULT_HPO_CALIBRATION_METHODS),
+            "calibration.methods",
         )
         if not isinstance(methods, list) or not methods:
             raise ValueError("calibration.methods must be a non-empty list.")
@@ -1186,7 +1229,12 @@ def load_hyperparameter_search_config(
                 "Unsupported calibration methods: " + ", ".join(invalid_methods)
             )
         calibration_cv = _positive_int(
-            calibration_cfg.get("cv", _DEFAULT_HPO_CALIBRATION_CV),
+            get_with_logged_fallback(
+                calibration_cfg,
+                "cv",
+                _DEFAULT_HPO_CALIBRATION_CV,
+                "calibration.cv",
+            ),
             "calibration.cv",
         )
         if calibration_cv < 2:
@@ -1196,7 +1244,12 @@ def load_hyperparameter_search_config(
         calibration_cv = _DEFAULT_HPO_CALIBRATION_CV
 
     optimizer_enabled = bool(
-        optimizer_cfg.get("enabled", _DEFAULT_HPO_OPTIMIZER_ENABLED)
+        get_with_logged_fallback(
+            optimizer_cfg,
+            "enabled",
+            _DEFAULT_HPO_OPTIMIZER_ENABLED,
+            "optimizer.enabled",
+        )
     )
     optimizer = None
     if optimizer_enabled:
@@ -1214,7 +1267,12 @@ def load_hyperparameter_search_config(
         minimum_bid = float(optimizer_cfg["minimum_bid"])
         bid_step = float(optimizer_cfg["bid_step"])
         chunk_size = _positive_int(
-            optimizer_cfg.get("chunk_size", _DEFAULT_OPTIMIZER_CHUNK_SIZE),
+            get_with_logged_fallback(
+                optimizer_cfg,
+                "chunk_size",
+                _DEFAULT_OPTIMIZER_CHUNK_SIZE,
+                "optimizer.chunk_size",
+            ),
             "optimizer.chunk_size",
         )
         if not 0.0 <= target_cm < 1.0:
@@ -1232,22 +1290,28 @@ def load_hyperparameter_search_config(
 
     monotonicity = PromotionMonotonicityConfig(
         enabled=bool(
-            monotonicity_cfg.get(
+            get_with_logged_fallback(
+                monotonicity_cfg,
                 "enabled",
                 _DEFAULT_HPO_MONOTONICITY_ENABLED,
+                "finalists.monotonicity.enabled",
             )
         ),
         tolerance=_non_negative_float(
-            monotonicity_cfg.get(
+            get_with_logged_fallback(
+                monotonicity_cfg,
                 "tolerance",
                 _DEFAULT_MONOTONICITY_TOLERANCE,
+                "finalists.monotonicity.tolerance",
             ),
             "finalists.monotonicity.tolerance",
         ),
         max_violation_rate=_non_negative_float(
-            monotonicity_cfg.get(
+            get_with_logged_fallback(
+                monotonicity_cfg,
                 "max_violation_rate",
                 _DEFAULT_MONOTONICITY_MAX_VIOLATION_RATE,
+                "finalists.monotonicity.max_violation_rate",
             ),
             "finalists.monotonicity.max_violation_rate",
         ),
