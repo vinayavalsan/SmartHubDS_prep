@@ -215,6 +215,54 @@ def test_recommend_bid_prediction_id_generated_before_background_write(
     assert row["prediction_id"] == prediction_id
 
 
+def test_recommend_bid_default_response_is_lean(client, log_store):
+    """Default response returns the decision essentials only -- the heavy
+    logging-only payload (sweep, snapshots, model identity) stays off the wire."""
+    _promote_constant_model()
+
+    body = client.post("/recommend_bid", json=PAYLOAD).json()
+
+    assert "recommended_bid" in body and "prediction_id" in body
+    for k in (
+        "candidate_evaluations",
+        "input_features",
+        "model_input_features",
+        "model_version",
+        "serving_config",
+        "package_version",
+    ):
+        assert k not in body
+
+
+def test_recommend_bid_verbose_returns_full_payload_capped(client, log_store):
+    """`verbose=True` returns the full logging-schema payload with the candidate
+    sweep capped (selected bid + first 19) and SHAP omitted; the log keeps the
+    complete sweep."""
+    manifest = _promote_constant_model()
+
+    body = client.post("/recommend_bid", json={**PAYLOAD, "verbose": True}).json()
+
+    # Full logging-schema fields now on the response:
+    assert body["model_version"] == manifest["version"]
+    assert body["input_features"]["state"] == "TX"
+    assert body["model_input_features"] is not None
+    assert body["serving_config"]["exploration_variance_pct"] is not None
+    assert body["package_version"]
+    assert body["served_at"]
+
+    # Candidate sweep is capped (<=20) and always contains the selected bid:
+    cands = body["candidate_evaluations"]
+    assert isinstance(cands, list) and 0 < len(cands) <= 20
+    assert sum(1 for c in cands if c["selected"]) == 1
+
+    # SHAP is never on the response path (attached asynchronously by id):
+    assert "shap_explanation" not in body
+
+    # The log row still holds the FULL sweep (not the capped 20):
+    row = log_store.recent(limit=1)[0]
+    assert len(row["candidate_evaluations"]) >= len(cands)
+
+
 # --- /recommend_bid: failure path --------------------------------------------
 
 

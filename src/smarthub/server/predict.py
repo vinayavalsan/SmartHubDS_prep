@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
+from smarthub import __version__ as _PACKAGE_VERSION
 from smarthub.core.lead_types import all_lead_type_ids
 from smarthub.core.lead_types import lead_type_id as get_lead_type_id
 from smarthub.train_and_predict import config, optimizer, preprocessing, registry
@@ -647,6 +648,14 @@ if _FASTAPI_AVAILABLE:
         created_hour: int = Field(..., ge=0, le=23)
         created_dayofweek: int = Field(..., ge=0, le=6)
 
+        # Response control (NOT a feature -- never affects the bid). When true,
+        # the response also returns the full decision payload the prediction log
+        # uses: model + input snapshot + optimizer config + a capped candidate
+        # sweep (the selected bid + the first 19 by bid). Off by default so normal
+        # high-QPS traffic stays lean. SHAP is never in the response (it's async);
+        # fetch it later by prediction_id. See docs/PREDICTION_LOG_SCHEMA.md.
+        verbose: bool = False
+
         state: str | None = None
         insured: str | None = None
         home_owner: str | None = None
@@ -831,6 +840,65 @@ if _FASTAPI_AVAILABLE:
             "recency_window_days": config.recency_window_days(),
             "cold_start_fallback_bid_pct": config.cold_start_fallback_bid_pct(),
         }
+
+    # Fields copied verbatim from the log record into the verbose response, so
+    # the response and the logged row can never disagree (single construction).
+    _VERBOSE_RESPONSE_KEYS = (
+        "served_at",
+        "tat_seconds",
+        "package_version",
+        "lead_type_id",
+        "lead_type_name",
+        "campaign_id",
+        "account_id",
+        "source_type_id",
+        "input_features",
+        "model_input_features",
+        "feature_cols",
+        "expected_revenue",
+        "target_cm",
+        "min_bid",
+        "bid_step",
+        "candidate_bid_generation",
+        "model_name",
+        "model_version",
+        "model_uri",
+        "model_type",
+        "model_calibrated",
+        "training_table_version",
+        "model_data_min_created_at",
+        "model_data_max_created_at",
+        "recommended_bid_predicted_cm",
+        "serving_config",
+    )
+
+    def _response_candidate_slice(candidates, first_n: int = 19):
+        """Capped candidate sweep for the verbose response.
+
+        Returns the selected bid plus the first ``first_n`` candidates by bid
+        (<=20 total), so the chosen bid is always present without shipping the
+        full ~300-row sweep. The complete sweep still goes to the log.
+        """
+        if not candidates:
+            return candidates
+        head = list(candidates[:first_n])  # already bid-ascending
+        if not any(c.get("selected") for c in head):
+            selected = next((c for c in candidates if c.get("selected")), None)
+            if selected is not None:
+                head.append(selected)
+        return sorted(head, key=lambda c: c.get("bid", 0.0))
+
+    def _verbose_response(log_record: dict, full_candidates) -> dict:
+        """Full decision payload for a ``verbose`` request, built from the same
+        ``log_record`` that is persisted (so response == logged row), with the
+        candidate sweep capped for the wire and SHAP intentionally omitted
+        (it's attached asynchronously; fetch it later by ``prediction_id``)."""
+        payload = {k: log_record.get(k) for k in _VERBOSE_RESPONSE_KEYS}
+        served = payload.get("served_at")
+        if hasattr(served, "isoformat"):
+            payload["served_at"] = served.isoformat()
+        payload["candidate_evaluations"] = _response_candidate_slice(full_candidates)
+        return payload
 
     def _predicted_cm(
         predicted_profit: float | None, expected_revenue: float
@@ -1128,60 +1196,64 @@ if _FASTAPI_AVAILABLE:
         # BackgroundTask, which runs in this worker after the response). If the
         # queue is full the row is dropped with a warning -- serving is never
         # blocked or slowed by logging.
-        _enqueue_log(
-            dict(
-                endpoint="recommend_bid",
-                prediction_id=prediction_id,
-                tat_seconds=tat_seconds,
-                lead_type_id=request.lead_type_id,
-                lead_type_name=lead_type_name,
-                campaign_id=request.campaign_id,
-                account_id=request.account_id,
-                source_type_id=request.source_type_id,
-                lead_ping_id=request.lead_ping_id,
-                input_features=record,
-                model_input_features=row.to_dict(),
-                feature_cols=manifest.get("feature_cols") if manifest else None,
-                expected_revenue=request.expected_revenue,
-                target_cm=request.target_cm,
-                min_bid=request.min_bid,
-                bid_step=request.bid_step,
-                candidate_bid_generation={
-                    "method": "equally_spaced",
-                    "min_bid": request.min_bid,
-                    "max_bid": result.get("max_bid"),
-                    "bid_step": request.bid_step,
-                    "n_candidates": result.get("n_candidate_bids"),
-                },
-                # Full optimizer sweep: every candidate bid the optimizer scored,
-                # with its predicted win rate, expected profit, and whether it was
-                # the selected (argmax-profit) bid. Lets a prediction's optimizer
-                # decision be reconstructed without re-running the model.
-                candidate_evaluations=result.get("candidate_evaluations"),
-                **_manifest_log_fields(manifest),
-                model_data_age_days=result.get("model_data_age_days"),
-                decision_path=result.get("decision_path"),
-                decision_reason=result.get("decision_reason"),
-                recommended_bid=result.get("recommended_bid"),
-                recommended_bid_predicted_win_rate=result.get(
-                    "recommended_bid_predicted_win_rate"
-                ),
-                recommended_bid_predicted_profit=result.get(
-                    "recommended_bid_predicted_profit"
-                ),
-                recommended_bid_predicted_cm=_predicted_cm(
-                    result.get("recommended_bid_predicted_profit"),
-                    request.expected_revenue,
-                ),
-                serving_config=_serving_config_snapshot(),
-            )
+        served_at = datetime.now(timezone.utc)
+        log_record = dict(
+            endpoint="recommend_bid",
+            prediction_id=prediction_id,
+            served_at=served_at,
+            package_version=_PACKAGE_VERSION,
+            tat_seconds=tat_seconds,
+            lead_type_id=request.lead_type_id,
+            lead_type_name=lead_type_name,
+            campaign_id=request.campaign_id,
+            account_id=request.account_id,
+            source_type_id=request.source_type_id,
+            lead_ping_id=request.lead_ping_id,
+            input_features=record,
+            model_input_features=row.to_dict(),
+            feature_cols=manifest.get("feature_cols") if manifest else None,
+            expected_revenue=request.expected_revenue,
+            target_cm=request.target_cm,
+            min_bid=request.min_bid,
+            bid_step=request.bid_step,
+            candidate_bid_generation={
+                "method": "equally_spaced",
+                "min_bid": request.min_bid,
+                "max_bid": result.get("max_bid"),
+                "bid_step": request.bid_step,
+                "n_candidates": result.get("n_candidate_bids"),
+            },
+            # Full optimizer sweep: every candidate bid the optimizer scored,
+            # with its predicted win rate, expected profit, and whether it was
+            # the selected (argmax-profit) bid. Lets a prediction's optimizer
+            # decision be reconstructed without re-running the model.
+            candidate_evaluations=result.get("candidate_evaluations"),
+            **_manifest_log_fields(manifest),
+            model_data_age_days=result.get("model_data_age_days"),
+            decision_path=result.get("decision_path"),
+            decision_reason=result.get("decision_reason"),
+            recommended_bid=result.get("recommended_bid"),
+            recommended_bid_predicted_win_rate=result.get(
+                "recommended_bid_predicted_win_rate"
+            ),
+            recommended_bid_predicted_profit=result.get(
+                "recommended_bid_predicted_profit"
+            ),
+            recommended_bid_predicted_cm=_predicted_cm(
+                result.get("recommended_bid_predicted_profit"),
+                request.expected_revenue,
+            ),
+            serving_config=_serving_config_snapshot(),
         )
+        _enqueue_log(log_record)
 
-        # candidate_evaluations is persisted to the prediction log above, but
-        # deliberately NOT returned to the bid caller: it's an audit/explainability
-        # payload (up to a few hundred entries) with no place on the latency- and
-        # bandwidth-sensitive response. Drop it so the response stays lean.
-        result.pop("candidate_evaluations", None)
+        # The full candidate sweep is persisted to the log above. The default
+        # response stays lean (sweep dropped); a `verbose` request instead gets
+        # the full decision payload with the sweep capped (selected bid + first
+        # 19 by bid). SHAP is never returned here -- fetch it later by id.
+        full_candidates = result.pop("candidate_evaluations", None)
+        if request.verbose:
+            result.update(_verbose_response(log_record, full_candidates))
 
         # SHAP enrichment mode (config.shap_enrichment_mode / $SMARTHUB_SHAP_MODE):
         #   inprocess -> compute SHAP here, in a background task on this worker

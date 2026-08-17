@@ -1,6 +1,26 @@
 # Changelog
 
 
+## 2026-08-17
+
+### `/recommend_bid` response: opt-in `verbose` full decision payload
+- **Default response stays lean** (recommended bid + predicted metrics +
+  `decision_path`/`decision_reason` + `prediction_id` + `lead_ping_id`), so the
+  hot-path latency profile is unchanged. The server remains the single writer of
+  the complete production log.
+- **New `verbose: bool` flag on `BidRequest`.** When true, the response also
+  returns the full logging-schema payload — `served_at`, `package_version`, lead
+  ids/metadata, input & model-input snapshots, `feature_cols`, optimizer config,
+  model identity, `recommended_bid_predicted_cm`, and `serving_config` — built
+  from the same record that is persisted (response and logged row can't diverge).
+- **Candidate sweep capped on the wire** to the selected bid + first 19 by bid
+  (≤20); the log still keeps the full ~300-row sweep. **SHAP is never returned**
+  (async); fetch it later by `prediction_id`.
+- No extra model inference; verbose only packages already-computed values.
+  Documented in `docs/PREDICTION_LOG_SCHEMA.md` §8a. Added regression tests
+  (lean default vs. verbose-capped-with-selected).
+
+
 ## 2026-08-13
 
 ### Prediction log: full optimizer sweep + valid-JSON guarantee

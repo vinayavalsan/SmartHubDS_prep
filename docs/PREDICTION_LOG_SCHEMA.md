@@ -389,6 +389,42 @@ Both were gaps in the original version of this document; closed together
 since a caller either supplies `lead_ping_id` up front or gets `prediction_id`
 back to correlate later - the log is reliably joinable either way now.
 
+## 8a. `/recommend_bid` response contract (lean default + `verbose`)
+
+The **server is the single source of truth for the log** - it persists the
+complete record itself (§7), so the response never needs to carry logging data
+for the log to be complete. The response has two shapes:
+
+**Default (lean) - the hot path.** Returns only what a bidding client needs:
+`recommended_bid`, `recommended_bid_predicted_win_rate`,
+`recommended_bid_predicted_profit`, `max_bid`, `n_candidate_bids`,
+`decision_path`, `decision_reason`, `model_data_age_days`, `prediction_id`,
+and `lead_ping_id`. No feature snapshots, no model identity, no candidate
+sweep - keeping the payload small and the TAT profile flat at high QPS.
+
+**`verbose: true` (opt-in) - full decision payload.** Set `verbose` on the
+`BidRequest` to also receive the complete logging-schema payload, built from
+the *same* record that is persisted (so response and logged row can't diverge):
+prediction `served_at`, `tat_seconds`, `package_version`, lead ids/metadata,
+`input_features`, `model_input_features`, `feature_cols`, optimizer config
+(`expected_revenue`/`target_cm`/`min_bid`/`bid_step` + `candidate_bid_generation`),
+model identity (`model_name`/`model_version`/`model_uri`/`model_type`/
+`model_calibrated`/`training_table_version` + data range), the final
+`recommended_bid_predicted_cm`, and `serving_config`.
+
+Two deliberate constraints on `verbose`:
+
+- **Candidate sweep is capped on the wire** to the **selected bid + the first
+  19 by bid** (≤20 entries), so the chosen bid is always present without
+  shipping the full ~300-row array. The log always keeps the complete sweep.
+- **SHAP is never in the response** - it is computed asynchronously and attached
+  to the log row afterward (§2/§7). Consumers retrieve it later by
+  `prediction_id` (via the log, or a future `GET /prediction/{id}`).
+
+`verbose` adds **no model inference** - it only packages values already computed
+during the prediction - so latency is unchanged for default traffic and only
+marginally larger (serialization of ≤20 candidates + metadata) when requested.
+
 ## 9. One remaining gap: no migration tool
 
 `create_all()` is fine for a fresh environment/tests; a running production
