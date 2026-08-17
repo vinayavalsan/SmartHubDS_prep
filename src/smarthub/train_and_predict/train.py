@@ -904,11 +904,14 @@ def _evaluate_currently_serving_model(
         lead_type_name
     )
     if serving_model is None or serving_manifest is None:
-        raise RuntimeError(
-            "A currently-serving model is configured for "
-            f"'{lead_type_name}' as version '{serving_version}', but its "
-            "manifest or model artifact could not be loaded."
+        logger.warning(
+            "Currently-serving model '%s' for '%s' is configured but could not "
+            "be loaded (corrupt/unloadable); skipping challenger comparison and "
+            "proceeding to train/promote a replacement.",
+            serving_version,
+            lead_type_name,
         )
+        return None, None
 
     serving_feature_cols = serving_manifest.get("feature_cols") or []
     if not serving_feature_cols:
