@@ -36,14 +36,15 @@ models:
     subsample_freq: 1
     random_state: 42
     n_estimators: 700
-    num_leaves: 96
-    max_depth: 10
-    learning_rate: 0.031333649832925727
-    min_child_samples: 20
-    subsample: 0.7579972674460089
-    colsample_bytree: 0.6542889441223174
-    reg_alpha: 0.006156118703858024
-    reg_lambda: 0.30729035105303304
+    num_leaves: 50
+    max_depth: 8
+    learning_rate: 0.03756926249576086
+    min_child_samples: 36
+    subsample: 0.9878338511058234
+    colsample_bytree: 0.9100531293444458
+    reg_alpha: 3.7713131110779936
+    reg_lambda: 3.4131967734309536
+
 optimizer:
   target_cm: 0.25
   minimum_bid: 0.25

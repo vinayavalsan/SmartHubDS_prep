@@ -372,7 +372,6 @@ def _unique_columns(columns: Iterable[str]) -> list[str]:
 def build_training_table(
     df: pd.DataFrame,
     lead_type_id: int | None = None,
-    drop_zero_variance: bool = False,
     campaign_ids: list[int] | None = None,
 ) -> pd.DataFrame:
     """Assemble the leakage-safe training table from raw ``lead_pings`` rows.
@@ -478,16 +477,6 @@ def build_training_table(
         + [TARGET_COLUMN]
     )
     table = out[keep].copy()
-
-    if drop_zero_variance:
-        constant = [
-            column
-            for column in model_columns
-            if column != DECISION_COLUMN
-            and column in table.columns
-            and table[column].nunique(dropna=True) <= 1
-        ]
-        table = table.drop(columns=constant)
 
     output_rows = len(table)
     dropped_rows = input_rows - output_rows
