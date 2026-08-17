@@ -1,0 +1,17 @@
+{"ts": "2026-08-13T07:45:47.774810220Z", "container": "smarthub-dashboard", "msg": "\u001b[34m  Stopping...\u001b[0m"}
+{"ts": "2026-08-13T07:48:41.350985968Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T07:48:41.351237880Z", "container": "smarthub-dashboard", "msg": "\u001b[34m\u001b[1m  You can now view your Streamlit app in your browser.\u001b[0m"}
+{"ts": "2026-08-13T07:48:41.351245130Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T07:48:41.351248420Z", "container": "smarthub-dashboard", "msg": "\u001b[34m  URL: \u001b[0m\u001b[1mhttp://0.0.0.0:8501\u001b[0m"}
+{"ts": "2026-08-13T07:48:41.351379491Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T11:11:02.791750745Z", "container": "smarthub-dashboard", "msg": "\u001b[34m  Stopping...\u001b[0m"}
+{"ts": "2026-08-13T11:27:46.782143173Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T11:27:46.782174944Z", "container": "smarthub-dashboard", "msg": "\u001b[34m\u001b[1m  You can now view your Streamlit app in your browser.\u001b[0m"}
+{"ts": "2026-08-13T11:27:46.782179174Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T11:27:46.782182304Z", "container": "smarthub-dashboard", "msg": "\u001b[34m  URL: \u001b[0m\u001b[1mhttp://0.0.0.0:8501\u001b[0m"}
+{"ts": "2026-08-13T11:27:46.782185384Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T21:14:34.530024412Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T21:14:34.530051072Z", "container": "smarthub-dashboard", "msg": "\u001b[34m\u001b[1m  You can now view your Streamlit app in your browser.\u001b[0m"}
+{"ts": "2026-08-13T21:14:34.530055262Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}
+{"ts": "2026-08-13T21:14:34.530058663Z", "container": "smarthub-dashboard", "msg": "\u001b[34m  URL: \u001b[0m\u001b[1mhttp://0.0.0.0:8501\u001b[0m"}
+{"ts": "2026-08-13T21:14:34.530061673Z", "container": "smarthub-dashboard", "msg": "\u001b[0m"}

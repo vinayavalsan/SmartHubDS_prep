@@ -1,0 +1,24 @@
+{"ts": "2026-08-11T09:44:37.617485083Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T09:44:37.633299601Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T09:44:37.634790703Z", "container": "smarthub-minio-init", "msg": "bucket ready"}
+{"ts": "2026-08-11T10:47:06.617756293Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T10:47:06.636518784Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T10:47:06.637881965Z", "container": "smarthub-minio-init", "msg": "bucket ready"}
+{"ts": "2026-08-11T11:09:50.725591994Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T11:09:50.740229142Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T11:09:50.741475762Z", "container": "smarthub-minio-init", "msg": "bucket ready"}
+{"ts": "2026-08-11T11:13:04.721761403Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T11:13:04.736545372Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T11:13:04.737816653Z", "container": "smarthub-minio-init", "msg": "bucket ready"}
+{"ts": "2026-08-11T11:24:37.175641006Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T11:24:37.194017703Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T11:24:37.195479465Z", "container": "smarthub-minio-init", "msg": "bucket ready"}
+{"ts": "2026-08-11T12:09:26.571124248Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T12:09:26.589850609Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T12:09:26.608751972Z", "container": "smarthub-minio-init", "msg": "bucket ready"}
+{"ts": "2026-08-11T12:16:38.422541172Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T12:16:38.438332269Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T12:16:38.440061123Z", "container": "smarthub-minio-init", "msg": "bucket ready"}
+{"ts": "2026-08-11T12:31:02.922878364Z", "container": "smarthub-minio-init", "msg": "Added `local` successfully."}
+{"ts": "2026-08-11T12:31:02.939014984Z", "container": "smarthub-minio-init", "msg": "Bucket created successfully `local/smarthub-models`."}
+{"ts": "2026-08-11T12:31:02.940661317Z", "container": "smarthub-minio-init", "msg": "bucket ready"}

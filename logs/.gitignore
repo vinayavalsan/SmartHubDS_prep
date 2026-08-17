@@ -1,3 +1,0 @@
-# Keep the logs/ directory in the repo but never commit the log files themselves.
-*
-!.gitignore

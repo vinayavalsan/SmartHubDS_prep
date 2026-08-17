@@ -1,0 +1,21 @@
+{"ts": "2026-08-11T09:44:43.595622069Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh"}
+{"ts": "2026-08-11T09:44:43.623414523Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Getting the checksum of /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-11T09:44:43.655401792Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Enabled listen on IPv6 in /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-11T09:44:43.655424872Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh"}
+{"ts": "2026-08-11T09:44:43.655428652Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh"}
+{"ts": "2026-08-11T09:44:43.699410547Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh"}
+{"ts": "2026-08-11T09:44:43.711463534Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Configuration complete; ready for start up"}
+{"ts": "2026-08-11T09:54:21.093039426Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [11/Aug/2026:09:54:21 +0000] \"POST /recommend_bid HTTP/1.1\" 422 82 \"-\" \"curl/7.81.0\""}
+{"ts": "2026-08-11T10:47:07.255610391Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh"}
+{"ts": "2026-08-11T10:47:07.280853684Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Getting the checksum of /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-11T10:47:07.316363829Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Enabled listen on IPv6 in /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-11T10:47:07.316631082Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh"}
+{"ts": "2026-08-11T10:47:07.316642012Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh"}
+{"ts": "2026-08-11T10:47:07.335711605Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh"}
+{"ts": "2026-08-11T10:47:07.339404745Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Configuration complete; ready for start up"}
+{"ts": "2026-08-11T11:24:37.871486307Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Getting the checksum of /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-11T11:24:37.891873770Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Enabled listen on IPv6 in /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-11T11:24:37.891902331Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh"}
+{"ts": "2026-08-11T11:24:37.891906491Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh"}
+{"ts": "2026-08-11T11:24:37.908423253Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh"}
+{"ts": "2026-08-11T11:24:37.923503544Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Configuration complete; ready for start up"}

@@ -1,0 +1,4 @@
+services:
+  prefect-server:
+    environment:
+      PREFECT_UI_API_URL: http://54.161.161.100:4200/api

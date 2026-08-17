@@ -1,0 +1,33 @@
+{"ts": "2026-08-11T09:41:57.711431195Z", "container": "smarthub-minio", "msg": "INFO: Exiting on signal: TERMINATED"}
+{"ts": "2026-08-11T09:44:31.997242777Z", "container": "smarthub-minio", "msg": "MinIO Object Storage Server"}
+{"ts": "2026-08-11T09:44:31.997292368Z", "container": "smarthub-minio", "msg": "Copyright: 2015-2026 MinIO, Inc."}
+{"ts": "2026-08-11T09:44:31.997296478Z", "container": "smarthub-minio", "msg": "License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html"}
+{"ts": "2026-08-11T09:44:31.997299718Z", "container": "smarthub-minio", "msg": "Version: RELEASE.2025-09-07T16-13-09Z (go1.24.6 linux/amd64)"}
+{"ts": "2026-08-11T09:44:31.997302598Z", "container": "smarthub-minio", "msg": ""}
+{"ts": "2026-08-11T09:44:31.997305688Z", "container": "smarthub-minio", "msg": "API: http://172.18.0.4:9000  http://127.0.0.1:9000 "}
+{"ts": "2026-08-11T09:44:31.997308658Z", "container": "smarthub-minio", "msg": "WebUI: http://172.18.0.4:9001 http://127.0.0.1:9001  "}
+{"ts": "2026-08-11T09:44:31.997311428Z", "container": "smarthub-minio", "msg": ""}
+{"ts": "2026-08-11T09:44:31.997314428Z", "container": "smarthub-minio", "msg": "Docs: https://docs.min.io"}
+{"ts": "2026-08-11T09:44:31.997317348Z", "container": "smarthub-minio", "msg": "WARN: Detected default credentials 'minioadmin:minioadmin', we recommend that you change these values with 'MINIO_ROOT_USER' and 'MINIO_ROOT_PASSWORD' environment variables"}
+{"ts": "2026-08-11T10:44:26.650620028Z", "container": "smarthub-minio", "msg": "INFO: Exiting on signal: TERMINATED"}
+{"ts": "2026-08-11T10:47:01.291058571Z", "container": "smarthub-minio", "msg": "MinIO Object Storage Server"}
+{"ts": "2026-08-11T10:47:01.291105342Z", "container": "smarthub-minio", "msg": "Copyright: 2015-2026 MinIO, Inc."}
+{"ts": "2026-08-11T10:47:01.291109252Z", "container": "smarthub-minio", "msg": "License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html"}
+{"ts": "2026-08-11T10:47:01.291112502Z", "container": "smarthub-minio", "msg": "Version: RELEASE.2025-09-07T16-13-09Z (go1.24.6 linux/amd64)"}
+{"ts": "2026-08-11T10:47:01.291115712Z", "container": "smarthub-minio", "msg": ""}
+{"ts": "2026-08-11T10:47:01.291118842Z", "container": "smarthub-minio", "msg": "API: http://172.18.0.2:9000  http://127.0.0.1:9000 "}
+{"ts": "2026-08-11T10:47:01.291121822Z", "container": "smarthub-minio", "msg": "WebUI: http://172.18.0.2:9001 http://127.0.0.1:9001  "}
+{"ts": "2026-08-11T10:47:01.291124742Z", "container": "smarthub-minio", "msg": ""}
+{"ts": "2026-08-11T10:47:01.291127572Z", "container": "smarthub-minio", "msg": "Docs: https://docs.min.io"}
+{"ts": "2026-08-11T10:47:01.291130492Z", "container": "smarthub-minio", "msg": "WARN: Detected default credentials 'minioadmin:minioadmin', we recommend that you change these values with 'MINIO_ROOT_USER' and 'MINIO_ROOT_PASSWORD' environment variables"}
+{"ts": "2026-08-11T11:21:56.521366055Z", "container": "smarthub-minio", "msg": "INFO: Exiting on signal: TERMINATED"}
+{"ts": "2026-08-11T11:24:31.764889501Z", "container": "smarthub-minio", "msg": "MinIO Object Storage Server"}
+{"ts": "2026-08-11T11:24:31.764933151Z", "container": "smarthub-minio", "msg": "Copyright: 2015-2026 MinIO, Inc."}
+{"ts": "2026-08-11T11:24:31.764936831Z", "container": "smarthub-minio", "msg": "License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html"}
+{"ts": "2026-08-11T11:24:31.764939942Z", "container": "smarthub-minio", "msg": "Version: RELEASE.2025-09-07T16-13-09Z (go1.24.6 linux/amd64)"}
+{"ts": "2026-08-11T11:24:31.764942772Z", "container": "smarthub-minio", "msg": ""}
+{"ts": "2026-08-11T11:24:31.764945752Z", "container": "smarthub-minio", "msg": "API: http://172.18.0.2:9000  http://127.0.0.1:9000 "}
+{"ts": "2026-08-11T11:24:31.764948622Z", "container": "smarthub-minio", "msg": "WebUI: http://172.18.0.2:9001 http://127.0.0.1:9001  "}
+{"ts": "2026-08-11T11:24:31.764951502Z", "container": "smarthub-minio", "msg": ""}
+{"ts": "2026-08-11T11:24:31.764954192Z", "container": "smarthub-minio", "msg": "Docs: https://docs.min.io"}
+{"ts": "2026-08-11T11:24:31.764957022Z", "container": "smarthub-minio", "msg": "WARN: Detected default credentials 'minioadmin:minioadmin', we recommend that you change these values with 'MINIO_ROOT_USER' and 'MINIO_ROOT_PASSWORD' environment variables"}

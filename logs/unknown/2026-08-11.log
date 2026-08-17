@@ -1,0 +1,89 @@
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-dashboard exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-nginx exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-server exited with code 143"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-postgres exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-dashboard exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-nginx exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-server exited with code 143"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-postgres exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-nginx exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-dashboard exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-server exited with code 143"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-postgres exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-dashboard has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-dashboard exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui has been recreated"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Kprefect-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-shap-worker exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-ui exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-slo-alerts exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-serve exited with code 137"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-ollama-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-minio-init exited with code 0"}
+{"ts": null, "container": "unknown", "msg": "\u001b[Ksmarthub-mlflow-init exited with code 0"}

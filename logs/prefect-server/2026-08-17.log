@@ -1,0 +1,2 @@
+{"ts": "2026-08-17T01:15:36.555627166Z", "container": "prefect-server", "msg": "01:15:36.554 | WARNING | uvicorn.error - Invalid HTTP request received."}
+{"ts": "2026-08-17T01:34:01.209040806Z", "container": "prefect-server", "msg": "01:34:01.208 | WARNING | uvicorn.error - Invalid HTTP request received."}

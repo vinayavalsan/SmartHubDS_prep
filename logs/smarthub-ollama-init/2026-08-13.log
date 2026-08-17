@@ -1,0 +1,4 @@
+{"ts": "2026-08-13T07:48:35.077740536Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-13T07:48:35.289867686Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-13T11:27:40.582740239Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-13T11:27:40.896272878Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}

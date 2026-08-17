@@ -1,0 +1,15 @@
+{"ts": "2026-08-12T06:24:25.167781419Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-12T06:24:25.365219375Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-12T06:48:33.509128438Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-12T06:48:33.702839292Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-12T07:02:04.083450660Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-12T07:02:04.322802801Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-12T07:54:08.198959199Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-12T07:54:08.449259828Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-12T08:03:16.878813669Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-12T08:03:17.190314493Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-12T08:25:46.812854134Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-12T08:26:29.872785760Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-12T08:26:30.094162448Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}
+{"ts": "2026-08-12T08:27:33.782926577Z", "container": "smarthub-ollama-init", "msg": "ollama-init: pulling qwen2.5:1.5b-instruct (this can take a few minutes)..."}
+{"ts": "2026-08-12T08:27:33.976333135Z", "container": "smarthub-ollama-init", "msg": "{\"status\":\"success\"}ollama-init: model qwen2.5:1.5b-instruct is ready."}

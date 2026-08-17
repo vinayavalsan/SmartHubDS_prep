@@ -1,0 +1,676 @@
+{"ts": "2026-08-12T00:00:48.846Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:02:48.255Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:04:47.463Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:06:46.719Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:08:45.946Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:10:45.176Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:12:44.391Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:14:43.286Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:16:42.117Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:18:41.065Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:20:39.930Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:22:38.834Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:24:37.489Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:26:36.035Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:28:34.715Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:30:33.562Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:32:32.102Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:34:30.627Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:36:29.055Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:38:27.536Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:40:26.117Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:42:24.471Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:44:22.877Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:46:21.450Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:48:19.830Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:50:18.354Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:52:16.772Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:54:15.163Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:56:13.403Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T00:58:11.875Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:00:10.313Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:02:08.810Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:04:07.161Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:06:05.674Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:08:04.145Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:10:02.726Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:12:01.389Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:14:00.108Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:15:58.761Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:17:57.344Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:19:55.973Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:21:54.614Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:23:53.018Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:25:51.501Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:27:49.898Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:29:48.301Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:31:46.824Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:33:45.278Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:35:43.694Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:37:42.146Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:39:40.583Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:41:39.202Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:43:37.852Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:45:36.399Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:47:35.032Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:49:33.672Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:51:32.196Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:53:30.703Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:55:29.393Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:57:27.966Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T01:59:26.442Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:01:25.006Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:03:23.351Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:05:21.593Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:07:20.046Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:09:18.612Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:11:17.118Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:13:15.637Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:15:14.151Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:17:12.462Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:19:10.593Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:21:08.770Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:23:06.932Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:25:05.309Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:27:03.775Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:29:01.975Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:31:00.366Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:32:58.850Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:34:57.084Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:36:55.538Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:38:53.950Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:40:52.157Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:42:50.450Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:44:49.197Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:46:47.482Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:48:45.700Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:50:43.767Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:52:41.908Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:54:40.013Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:56:38.016Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T02:58:36.101Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:00:34.175Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:02:32.384Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:04:30.345Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:06:28.539Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:08:26.829Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:10:25.067Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:12:23.138Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:14:21.146Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:16:19.147Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:18:17.130Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:20:15.097Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:22:12.850Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:24:10.760Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:26:08.654Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:28:06.397Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:30:04.170Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:32:02.101Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:33:59.908Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:35:57.634Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:37:55.444Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:39:53.240Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:41:50.881Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:43:48.485Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:45:46.131Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:47:43.749Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:49:41.364Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:51:38.869Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:53:36.533Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:55:34.046Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:57:31.599Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T03:59:29.136Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:01:26.724Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:03:24.324Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:05:22.123Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:07:19.901Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:09:17.720Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:11:15.275Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:13:12.938Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:15:10.537Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:17:07.936Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:19:05.263Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:21:02.828Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:23:00.122Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:24:57.581Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:26:54.813Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:28:52.120Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:30:49.471Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:32:46.782Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:34:44.045Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:36:41.202Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:38:38.111Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:40:34.870Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:42:31.582Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:44:28.381Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:46:25.112Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:48:21.867Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:50:18.486Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:52:15.276Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:54:11.931Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:56:08.661Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T04:58:05.378Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:00:01.958Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:01:58.148Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:03:54.402Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:05:50.634Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:07:47.097Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:09:43.549Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:11:39.947Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:13:36.241Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:15:32.621Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:17:28.918Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:19:25.166Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:21:21.390Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:23:17.646Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:25:13.981Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:27:10.249Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:29:06.564Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:31:02.963Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:32:59.360Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:34:55.647Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:36:51.961Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:38:48.471Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:40:44.842Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:42:41.297Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:44:37.599Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:46:33.684Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:48:29.934Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:50:26.172Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:52:22.380Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:54:18.633Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:56:14.846Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T05:58:11.087Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:00:07.341Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:02:03.679Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:04:00.081Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:05:56.114Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:07:52.445Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:09:48.728Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:11:44.900Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:13:41.365Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:15:37.775Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:17:34.178Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:19:30.751Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:21:32.485Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:23:50.689Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:24:17.034Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker received signal 15; stopping", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:24:17.056Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 7 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:24:26.678Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker started (db=postgresql+psycopg2://prefect:***@postgres:5432/prefect, poll=1.0s, batch=50, once=False)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:24:29.496Z", "level": "INFO", "service": "shap-worker", "logger": "botocore.credentials", "msg": "Found credentials in environment variables.", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:24:31.266Z", "level": "INFO", "service": "shap-worker", "logger": "matplotlib.font_manager", "msg": "generated new fontManager", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:26:24.914Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:28:19.684Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:30:14.512Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:32:09.361Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:34:04.003Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:35:58.919Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:37:53.971Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:39:48.943Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:41:44.908Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:43:39.909Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:45:34.852Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:45:49.540Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker received signal 15; stopping", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:45:49.556Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 6 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:48:39.983Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker started (db=postgresql+psycopg2://prefect:***@postgres:5432/prefect, poll=1.0s, batch=50, once=False)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:48:42.481Z", "level": "INFO", "service": "shap-worker", "logger": "botocore.credentials", "msg": "Found credentials in environment variables.", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:48:44.195Z", "level": "INFO", "service": "shap-worker", "logger": "matplotlib.font_manager", "msg": "generated new fontManager", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:50:36.308Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:52:28.803Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:54:21.982Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:56:15.445Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T06:58:08.768Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:00:34.626Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:01:52.460Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker received signal 15; stopping", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:01:52.466Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 29 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:02:05.617Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker started (db=postgresql+psycopg2://prefect:***@postgres:5432/prefect, poll=1.0s, batch=50, once=False)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:02:08.323Z", "level": "INFO", "service": "shap-worker", "logger": "botocore.credentials", "msg": "Found credentials in environment variables.", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:02:10.043Z", "level": "INFO", "service": "shap-worker", "logger": "matplotlib.font_manager", "msg": "generated new fontManager", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:04:02.876Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:05:57.205Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:07:51.827Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:09:46.155Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:11:40.775Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:13:35.374Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:15:29.981Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:17:24.754Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:19:19.376Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:21:13.784Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:23:08.189Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:25:02.532Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:26:56.960Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:28:51.363Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:30:45.754Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:32:40.230Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:34:34.676Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:36:29.121Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:38:23.583Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:40:18.219Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:42:12.540Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:44:06.782Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:46:01.247Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:47:56.021Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:49:50.811Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:51:45.563Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:53:40.397Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:53:55.675Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker received signal 15; stopping", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:53:55.692Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 6 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:54:14.616Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker started (db=postgresql+psycopg2://prefect:***@postgres:5432/prefect, poll=1.0s, batch=50, once=False)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:54:17.256Z", "level": "INFO", "service": "shap-worker", "logger": "botocore.credentials", "msg": "Found credentials in environment variables.", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:54:17.330Z", "level": "WARNING", "service": "shap-worker", "logger": "smarthub.train_and_predict.registry", "msg": "Could not initialise production model store; using local only.", "error": {"type": "ValueError", "msg": "Invalid endpoint: #http://minio:9000", "fingerprint": "d204ec673bbd", "stack": "Traceback (most recent call last):\n  File \"/app/src/smarthub/train_and_predict/registry.py\", line 48, in _production_store\n    _PRODUCTION_STORE = config.load_training_config().production_model_store()\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/src/smarthub/train_and_predict/config.py\", line 106, in production_model_store\n    return model_storage.S3ModelStore(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/src/smarthub/train_and_predict/model_storage.py\", line 135, in __init__\n    self._client = boto3.client(\"s3\", endpoint_url=endpoint_url, region_name=region)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/boto3/__init__.py\", line 93, in client\n    return _get_default_session().client(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/boto3/session.py\", line 337, in client\n    return self._session.create_client(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/botocore/context.py\", line 123, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/botocore/session.py\", line 1031, in create_client\n    client = client_creator.create_client(\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/botocore/client.py\", line 161, in create_client\n    client_args = self._get_client_args(\n                  ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/botocore/client.py\", line 561, in _get_client_args\n    return args_creator.get_client_args(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/botocore/args.py\", line 163, in get_client_args\n    endpoint = endpoint_creator.create_endpoint(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/botocore/endpoint.py\", line 410, in create_endpoint\n    raise ValueError(f\"Invalid endpoint: {endpoint_url}\")\nValueError: Invalid endpoint: #http://minio:9000\n"}, "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:54:19.006Z", "level": "INFO", "service": "shap-worker", "logger": "matplotlib.font_manager", "msg": "generated new fontManager", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:56:11.146Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:58:04.205Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T07:59:57.689Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:01:51.323Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:03:04.270Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker received signal 15; stopping", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:03:04.287Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 30 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:03:23.351Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker started (db=postgresql+psycopg2://prefect:***@postgres:5432/prefect, poll=1.0s, batch=50, once=False)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:03:25.953Z", "level": "INFO", "service": "shap-worker", "logger": "botocore.credentials", "msg": "Found credentials in environment variables.", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:03:27.667Z", "level": "INFO", "service": "shap-worker", "logger": "matplotlib.font_manager", "msg": "generated new fontManager", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:05:19.297Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:07:12.141Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:09:05.166Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:10:58.343Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:12:51.696Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:14:45.181Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:16:38.835Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:18:32.597Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:20:26.340Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:22:20.404Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:24:14.461Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:26:10.659Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:28:16.794Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:30:11.539Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:32:06.347Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:34:01.228Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:35:56.026Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:37:50.812Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:39:45.810Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:41:40.644Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:43:35.371Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:45:30.159Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:47:25.026Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:49:19.835Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:51:14.536Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:53:09.318Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:55:04.215Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:56:58.943Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T08:58:53.791Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:00:48.567Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:02:43.585Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:04:38.561Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:06:33.576Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:08:30.439Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:10:29.585Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:12:33.643Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:14:43.451Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:16:50.497Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:18:58.512Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:21:06.752Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:23:18.897Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:25:35.131Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:27:54.808Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:30:13.366Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:32:31.969Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:34:50.598Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:37:09.273Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:39:30.439Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:41:55.143Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:44:24.914Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:46:54.714Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:49:23.956Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:51:53.422Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:54:22.752Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:56:52.026Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T09:59:21.222Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:01:50.382Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:04:19.707Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:06:48.919Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:09:18.072Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:11:47.377Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:14:16.433Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:16:45.507Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:19:14.635Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:21:43.865Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:24:12.929Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:26:42.065Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:29:11.188Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:31:40.298Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:34:09.657Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:36:38.947Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:39:08.182Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:41:37.373Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:42:57.849Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker received signal 15; stopping", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:42:57.865Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 26 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:43:10.030Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker started (db=postgresql+psycopg2://prefect:***@postgres:5432/prefect, poll=1.0s, batch=50, once=False)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:43:13.331Z", "level": "INFO", "service": "shap-worker", "logger": "botocore.credentials", "msg": "Found credentials in environment variables.", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:43:14.962Z", "level": "INFO", "service": "shap-worker", "logger": "matplotlib.font_manager", "msg": "generated new fontManager", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:45:41.707Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:48:10.684Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 50 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:49:45.287Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker received signal 15; stopping", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:49:45.314Z", "level": "INFO", "service": "shap-worker", "logger": "smarthub.server.shap_worker", "msg": "shap-worker enriched 31 prediction(s)", "container": "smarthub-shap-worker"}
+{"ts": "2026-08-12T10:49:57.203814130Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 10:49:57 | INFO  | shap_worker.py:run:217 | shap-worker started (db=postgresql+psycopg2://prefect:***@postgres:5432/prefect, poll=1.0s, batch=50, once=False)"}
+{"ts": "2026-08-12T10:50:00.561454876Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 10:50:00 | INFO  | credentials.py:load:1252 | Found credentials in environment variables."}
+{"ts": "2026-08-12T10:50:02.242001842Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 10:50:02 | INFO  | font_manager.py:_load_fontmanager:1847 | generated new fontManager"}
+{"ts": "2026-08-12T10:52:28.772208420Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 10:52:28 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T10:54:56.649519758Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 10:54:56 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T10:57:24.852381195Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 10:57:24 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T10:59:53.791139099Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 10:59:53 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:02:22.586542618Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:02:22 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:04:51.639290164Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:04:51 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:07:20.835619130Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:07:20 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:09:49.862559792Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:09:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:12:18.974815449Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:12:18 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:14:47.823878285Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:14:47 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:17:16.864618862Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:17:16 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:19:45.902112339Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:19:45 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:22:15.002055543Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:22:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:24:43.947388064Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:24:43 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:27:12.802790597Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:27:12 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:29:41.688315848Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:29:41 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:32:10.649680581Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:32:10 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:34:39.486372042Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:34:39 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:37:08.548204658Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:37:08 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:39:37.481307880Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:39:37 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:42:06.395912066Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:42:06 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:44:35.308082682Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:44:35 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:47:04.399136194Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:47:04 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:49:33.249218945Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:49:33 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:52:02.443917638Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:52:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:54:31.549417630Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:54:31 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:57:00.586962126Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:57:00 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T11:59:29.508186489Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 11:59:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:01:58.441227122Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:01:58 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:04:27.351870224Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:04:27 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:06:56.718394002Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:06:56 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:09:25.528923671Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:09:25 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:11:54.507372123Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:11:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:14:23.266306288Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:14:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:16:52.038139753Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:16:52 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:19:20.786519678Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:19:20 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:21:49.651272311Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:21:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:24:18.264987157Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:24:18 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:26:46.955264661Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:26:46 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:29:15.857233794Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:29:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:31:44.712204534Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:31:44 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:34:13.583843638Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:34:13 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:36:42.145986355Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:36:42 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:39:10.822541061Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:39:10 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:41:39.378630138Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:41:39 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:44:07.903339843Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:44:07 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:46:36.686814407Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:46:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:49:05.430180300Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:49:05 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:51:34.190945192Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:51:34 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:54:03.027839495Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:54:03 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:56:31.725960420Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:56:31 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T12:59:00.467266039Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 12:59:00 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:01:28.971167621Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:01:28 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:03:57.568051877Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:03:57 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:06:26.307790267Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:06:26 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:08:55.058439393Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:08:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:11:23.700225040Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:11:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:13:52.281103526Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:13:52 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:16:21.079454693Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:16:21 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:18:49.931383537Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:18:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:21:18.654501538Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:21:18 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:23:47.259566606Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:23:47 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:26:16.101318353Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:26:16 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:28:45.121951388Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:28:45 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:31:13.782701138Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:31:13 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:33:42.293688783Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:33:42 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:36:11.004475388Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:36:11 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:38:39.625950577Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:38:39 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:41:08.202448987Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:41:08 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:43:36.952558004Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:43:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:46:05.765339490Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:46:05 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:48:34.610394516Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:48:34 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:51:03.311867121Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:51:03 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:53:31.963330862Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:53:31 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:56:00.411657935Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:56:00 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T13:58:29.010891986Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 13:58:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:00:57.534051718Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:00:57 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:03:26.119137475Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:03:26 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:05:54.761724455Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:05:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:08:23.482089894Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:08:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:10:52.279783138Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:10:52 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:13:20.876518737Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:13:20 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:15:49.337147375Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:15:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:18:17.745609168Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:18:17 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:20:46.565684007Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:20:46 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:23:15.324465652Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:23:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:25:43.744841320Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:25:43 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:28:12.178378349Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:28:12 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:30:40.787824719Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:30:40 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:33:09.416912023Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:33:09 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:35:37.797687199Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:35:37 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:38:05.831260612Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:38:05 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:40:34.209757357Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:40:34 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:43:02.539696289Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:43:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:45:31.049204994Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:45:31 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:47:59.175486328Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:47:59 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:50:27.249246742Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:50:27 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:52:55.221597230Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:52:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:55:23.206532876Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:55:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T14:57:51.222641342Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 14:57:51 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:00:19.607464690Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:00:19 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:02:47.611496032Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:02:47 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:05:15.725968291Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:05:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:07:43.877311620Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:07:43 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:10:11.851408229Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:10:11 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:12:40.120355166Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:12:40 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:15:08.523807232Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:15:08 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:17:36.483450713Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:17:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:20:04.794979631Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:20:04 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:22:33.091900565Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:22:33 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:25:01.313663252Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:25:01 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:27:29.597028498Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:27:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:29:57.950330296Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:29:57 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:32:26.251067994Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:32:26 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:34:54.844526604Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:34:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:37:22.945581056Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:37:22 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:39:51.561610976Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:39:51 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:42:20.178199398Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:42:20 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:44:48.626275179Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:44:48 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:47:17.159903521Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:47:17 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:49:45.681372405Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:49:45 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:52:13.963976957Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:52:13 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:54:42.265266599Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:54:42 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:57:10.351874355Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:57:10 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T15:59:38.393399097Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 15:59:38 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:02:06.462321311Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:02:06 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:04:34.552287142Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:04:34 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:07:02.576381396Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:07:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:09:30.800255075Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:09:30 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:11:59.114712663Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:11:59 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:14:26.989185088Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:14:26 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:16:55.120898003Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:16:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:19:23.195416521Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:19:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:21:51.314312091Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:21:51 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:24:18.958685075Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:24:18 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:26:46.924566261Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:26:46 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:29:14.929739013Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:29:14 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:31:43.255335876Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:31:43 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:34:11.130327000Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:34:11 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:36:39.107514634Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:36:39 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:39:07.006713077Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:39:07 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:41:34.622161108Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:41:34 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:44:02.417213272Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:44:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:46:30.381282630Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:46:30 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:48:58.256798208Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:48:58 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:51:26.193123583Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:51:26 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:53:54.002983045Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:53:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:56:21.533035647Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:56:21 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T16:58:49.378472619Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 16:58:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:01:17.049055076Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:01:17 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:03:45.026449196Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:03:45 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:06:12.773220951Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:06:12 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:08:40.574960209Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:08:40 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:11:08.697780563Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:11:08 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:13:36.449927262Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:13:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:16:04.313598802Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:16:04 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:18:32.070546007Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:18:32 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:20:59.873159241Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:20:59 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:23:27.761393746Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:23:27 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:25:55.765020971Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:25:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:28:23.816543744Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:28:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:30:51.626729742Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:30:51 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:33:19.396820734Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:33:19 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:35:47.185188173Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:35:47 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:38:15.053008002Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:38:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:40:42.907791645Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:40:42 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:43:10.711965542Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:43:10 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:45:38.721079699Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:45:38 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:48:06.636803060Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:48:06 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:50:34.607865673Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:50:34 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:53:02.508084092Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:53:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:55:30.399122000Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:55:30 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T17:57:58.698769096Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 17:57:58 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:00:26.875970431Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:00:26 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:02:54.653665799Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:02:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:05:22.542317267Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:05:22 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:07:50.694678833Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:07:50 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:10:18.330772667Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:10:18 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:12:45.841932373Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:12:45 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:15:13.400562981Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:15:13 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:17:41.034254837Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:17:41 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:20:08.561574744Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:20:08 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:22:36.174482680Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:22:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:25:03.802659773Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:25:03 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:27:31.093121924Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:27:31 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:29:58.585370289Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:29:58 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:32:26.291497341Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:32:26 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:34:53.878112313Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:34:53 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:37:21.378222968Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:37:21 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:39:49.030914609Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:39:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:42:16.673548658Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:42:16 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:44:44.161881303Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:44:44 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:47:11.419605132Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:47:11 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:49:38.846707129Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:49:38 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:52:06.355320932Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:52:06 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:54:33.573421396Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:54:33 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:57:00.832508337Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:57:00 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T18:59:28.329825851Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 18:59:28 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:01:55.619140832Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:01:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:04:22.849332726Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:04:22 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:06:50.151606664Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:06:50 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:09:17.326521616Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:09:17 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:11:44.460648454Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:11:44 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:14:11.567083969Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:14:11 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:16:38.968428353Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:16:38 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:19:06.218050159Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:19:06 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:21:33.583651101Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:21:33 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:24:00.553727556Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:24:00 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:26:27.519763137Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:26:27 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:28:54.421171397Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:28:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:31:21.393089256Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:31:21 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:33:48.052256305Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:33:48 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:36:15.127856089Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:36:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:38:42.067468898Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:38:42 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:41:08.705790818Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:41:08 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:43:35.716969070Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:43:35 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:46:02.642709904Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:46:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:48:29.801339856Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:48:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:50:56.698867593Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:50:56 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:53:23.715122364Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:53:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:55:50.460231848Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:55:50 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T19:58:17.093157675Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 19:58:17 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:00:44.014730594Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:00:44 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:03:10.648023496Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:03:10 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:05:37.857721576Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:05:37 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:08:04.588520635Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:08:04 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:10:31.493434412Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:10:31 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:12:58.416968338Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:12:58 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:15:25.381515106Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:15:25 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:17:52.082763475Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:17:52 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:20:18.699673964Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:20:18 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:22:45.346161507Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:22:45 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:25:12.061308236Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:25:12 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:27:38.597634231Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:27:38 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:30:05.316882253Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:30:05 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:32:31.499660150Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:32:31 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:34:57.756634907Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:34:57 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:37:24.243564264Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:37:24 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:39:50.426659345Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:39:50 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:42:16.801788239Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:42:16 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:44:43.078908703Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:44:43 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:47:09.793053856Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:47:09 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:49:36.377819893Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:49:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:52:02.753966254Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:52:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:54:29.574919654Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:54:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:56:56.174561518Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:56:56 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T20:59:22.803927279Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 20:59:22 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:01:49.494589250Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:01:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:04:16.244090420Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:04:16 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:06:42.930436697Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:06:42 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:09:09.607216008Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:09:09 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:11:36.219516733Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:11:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:14:03.030597551Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:14:03 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:16:29.786506130Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:16:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:18:56.648610820Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:18:56 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:21:23.268799595Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:21:23 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:23:49.849136428Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:23:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:26:16.529246403Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:26:16 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:28:43.002403305Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:28:43 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:31:09.860494209Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:31:09 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:33:36.479623534Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:33:36 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:36:02.838346966Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:36:02 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:38:29.558271272Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:38:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:40:55.790294942Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:40:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:43:22.409928878Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:43:22 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:45:48.774657498Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:45:48 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:48:15.316041652Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:48:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:50:41.786925564Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:50:41 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:53:08.263148032Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:53:08 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:55:34.604288373Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:55:34 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T21:58:01.077868073Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 21:58:01 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:00:27.829153970Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:00:27 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:02:54.416921307Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:02:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:05:20.893268635Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:05:20 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:07:47.272827635Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:07:47 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:10:13.597345223Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:10:13 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:12:40.171073628Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:12:40 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:15:06.619671380Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:15:06 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:17:32.731326459Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:17:32 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:19:59.077610458Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:19:59 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:22:25.412912015Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:22:25 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:24:52.171182006Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:24:52 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:27:18.542429808Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:27:18 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:29:44.901464205Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:29:44 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:32:11.282682449Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:32:11 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:34:37.623564142Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:34:37 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:37:04.189889175Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:37:04 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:39:30.627921893Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:39:30 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:41:56.779476668Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:41:56 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:44:22.979497027Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:44:22 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:46:49.172789823Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:46:49 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:49:15.177792796Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:49:15 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:51:41.272676053Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:51:41 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:54:06.961791392Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:54:06 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:56:33.032365891Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:56:33 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T22:58:59.171722332Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 22:58:59 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:01:25.343896034Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:01:25 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:03:51.499765324Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:03:51 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:06:17.240921397Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:06:17 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:08:43.318383811Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:08:43 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:11:09.248083872Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:11:09 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:13:35.087391064Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:13:35 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:16:01.651212111Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:16:01 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:18:28.245072102Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:18:28 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:20:54.903039805Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:20:54 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:23:21.075005063Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:23:21 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:25:46.936504658Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:25:46 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:28:12.863831051Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:28:12 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:30:38.710311369Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:30:38 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:33:04.634659748Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:33:04 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:35:30.334542965Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:35:30 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:37:55.946899892Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:37:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:40:21.664704198Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:40:21 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:42:47.357575299Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:42:47 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:45:12.808387751Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:45:12 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:47:38.450293152Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:47:38 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:50:04.175816277Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:50:04 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:52:29.728805102Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:52:29 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:54:55.400889640Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:54:55 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:57:21.027127230Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:57:21 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}
+{"ts": "2026-08-12T23:59:46.760954840Z", "container": "smarthub-shap-worker", "msg": "2026-08-12 23:59:46 | INFO  | shap_worker.py:run:245 | shap-worker enriched 50 prediction(s)"}

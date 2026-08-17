@@ -1,0 +1,17 @@
+{"ts": "2026-08-13T07:48:35.246107724Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Enabled listen on IPv6 in /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-13T07:48:35.246261665Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh"}
+{"ts": "2026-08-13T07:48:35.246364546Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh"}
+{"ts": "2026-08-13T07:48:35.248506262Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh"}
+{"ts": "2026-08-13T07:48:35.249457700Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Configuration complete; ready for start up"}
+{"ts": "2026-08-13T08:18:55.247576860Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [13/Aug/2026:08:18:55 +0000] \"POST /recommend_bid HTTP/1.1\" 200 380 \"-\" \"curl/7.81.0\""}
+{"ts": "2026-08-13T08:21:08.248177757Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [13/Aug/2026:08:21:08 +0000] \"POST /recommend_bid HTTP/1.1\" 200 380 \"-\" \"curl/7.81.0\""}
+{"ts": "2026-08-13T10:29:48.948377136Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [13/Aug/2026:10:29:48 +0000] \"POST /recommend_bid HTTP/1.1\" 200 26267 \"-\" \"curl/7.81.0\""}
+{"ts": "2026-08-13T10:55:54.342199299Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [13/Aug/2026:10:55:54 +0000] \"POST /recommend_bid HTTP/1.1\" 200 380 \"-\" \"curl/7.81.0\""}
+{"ts": "2026-08-13T11:04:58.833435503Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [13/Aug/2026:11:04:58 +0000] \"POST /recommend_bid HTTP/1.1\" 200 380 \"-\" \"curl/7.81.0\""}
+{"ts": "2026-08-13T11:27:40.710597980Z", "container": "smarthub-nginx", "msg": "10-listen-on-ipv6-by-default.sh: info: Enabled listen on IPv6 in /etc/nginx/conf.d/default.conf"}
+{"ts": "2026-08-13T11:27:40.710740282Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh"}
+{"ts": "2026-08-13T11:27:40.710836122Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh"}
+{"ts": "2026-08-13T11:27:40.712983610Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh"}
+{"ts": "2026-08-13T11:27:40.713925957Z", "container": "smarthub-nginx", "msg": "/docker-entrypoint.sh: Configuration complete; ready for start up"}
+{"ts": "2026-08-13T11:51:08.593590739Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [13/Aug/2026:11:51:08 +0000] \"POST /recommend_bid HTTP/1.1\" 200 380 \"-\" \"curl/7.81.0\""}
+{"ts": "2026-08-13T11:52:57.997234990Z", "container": "smarthub-nginx", "msg": "172.18.0.1 - - [13/Aug/2026:11:52:57 +0000] \"POST /recommend_bid HTTP/1.1\" 200 380 \"-\" \"curl/7.81.0\""}

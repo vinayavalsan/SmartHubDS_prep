@@ -1,0 +1,48 @@
+{"ts": "2026-08-12T06:48:40.718682209Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T06:48:40.718706340Z", "container": "prefect-server", "msg": " ___ ___ ___ ___ ___ ___ _____"}
+{"ts": "2026-08-12T06:48:40.718709900Z", "container": "prefect-server", "msg": "| _ \\ _ \\ __| __| __/ __|_   _|"}
+{"ts": "2026-08-12T06:48:40.718713180Z", "container": "prefect-server", "msg": "|  _/   / _|| _|| _| (__  | |"}
+{"ts": "2026-08-12T06:48:40.718716130Z", "container": "prefect-server", "msg": "|_| |_|_\\___|_| |___\\___| |_|"}
+{"ts": "2026-08-12T06:48:40.718719200Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T06:48:40.718722100Z", "container": "prefect-server", "msg": "Configure Prefect to communicate with the server with:"}
+{"ts": "2026-08-12T06:48:40.718725240Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T06:48:40.718728070Z", "container": "prefect-server", "msg": "    prefect config set PREFECT_API_URL=http://0.0.0.0:4200/api"}
+{"ts": "2026-08-12T06:48:40.718730960Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T06:48:40.718734330Z", "container": "prefect-server", "msg": "View the API reference documentation at http://0.0.0.0:4200/docs"}
+{"ts": "2026-08-12T06:48:40.718737350Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T06:48:40.718740270Z", "container": "prefect-server", "msg": "Check out the dashboard at http://0.0.0.0:4200"}
+{"ts": "2026-08-12T06:48:40.718743440Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T06:48:40.718893261Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T06:48:40.718896851Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.075834930Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.075870000Z", "container": "prefect-server", "msg": " ___ ___ ___ ___ ___ ___ _____"}
+{"ts": "2026-08-12T07:54:16.075874170Z", "container": "prefect-server", "msg": "| _ \\ _ \\ __| __| __/ __|_   _|"}
+{"ts": "2026-08-12T07:54:16.075877720Z", "container": "prefect-server", "msg": "|  _/   / _|| _|| _| (__  | |"}
+{"ts": "2026-08-12T07:54:16.075880680Z", "container": "prefect-server", "msg": "|_| |_|_\\___|_| |___\\___| |_|"}
+{"ts": "2026-08-12T07:54:16.075883810Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.075886860Z", "container": "prefect-server", "msg": "Configure Prefect to communicate with the server with:"}
+{"ts": "2026-08-12T07:54:16.075890550Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.075893470Z", "container": "prefect-server", "msg": "    prefect config set PREFECT_API_URL=http://0.0.0.0:4200/api"}
+{"ts": "2026-08-12T07:54:16.075896390Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.075899260Z", "container": "prefect-server", "msg": "View the API reference documentation at http://0.0.0.0:4200/docs"}
+{"ts": "2026-08-12T07:54:16.075902230Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.075905100Z", "container": "prefect-server", "msg": "Check out the dashboard at http://0.0.0.0:4200"}
+{"ts": "2026-08-12T07:54:16.075908060Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.076001151Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T07:54:16.076020621Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.482771546Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.482806787Z", "container": "prefect-server", "msg": " ___ ___ ___ ___ ___ ___ _____"}
+{"ts": "2026-08-12T08:03:24.482811267Z", "container": "prefect-server", "msg": "| _ \\ _ \\ __| __| __/ __|_   _|"}
+{"ts": "2026-08-12T08:03:24.482814597Z", "container": "prefect-server", "msg": "|  _/   / _|| _|| _| (__  | |"}
+{"ts": "2026-08-12T08:03:24.482817517Z", "container": "prefect-server", "msg": "|_| |_|_\\___|_| |___\\___| |_|"}
+{"ts": "2026-08-12T08:03:24.482820487Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.482823367Z", "container": "prefect-server", "msg": "Configure Prefect to communicate with the server with:"}
+{"ts": "2026-08-12T08:03:24.482826347Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.482829207Z", "container": "prefect-server", "msg": "    prefect config set PREFECT_API_URL=http://0.0.0.0:4200/api"}
+{"ts": "2026-08-12T08:03:24.482832307Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.482835127Z", "container": "prefect-server", "msg": "View the API reference documentation at http://0.0.0.0:4200/docs"}
+{"ts": "2026-08-12T08:03:24.482838167Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.482841087Z", "container": "prefect-server", "msg": "Check out the dashboard at http://0.0.0.0:4200"}
+{"ts": "2026-08-12T08:03:24.482843977Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.483036289Z", "container": "prefect-server", "msg": ""}
+{"ts": "2026-08-12T08:03:24.483040429Z", "container": "prefect-server", "msg": ""}
