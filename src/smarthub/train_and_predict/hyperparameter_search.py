@@ -24,7 +24,13 @@ from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, train_test
 
 from smarthub.core.logging_utils import get_logger
 
-from . import config, models, optimizer_evaluation, preprocessing
+from . import (
+    config,
+    feature_target_association,
+    models,
+    optimizer_evaluation,
+    preprocessing,
+)
 
 logger = get_logger(__name__)
 
@@ -882,6 +888,7 @@ def _write_outputs(
     holdout_rows: int,
     final_training_test_rows: int,
     zero_variance_features: list[str],
+    feature_target_diagnostics: list[dict[str, Any]],
     feature_coverage_diagnostics: list[dict[str, Any]],
     time_range_diagnostics: list[dict[str, Any]],
     settings: dict[str, Any],
@@ -903,6 +910,7 @@ def _write_outputs(
         "finalist_holdout_rows": holdout_rows,
         "final_training_test_rows": final_training_test_rows,
         "zero_variance_features": list(zero_variance_features),
+        "feature_target_association": feature_target_diagnostics,
         "feature_coverage_diagnostics": feature_coverage_diagnostics,
         "time_range_diagnostics": time_range_diagnostics,
         "scoring": search_config.scoring,
@@ -1000,6 +1008,20 @@ def run_hyperparameter_search(
         version,
     )
     preprocessing.assert_trainable(frame, lead_type_name)
+
+    feature_target_diagnostics = (
+        feature_target_association.build_feature_target_association(
+            frame=frame,
+            numeric_features=numeric,
+            categorical_features=categorical,
+            target_column=config.TARGET_COL,
+            random_seed=search_config.random_seed,
+        )
+    )
+    feature_target_association.log_feature_target_association(
+        feature_target_diagnostics,
+        logger,
+    )
 
     if settings["optimizer_enabled"] and config.REVENUE_COL not in frame.columns:
         raise ValueError(
@@ -1224,6 +1246,7 @@ def run_hyperparameter_search(
         holdout_rows=len(holdout),
         final_training_test_rows=len(final_training_test),
         zero_variance_features=zero_variance_features,
+        feature_target_diagnostics=feature_target_diagnostics,
         feature_coverage_diagnostics=feature_coverage_diagnostics,
         time_range_diagnostics=time_range_diagnostics,
         settings=settings,
@@ -1267,6 +1290,7 @@ def run_hyperparameter_search(
         "finalist_holdout_rows": int(len(holdout)),
         "final_training_test_rows": int(len(final_training_test)),
         "zero_variance_features": list(zero_variance_features),
+        "feature_target_association": feature_target_diagnostics,
         "feature_coverage_diagnostics": feature_coverage_diagnostics,
         "time_range_diagnostics": time_range_diagnostics,
         "summary_path": str(summary_path),
