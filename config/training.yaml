@@ -32,17 +32,18 @@ models:
     reg_lambda: 0.0012514256096931547
   lightgbm:
     verbosity: -1
-    n_jobs: 4
+    n_jobs: 1
+    subsample_freq: 1
     random_state: 42
-    n_estimators: 500
-    num_leaves: 102
+    n_estimators: 700
+    num_leaves: 96
     max_depth: 10
-    learning_rate: 0.04468207810538316
-    min_child_samples: 100
-    subsample: 0.6712372711931107
-    colsample_bytree: 0.6853618912618956
-    reg_alpha: 2.317541364741477
-    reg_lambda: 9.365054394785407
+    learning_rate: 0.031333649832925727
+    min_child_samples: 20
+    subsample: 0.7579972674460089
+    colsample_bytree: 0.6542889441223174
+    reg_alpha: 0.006156118703858024
+    reg_lambda: 0.30729035105303304
 optimizer:
   target_cm: 0.25
   minimum_bid: 0.25
