@@ -13,7 +13,14 @@ from prefect.artifacts import create_markdown_artifact
 from smarthub.core import notifications
 from smarthub.feature_engineering import features as fe
 
-from . import config, train
+# NOTE: absolute (not `from . import config, train`). Prefect loads this
+# entrypoint as a bare top-level module named ``flow`` (``__package__='flow'``),
+# so a relative import would pull the whole training subtree in as ``flow.models``,
+# ``flow.train``, ... and stamp pickled objects (e.g. the model's
+# FunctionTransformer) with ``__module__='flow.models'`` -- unloadable anywhere
+# else ("No module named 'flow'"). Importing by canonical path keeps trained
+# models loadable by serve, the shap-worker, and the training eval step.
+from smarthub.train_and_predict import config, train
 
 
 def _feature_breakdown(lead_type_id, feature_cols):
