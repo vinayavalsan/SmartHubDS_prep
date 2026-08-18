@@ -11,6 +11,7 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
 
 from smarthub.core import notifications
+from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.feature_engineering import features as fe
 
 # NOTE: absolute (not `from . import config, train`). Prefect loads this
@@ -20,7 +21,7 @@ from smarthub.feature_engineering import features as fe
 # FunctionTransformer) with ``__module__='flow.models'`` -- unloadable anywhere
 # else ("No module named 'flow'"). Importing by canonical path keeps trained
 # models loadable by serve, the shap-worker, and the training eval step.
-from smarthub.train_and_predict import config, train
+from smarthub.train_and_predict import train
 
 
 def _feature_breakdown(lead_type_id, feature_cols):
@@ -28,9 +29,8 @@ def _feature_breakdown(lead_type_id, feature_cols):
 
     The registry (``feature_engineering.FEATURES``) is the source of truth for a
     lead type's applicable features; ``feature_cols`` are the columns the model
-    was actually trained on. The old mandatory/optional split was dropped in the
-    feature-registry refactor, so this now reports how many trained columns come
-    from the registry and which registry features went unused.
+    was actually trained on. This reports how many trained columns come from the
+    registry and which registry features went unused.
 
     Inputs
     ------
@@ -108,7 +108,7 @@ def train_flow(
         Completed flow summary.
     """
     logger = get_run_logger()
-    lead_type_name = config.lead_type_name(lead_type_id)
+    lead_type_name = resolve_lead_type_name(lead_type_id)
     logger.info(
         "STEP 3 train-model starting: lead_type=%s (%s), version=%s, mlflow=%s",
         lead_type_name,

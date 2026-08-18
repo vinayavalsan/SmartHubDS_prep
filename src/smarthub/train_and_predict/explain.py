@@ -10,9 +10,8 @@ endpoint:
     Ollama) turns that numeric breakdown into a couple of plain-English
     sentences.
 
-This module is the thin orchestrator only (``explain_bid``) — the two
-pipeline stages themselves live in their own files, split out 2026-07-24 for
-readability (no logic changed, only which file each piece lives in):
+This module is the thin orchestrator for ``explain_bid``. The two
+pipeline stages live in dedicated modules:
 
     - ``shap_explain.py`` — the SHAP factor breakdown (``explain_row`` and
       its helpers).

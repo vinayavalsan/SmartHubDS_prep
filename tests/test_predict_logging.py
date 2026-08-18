@@ -21,6 +21,7 @@ fastapi = pytest.importorskip("fastapi")  # noqa: F841 -- import-gate only
 from fastapi.testclient import TestClient  # noqa: E402
 
 from smarthub.core.lead_types import lead_type_id  # noqa: E402
+from smarthub.feature_engineering import features as fe  # noqa: E402
 from smarthub.server import predict  # noqa: E402
 from smarthub.train_and_predict import config, registry  # noqa: E402
 from smarthub.train_and_predict.prediction_log_schema import (  # noqa: E402
@@ -379,11 +380,9 @@ CATEGORICAL = ["state"]
 
 @pytest.fixture
 def small_feature_columns(monkeypatch):
-    """Point config.feature_columns at a tiny NUMERIC/CATEGORICAL set so a
-    real (tiny) LightGBM pipeline can be fit and SHAP-explained quickly --
-    same convention as test_explain.py's fixture of the same name."""
+    """Use a small feature set for the LightGBM SHAP integration test."""
     monkeypatch.setattr(
-        config, "feature_columns", lambda lead_type_id: (NUMERIC, CATEGORICAL)
+        fe, "model_feature_columns", lambda lead_type_id: (NUMERIC, CATEGORICAL)
     )
 
 

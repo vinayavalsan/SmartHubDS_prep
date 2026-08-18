@@ -1,11 +1,7 @@
 """SHAP-based factor breakdown for one lead's win-probability prediction.
 
-Split out of ``explain.py`` (2026-07-24) — this module owns everything that
-turns a fitted model + one lead's features into a ranked list of "why the
-model predicted what it predicted" factors. ``explain.py`` remains the thin
-orchestrator that calls into this module (for the numeric breakdown) and
-``llm_explain.py`` (to turn that breakdown into plain English); no logic
-changed in this split, only which file each piece lives in.
+This module turns a fitted model and one lead's features into a ranked
+list of factors that explain the model prediction.
 
 Heavy/optional deps (shap, lightgbm) are imported lazily so the rest of
 `train_and_predict` keeps working without the `explain` extra installed —
@@ -20,8 +16,9 @@ import numpy as np
 
 from smarthub.core import task_config
 from smarthub.core.logging_utils import get_logger
+from smarthub.feature_engineering import features as fe
 
-from . import config, preprocessing
+from . import preprocessing
 
 logger = get_logger(__name__)
 
@@ -252,7 +249,7 @@ def explain_row(model, record, lead_type_id, top_n=None):
         ``{"feature", "value", "shap", "direction"}``, sorted by |shap|.
     """
     top_n = top_n or TOP_N_FACTORS
-    numeric, categorical = config.feature_columns(lead_type_id)
+    numeric, categorical = fe.model_feature_columns(lead_type_id)
     feature_cols = list(numeric) + list(categorical)
 
     frame = preprocessing.serving_frame([record], lead_type_id)
@@ -299,7 +296,7 @@ def explain_prepared_row(
     import pandas as pd
 
     top_n = top_n or TOP_N_FACTORS
-    numeric, categorical = config.feature_columns(lead_type_id)
+    numeric, categorical = fe.model_feature_columns(lead_type_id)
     feature_cols = list(numeric) + list(categorical)
 
     row = dict(model_input_features)

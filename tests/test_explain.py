@@ -12,8 +12,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from smarthub.feature_engineering import features as fe
 from smarthub.server import predict
-from smarthub.train_and_predict import config, explain, llm_explain, shap_explain
+from smarthub.train_and_predict import explain, llm_explain, shap_explain
 
 # --- _to_native (JSON-safety for numpy scalars) ------------------------------
 
@@ -695,9 +696,9 @@ def _tiny_lightgbm_pipeline(calibrate=False):
 
 @pytest.fixture
 def small_feature_columns(monkeypatch):
-    """Point config.feature_columns at the tiny NUMERIC/CATEGORICAL set above."""
+    """Use a small feature schema for SHAP tests."""
     monkeypatch.setattr(
-        config, "feature_columns", lambda lead_type_id: (NUMERIC, CATEGORICAL)
+        fe, "model_feature_columns", lambda lead_type_id: (NUMERIC, CATEGORICAL)
     )
 
 

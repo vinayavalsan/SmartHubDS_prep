@@ -15,7 +15,6 @@ import yaml
 
 from smarthub.core import paths, task_config
 from smarthub.core.config import get_with_logged_fallback
-from smarthub.core.lead_types import lead_type_name as canonical_lead_type_name
 from smarthub.core.logging_utils import get_logger
 from smarthub.feature_engineering import features as fe
 
@@ -120,12 +119,6 @@ class TrainingConfig:
     mlflow_production_experiment_name: str = "SmartHub Production"
     mlflow_production_registered_model_name: str = ""
 
-    def local_model_store(self):
-        """Filesystem store for local (all-runs) model artifacts."""
-        from smarthub.train_and_predict.model_storage import FilesystemModelStore
-
-        return FilesystemModelStore(str(paths.resolve(self.model_root)))
-
     def production_model_store(self):
         """Production model store (promoted models), or None when disabled."""
         spec = self.production_storage
@@ -176,54 +169,6 @@ class TrainingConfig:
         """
         path = f"{self.report_root}/{lead_type_name_value}"
         return str(paths.resolve(path))
-
-    def model_path(self, lead_type_name_value: str) -> str:
-        """Return the legacy model path for a lead type.
-
-        Inputs
-        ------
-        lead_type_name_value : str
-            Human-readable lead type name.
-
-        Returns
-        -------
-        str
-            Absolute legacy model path.
-        """
-        filename = f"anton_model_{lead_type_name_value}.pkl"
-        return str(paths.resolve(f"{self.model_root}/{filename}"))
-
-
-def lead_type_name(lead_type_id: int) -> str:
-    """Return the human-readable name for a lead type.
-
-    Inputs
-    ------
-    lead_type_id : int
-        SmartHub lead type identifier.
-
-    Returns
-    -------
-    str
-        Human-readable lead type name.
-    """
-    return canonical_lead_type_name(lead_type_id)
-
-
-def feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
-    """Return numeric and categorical model features for a lead type.
-
-    Inputs
-    ------
-    lead_type_id : int
-        SmartHub lead type identifier.
-
-    Returns
-    -------
-    tuple[list[str], list[str]]
-        Numeric features followed by categorical features.
-    """
-    return fe.model_feature_columns(lead_type_id)
 
 
 def _env_or_default_path(variable_name: str, default_rel_path: str) -> Path:
@@ -388,7 +333,7 @@ def _resolve_production_storage(cfg: Any) -> dict[str, Any] | None:
     """Resolve the production model-storage spec, or None when disabled.
 
     An empty ``backend`` (or an absent ``storage.production`` section) means
-    local-only, preserving today's behaviour. ``SMARTHUB_S3_ENDPOINT_URL``
+    local-only operation. ``SMARTHUB_S3_ENDPOINT_URL``
     overrides the endpoint so the same config targets AWS or a MinIO/
     S3-compatible service per environment.
     """
@@ -821,7 +766,7 @@ def shap_enrichment_mode() -> str:
     Three modes, so the current behaviour and the offloaded behaviour can run
     side by side and be compared before either is removed:
 
-    - ``"inprocess"`` (default -- unchanged legacy behaviour): the serving
+    - ``"inprocess"`` (default): the serving
       process computes SHAP in a Starlette ``BackgroundTask`` right after the
       response is sent. Correct, but the ~1.5 s of CPU-bound work runs on the
       same worker and contends for the GIL with later requests.
@@ -856,37 +801,6 @@ def shap_enrichment_mode() -> str:
     return mode
 
 
-# Compatibility aliases allow existing prediction and optimizer modules to use
-# the new YAML-backed values without a second configuration source.
-_DEFAULT_CONFIG = load_training_config()
-RANDOM_SEED = _DEFAULT_CONFIG.random_seed
-TARGET_CM = _DEFAULT_CONFIG.optimizer.target_cm
-MIN_BID = _DEFAULT_CONFIG.optimizer.minimum_bid
-BID_STEP = _DEFAULT_CONFIG.optimizer.bid_step
-
-
-def target_cm_value() -> float:
-    """Return the configured target contribution margin.
-
-    Returns
-    -------
-    float
-        Configured target contribution margin.
-    """
-    return _DEFAULT_CONFIG.optimizer.target_cm
-
-
-def min_bid_value() -> float:
-    """Return the configured minimum candidate bid.
-
-    Returns
-    -------
-    float
-        Configured minimum candidate bid.
-    """
-    return _DEFAULT_CONFIG.optimizer.minimum_bid
-
-
 @dataclass(frozen=True)
 class HyperparameterSearchConfig:
     """Store resolved settings for manual hyperparameter search."""
@@ -900,6 +814,7 @@ class HyperparameterSearchConfig:
     random_seed: int
     n_jobs: int
     validation_strategy: str
+    split: dict[str, Any]
     holdout_fraction: float
     probability_shortlist_top_n: int
     optimizer_top_n: int
@@ -1141,6 +1056,7 @@ def load_hyperparameter_search_config(
     output = _mapping(root.get("output"), "output")
     models_root = _mapping(root.get("models"), "models")
     validation = _mapping(root.get("validation"), "validation")
+    split_root = _mapping(root.get("split"), "split")
     finalists = _mapping(root.get("finalists"), "finalists")
     optimizer_cfg = _mapping(root.get("optimizer") or {}, "optimizer")
     calibration_cfg = _mapping(root.get("calibration") or {}, "calibration")
@@ -1163,6 +1079,25 @@ def load_hyperparameter_search_config(
     )
     if validation_strategy not in {"time", "stratified_random"}:
         raise ValueError("validation.strategy must be 'time' or 'stratified_random'.")
+
+    split_strategy = str(split_root.get("strategy", "")).strip().lower()
+    if split_strategy not in _SUPPORTED_SPLIT_STRATEGIES:
+        choices = ", ".join(sorted(_SUPPORTED_SPLIT_STRATEGIES))
+        raise ValueError(f"Unsupported split.strategy {split_strategy!r}: {choices}")
+
+    selected_split = copy.deepcopy(
+        _mapping(split_root.get(split_strategy), f"split.{split_strategy}")
+    )
+    selected_split["strategy"] = split_strategy
+    selected_split["test_size"] = _fraction(
+        selected_split.get("test_size"),
+        f"split.{split_strategy}.test_size",
+    )
+    if split_strategy == "random":
+        if "stratify" not in selected_split:
+            raise ValueError("Missing required config: split.random.stratify")
+        if not isinstance(selected_split["stratify"], bool):
+            raise TypeError("split.random.stratify must be a YAML boolean.")
 
     holdout_fraction = float(
         get_with_logged_fallback(
@@ -1402,6 +1337,7 @@ def load_hyperparameter_search_config(
         random_seed=int(search["random_seed"]),
         n_jobs=int(search["n_jobs"]),
         validation_strategy=validation_strategy,
+        split=selected_split,
         holdout_fraction=holdout_fraction,
         probability_shortlist_top_n=probability_shortlist_top_n,
         optimizer_top_n=optimizer_top_n,

@@ -1,11 +1,8 @@
 """LLM (Ollama) formatting of a SHAP factor breakdown into plain English.
 
-Split out of ``explain.py`` (2026-07-24) — this module owns the LLM prompt
-template, the Ollama HTTP calls, and the model-pull/dedup infrastructure
-around them. ``explain.py`` remains the thin orchestrator that calls into
-``shap_explain.py`` (for the numeric breakdown) and this module (to turn that
-breakdown into plain English); no logic changed in this split, only which
-file each piece lives in.
+This module owns the LLM prompt template, Ollama HTTP calls, and the
+model-pull/dedup infrastructure used to turn numeric SHAP facts into plain
+English.
 
 The LLM never sees model internals and never computes anything — it only
 formats facts it's handed, with an explicit "don't invent numbers"
@@ -315,8 +312,7 @@ def _ensure_model_pulled_locked(model=None, host=None) -> None:
 def ensure_model_pulled_async(model=None, host=None) -> None:
     """Kick off the (lock-deduped) check/pull in a background daemon thread.
 
-    Returns immediately -- never blocks the caller (FastAPI startup, in this
-    codebase's only caller today, see ``predict._lifespan``). A real model
+    Returns immediately and never blocks the caller. A real model
     pull can take minutes for a multi-GB model, and neither startup nor any
     in-flight `/recommend_bid` / `/explain_bid` request should ever wait on
     it -- same "never hold up live serving" principle as SHAP/logging

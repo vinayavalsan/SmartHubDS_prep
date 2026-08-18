@@ -138,15 +138,14 @@ def log_training_run(
     """Log a complete SmartHub training run to MLflow.
 
     Mutable lifecycle fields such as ``promotion_status`` and ``promoted`` are
-    stored only as tags. MLflow parameters are immutable and therefore must not
-    be used for values that change during a later manual promotion.
+    stored only as tags because MLflow parameters are immutable.
 
     The exact training YAML used for the run is logged under the MLflow
     ``config`` artifact directory.
 
-    ``registered_model_name`` is retained for backward compatibility but model
-    registration is intentionally handled by :func:`promote_training_run`, so
-    automatic and manual promotion use the same registration path.
+    ``registered_model_name`` is accepted but model registration is handled by
+    :func:`promote_training_run`, so automatic and manual promotion use the same
+    registration path.
     """
     del registered_model_name
     tracking_uri, experiment_id = _configure_tracking(

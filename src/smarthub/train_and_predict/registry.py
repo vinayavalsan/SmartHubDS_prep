@@ -33,9 +33,8 @@ class RegistryError(RuntimeError):
 # --- production storage (promoted models) ------------------------------------
 # Local training always writes to the filesystem under MODEL_DIR_ROOT. When
 # production storage is configured, `promote()` also publishes the promoted
-# artifact + manifest + serving pointer there, and serving prefers it. When it
-# is not configured everything below is a no-op, so local behaviour is
-# unchanged.
+# artifact + manifest + serving pointer there, and serving prefers it. Without
+# production storage, the registry operates entirely on the local filesystem.
 _PRODUCTION_STORE = None
 _PRODUCTION_STORE_RESOLVED = False
 
@@ -50,7 +49,7 @@ def _local_store():
 def _production_store():
     """Return the production model store, or None when production is disabled.
 
-    Distinguishes two cases that used to be conflated:
+    Production storage resolution distinguishes two cases:
 
     * **Disabled** (no backend configured) -> returns ``None``. Local-only dev;
       falling back to local storage is legitimate.
@@ -201,12 +200,12 @@ def _assigned_version_numbers(lead_type_name: str) -> set[int]:
     store = _production_store()  # raises if configured-but-broken (visible)
     if store is not None:
         lead = lead_type_name.strip().lower()
-        # Reserved version markers (authoritative from this change onward).
+        # Reserved version markers are authoritative for assigned versions.
         for key in store.list(f"{lead}/versions/"):
             match = _PRODUCTION_VERSION_RE.match(Path(key).stem)
             if match:
                 numbers.add(int(match.group("number")))
-        # Promoted manifests that predate the marker scheme.
+        # Promoted manifests also reserve their assigned version numbers.
         for key in store.list(f"{lead}/"):
             name = Path(key).name
             if name.startswith("run_") and name.endswith(".json"):
@@ -288,7 +287,7 @@ def save_version(
 
     manifest = {
         "training_run_id": training_run_id,
-        "version": training_run_id,  # compatibility for existing serving code
+        "version": training_run_id,
         "production_model_version": None,
         "lead_type_name": lead_type_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
