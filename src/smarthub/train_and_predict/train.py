@@ -317,50 +317,56 @@ def run_training(
     ):
         logger.info("    %-10s : %s", day, f"{count:,}")
 
-    binary_numeric = []
-    for column in numeric:
-        if column not in frame.columns:
-            continue
-        values = set(frame[column].dropna().unique().tolist())
-        if values and values.issubset({0, 1}):
-            binary_numeric.append(column)
+    diagnostic_features = preprocessing.coverage_features(
+        frame,
+        numeric,
+        categorical,
+    )
+    feature_coverage_diagnostics = preprocessing.feature_coverage_rows(
+        train_df=train_df,
+        eval_df=test_df,
+        features=diagnostic_features,
+        partition="test",
+    )
+    coverage_df = pd.DataFrame(feature_coverage_diagnostics)
+    differing_coverage_df = coverage_df[
+        (coverage_df["train_unique"] != coverage_df["eval_unique"])
+        | (coverage_df["unseen_eval_unique"] > 0)
+    ].copy()
 
-    diagnostic_features = list(categorical) + binary_numeric
-    split_diagnostics = []
-    for column in diagnostic_features:
-        train_values = set(train_df[column].dropna().unique().tolist())
-        test_values = set(test_df[column].dropna().unique().tolist())
-        split_diagnostics.append(
-            {
-                "feature": column,
-                "train_unique": len(train_values),
-                "test_unique": len(test_values),
+    logger.info("Feature Coverage Diagnostics")
+    if differing_coverage_df.empty:
+        logger.info("  No train/test coverage differences detected.")
+    else:
+        display_coverage_df = differing_coverage_df.drop(columns=["partition"]).rename(
+            columns={
+                "eval_unique": "test_unique",
+                "unseen_eval_unique": "unseen_test_unique",
+                "eval_rows_unseen": "test_rows_unseen",
+                "eval_pct_unseen": "test_pct_unseen",
+                "min_train_support_for_eval_values": (
+                    "min_train_support_for_test_values"
+                ),
             }
         )
+        display_coverage_df["test_pct_unseen"] = display_coverage_df[
+            "test_pct_unseen"
+        ].round(2)
+        logger.info("\n%s", display_coverage_df.to_string(index=False))
 
-    split_diagnostics_df = pd.DataFrame(split_diagnostics)
-    differing_split_diagnostics_df = split_diagnostics_df[
-        split_diagnostics_df["train_unique"] != split_diagnostics_df["test_unique"]
-    ]
-    logger.info("Categorical/Binary Feature Split Summary")
-    if differing_split_diagnostics_df.empty:
-        logger.info("  No train/test uniqueness differences.")
-    else:
-        logger.info("\n%s", differing_split_diagnostics_df.to_string(index=False))
-
-    feature_split_diagnostics = differing_split_diagnostics_df.to_dict(orient="records")
+    feature_split_diagnostics = differing_coverage_df.to_dict(orient="records")
 
     binary_variance_loss = []
-    for row in split_diagnostics:
+    for row in feature_coverage_diagnostics:
         column = row["feature"]
         overall_unique = frame[column].nunique(dropna=True)
-        if overall_unique == 2 and row["train_unique"] == 1 and row["test_unique"] == 2:
+        if overall_unique == 2 and row["train_unique"] == 1 and row["eval_unique"] == 2:
             binary_variance_loss.append(row)
 
     if binary_variance_loss:
         affected = "\n".join(
             f"{row['feature']}: train={row['train_unique']}, "
-            f"test={row['test_unique']}"
+            f"test={row['eval_unique']}"
             for row in binary_variance_loss
         )
         notifications.notify_warning(
@@ -374,7 +380,9 @@ def run_training(
         )
 
     zero_variance_features = [
-        row["feature"] for row in split_diagnostics if row["train_unique"] <= 1
+        row["feature"]
+        for row in feature_coverage_diagnostics
+        if row["train_unique"] <= 1
     ]
 
     model_type = training_config.model_type

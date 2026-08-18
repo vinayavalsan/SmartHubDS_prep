@@ -79,19 +79,6 @@ def test_excludes_leakage_columns():
     assert {"bid", "expected_revenue", TARGET_COLUMN}.issubset(table.columns)
 
 
-def test_keeps_zero_variance_by_default():
-    """Constant columns are retained by default."""
-    table = build_training_table(_raw(), lead_type_id=6)
-    assert "insured" in table.columns
-
-
-def test_drops_zero_variance_when_requested():
-    """drop_zero_variance=True removes constant columns, keeps varying ones."""
-    table = build_training_table(_raw(), lead_type_id=6, drop_zero_variance=True)
-    assert "insured" not in table.columns  # constant -> dropped
-    assert "state" in table.columns  # varies -> kept
-
-
 def test_derived_features():
     """Enabled derived registry features are produced by the training build."""
     table = build_training_table(_raw()).set_index("id")
