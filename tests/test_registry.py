@@ -67,7 +67,7 @@ def test_promote_publishes_only_promoted_model_to_production(tmp_path, monkeypat
     from smarthub.train_and_predict.model_storage import FilesystemModelStore
 
     prod = FilesystemModelStore(tmp_path / "prod")
-    monkeypatch.setattr(registry, "_production_store", lambda: prod)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: prod)
 
     m = _save()
     version = m["version"]
@@ -88,7 +88,7 @@ def test_load_serving_model_prefers_production(tmp_path, monkeypatch):
     from smarthub.train_and_predict.model_storage import FilesystemModelStore
 
     prod = FilesystemModelStore(tmp_path / "prod")
-    monkeypatch.setattr(registry, "_production_store", lambda: prod)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: prod)
 
     m = _save()
     registry.promote("auto", m["version"])
@@ -100,7 +100,7 @@ def test_load_serving_model_prefers_production(tmp_path, monkeypatch):
 
 def test_load_serving_model_falls_back_to_local_when_no_production(monkeypatch):
     """With production disabled, serving uses local storage unchanged."""
-    monkeypatch.setattr(registry, "_production_store", lambda: None)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: None)
     m = _save()
     registry.promote("auto", m["version"])
     model, manifest = registry.load_serving_model("auto")

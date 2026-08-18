@@ -89,7 +89,7 @@ def test_training_config_defaults_to_repo_yaml(monkeypatch):
     from smarthub.train_and_predict import config as training_config
 
     monkeypatch.delenv("SMARTHUB_TRAINING_CONFIG", raising=False)
-    cfg = training_config.load_training_config()
+    cfg = training_config.load_training_config(6)
 
     assert cfg.model_type in {"logistic_regression", "xgboost", "lightgbm"}
     assert cfg.raw["resolved"]["config_path"].endswith("config/training.yaml")

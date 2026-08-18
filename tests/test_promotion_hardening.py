@@ -58,7 +58,7 @@ class _FaultyStore(FilesystemModelStore):
 
 def test_promote_success_is_consistent_across_all_three(tmp_path, monkeypatch):
     store = FilesystemModelStore(tmp_path / "prod")
-    monkeypatch.setattr(registry, "_production_store", lambda: store)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: store)
 
     v = _save()["version"]
     registry.promote("auto", v, reason="ok")
@@ -76,7 +76,7 @@ def test_promote_success_is_consistent_across_all_three(tmp_path, monkeypatch):
 
 def test_publish_failure_does_not_promote_or_switch(tmp_path, monkeypatch):
     store = _FaultyStore(tmp_path / "prod")
-    monkeypatch.setattr(registry, "_production_store", lambda: store)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: store)
 
     # First model promotes cleanly and is serving.
     a = _save()["version"]
@@ -108,11 +108,12 @@ def test_production_store_raises_when_configured_but_broken(monkeypatch):
             raise RuntimeError("bad creds / boto3 missing")
 
     monkeypatch.setattr(
-        "smarthub.train_and_predict.config.load_training_config", lambda: _Cfg()
+        "smarthub.train_and_predict.config.load_training_config",
+        lambda lead_type_id: _Cfg(),
     )
     registry.reset_production_store_cache()
     with pytest.raises(registry.RegistryError):
-        registry._production_store()
+        registry._production_store("auto")
 
 
 def test_production_store_none_when_disabled(monkeypatch):
@@ -123,17 +124,18 @@ def test_production_store_none_when_disabled(monkeypatch):
             raise AssertionError("should not build a store when disabled")
 
     monkeypatch.setattr(
-        "smarthub.train_and_predict.config.load_training_config", lambda: _Cfg()
+        "smarthub.train_and_predict.config.load_training_config",
+        lambda lead_type_id: _Cfg(),
     )
     registry.reset_production_store_cache()
-    assert registry._production_store() is None
+    assert registry._production_store("auto") is None
 
 
 def test_serving_model_path_no_local_fallback_when_production_configured(
     tmp_path, monkeypatch
 ):
     store = FilesystemModelStore(tmp_path / "prod")
-    monkeypatch.setattr(registry, "_production_store", lambda: store)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: store)
 
     # Local artifact exists, but production (authoritative) does not have it.
     m = _save()
@@ -145,7 +147,7 @@ def test_serving_model_path_no_local_fallback_when_production_configured(
 
 def test_version_not_reused_across_stores(tmp_path, monkeypatch):
     store = FilesystemModelStore(tmp_path / "prod")
-    monkeypatch.setattr(registry, "_production_store", lambda: store)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: store)
 
     # Pretend auto_v5 was already assigned elsewhere (only a production marker).
     assert store.claim("auto/versions/auto_v5.json") is True
@@ -163,7 +165,7 @@ def test_claim_is_atomic_exclusive(tmp_path):
 
 def test_local_only_promotion_still_works(monkeypatch):
     """Regression: production disabled -> promote via local pointer, unchanged."""
-    monkeypatch.setattr(registry, "_production_store", lambda: None)
+    monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: None)
     v = _save()["version"]
     registry.promote("auto", v, reason="local")
     assert registry.currently_serving_version("auto") == v

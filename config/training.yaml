@@ -1,67 +1,88 @@
 training:
-  model_type: lightgbm
-  random_seed: 42
-  calibration:
-    enabled: false
-    method: sigmoid
-    cv: 3
-  split:
-    strategy: time
-    time:
-      test_size: 0.2
-    random:
-      test_size: 0.2
-      stratify: true
-  models:
-    lightgbm:
-      verbosity: -1
-      n_jobs: 1
-      subsample_freq: 1
-      n_estimators: 700
-      num_leaves: 50
-      max_depth: 8
-      learning_rate: 0.03756926249576086
-      min_child_samples: 36
-      subsample: 0.9878338511058234
-      colsample_bytree: 0.9100531293444458
-      reg_alpha: 3.7713131110779936
-      reg_lambda: 3.4131967734309536
-  optimizer:
-    target_cm: 0.25
-    minimum_bid: 0.25
-    bid_step: 0.25
-    chunk_size: 500
-  promotion:
-    mode: automatic
-    criteria:
-      max_log_loss: 0.55
-      min_expected_profit: 0.0
-      min_profit_ratio: 0.95
-      max_absolute_profit_loss_tolerance: 500.0
-      max_log_loss_regression: 0.01
-      monotonicity:
-        enabled: true
-        tolerance: 1.0e-08
-        max_violation_rate: 0.0
-  output:
-    report_root: data/model_evaluations
-    model_root: data/models
-    comparison_artifacts: true
-    comparison_artifact_root: data/model_comparisons
-  storage:
-    production:
-      backend: ''
-      bucket: smarthub-models
-      prefix: models
-      endpoint_url: ''
-      region: ''
-      root: data/production_models
-  mlflow:
-    tracking_db_path: data/mlflow.db
-    artifact_root: data/mlruns
-    experiment_name: anton_win_probability
-    registered_model_name: anton-win-probability-model
-    production:
-      tracking_uri: ''
-      experiment_name: SmartHub Production
+  defaults:
+    random_seed: 42
+    split:
+      strategy: time
+      time:
+        test_size: 0.2
+      random:
+        test_size: 0.2
+        stratify: true
+    calibration:
+      enabled: false
+      method: sigmoid
+      cv: 3
+    optimizer:
+      target_cm: 0.25
+      minimum_bid: 0.25
+      bid_step: 0.25
+      chunk_size: 500
+    promotion:
+      mode: automatic
+      criteria:
+        max_log_loss: 0.55
+        min_expected_profit: 0.0
+        min_profit_ratio: 0.95
+        max_absolute_profit_loss_tolerance: 500.0
+        max_log_loss_regression: 0.01
+        monotonicity:
+          enabled: true
+          tolerance: 1.0e-08
+          max_violation_rate: 0.0
+    output:
+      report_root: data/model_evaluations
+      model_root: data/models
+      comparison_artifacts: true
+      comparison_artifact_root: data/model_comparisons
+    mlflow:
+      tracking_db_path: data/mlflow.db
+      artifact_root: data/mlruns
+      experiment_name: anton_win_probability
       registered_model_name: anton-win-probability-model
+      production:
+        tracking_uri: ''
+        experiment_name: SmartHub Production
+        registered_model_name: anton-win-probability-model
+    storage:
+      production:
+        backend: ''
+        bucket: smarthub-models
+        prefix: models
+        endpoint_url: ''
+        region: ''
+        root: data/production_models
+  lead_types:
+    6:
+      name: auto
+      model_type: lightgbm
+      models:
+        lightgbm:
+          verbosity: -1
+          n_jobs: 1
+          subsample_freq: 1
+          n_estimators: 700
+          num_leaves: 50
+          max_depth: 8
+          learning_rate: 0.03756926249576086
+          min_child_samples: 36
+          subsample: 0.9878338511058234
+          colsample_bytree: 0.9100531293444458
+          reg_alpha: 3.7713131110779936
+          reg_lambda: 3.4131967734309536
+    1:
+      name: home
+      model_type: lightgbm
+      models:
+        lightgbm:
+          verbosity: -1
+          n_jobs: 1
+          subsample_freq: 1
+          n_estimators: 700
+          num_leaves: 50
+          max_depth: 8
+          learning_rate: 0.03756926249576086
+          min_child_samples: 36
+          subsample: 0.9878338511058234
+          colsample_bytree: 0.9100531293444458
+          reg_alpha: 3.7713131110779936
+          reg_lambda: 3.4131967734309536

@@ -189,7 +189,7 @@ def run_training(
     ValueError
         If the prepared data cannot support model training.
     """
-    training_config = config.load_training_config()
+    training_config = config.load_training_config(lead_type_id)
     lead_type_name = resolve_lead_type_name(lead_type_id)
     np.random.seed(training_config.random_seed)
 

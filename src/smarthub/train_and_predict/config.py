@@ -329,6 +329,45 @@ def _positive_int(value: Any, field_name: str) -> int:
     return result
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Return a recursive merge where override values take precedence."""
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def _lead_type_config(
+    root: dict[str, Any],
+    lead_type_id: int,
+    section: str,
+) -> dict[str, Any]:
+    """Resolve shared defaults plus one lead type's overrides."""
+    defaults = _mapping(root.get("defaults"), f"{section}.defaults")
+    lead_types = _mapping(root.get("lead_types"), f"{section}.lead_types")
+
+    lead_config = lead_types.get(lead_type_id)
+    if lead_config is None:
+        lead_config = lead_types.get(str(lead_type_id))
+    if lead_config is None:
+        raise ValueError(
+            f"No {section} configuration found for lead_type_id={lead_type_id}."
+        )
+
+    resolved = _deep_merge(
+        defaults,
+        _mapping(
+            lead_config,
+            f"{section}.lead_types.{lead_type_id}",
+        ),
+    )
+    resolved.pop("name", None)
+    return resolved
+
+
 def _resolve_production_storage(cfg: Any) -> dict[str, Any] | None:
     """Resolve the production model-storage spec, or None when disabled.
 
@@ -393,6 +432,7 @@ def _resolve_mlflow_production(cfg: Any) -> dict[str, str]:
 
 
 def load_training_config(
+    lead_type_id: int,
     config_path: str | Path | None = None,
 ) -> TrainingConfig:
     """Load and validate the complete training configuration.
@@ -425,7 +465,12 @@ def load_training_config(
     with resolved_path.open("r", encoding="utf-8") as config_file:
         root = _mapping(yaml.safe_load(config_file) or {}, "root")
 
-    training_root = _mapping(root.get("training"), "training")
+    training_namespace = _mapping(root.get("training"), "training")
+    training_root = _lead_type_config(
+        training_namespace,
+        lead_type_id,
+        "training",
+    )
     calibration_root = _mapping(
         training_root.get("calibration"),
         "training.calibration",
@@ -600,6 +645,7 @@ def load_training_config(
         )
 
     resolved_raw = copy.deepcopy(training_root)
+    resolved_raw["lead_type_id"] = int(lead_type_id)
     resolved_raw["models"] = {model_type: copy.deepcopy(models_root[model_type])}
     promotion_max_log_loss_regression = _non_negative_float(
         promotion_criteria.get("max_log_loss_regression"),
@@ -1028,6 +1074,7 @@ def _validate_search_parameter(
 
 
 def load_hyperparameter_search_config(
+    lead_type_id: int,
     config_path: str | Path | None = None,
 ) -> HyperparameterSearchConfig:
     """Load and validate manual hyperparameter-search configuration.
@@ -1062,14 +1109,24 @@ def load_hyperparameter_search_config(
     with resolved_path.open("r", encoding="utf-8") as config_file:
         root = _mapping(yaml.safe_load(config_file) or {}, "root")
 
-    search = _mapping(root.get("search"), "search")
-    output = _mapping(root.get("output"), "output")
-    models_root = _mapping(root.get("models"), "models")
-    validation = _mapping(root.get("validation"), "validation")
-    split_root = _mapping(root.get("split"), "split")
-    finalists = _mapping(root.get("finalists"), "finalists")
-    optimizer_cfg = _mapping(root.get("optimizer") or {}, "optimizer")
-    calibration_cfg = _mapping(root.get("calibration") or {}, "calibration")
+    hpo_namespace = _mapping(
+        root.get("hyperparameter_search"),
+        "hyperparameter_search",
+    )
+    hpo_root = _lead_type_config(
+        hpo_namespace,
+        lead_type_id,
+        "hyperparameter_search",
+    )
+    search = _mapping(hpo_root.get("search"), "search")
+    search["model_type"] = hpo_root.get("model_type")
+    output = _mapping(hpo_root.get("output"), "output")
+    models_root = _mapping(hpo_root.get("models"), "models")
+    validation = _mapping(hpo_root.get("validation"), "validation")
+    split_root = _mapping(hpo_root.get("split"), "split")
+    finalists = _mapping(hpo_root.get("finalists"), "finalists")
+    optimizer_cfg = _mapping(hpo_root.get("optimizer") or {}, "optimizer")
+    calibration_cfg = _mapping(hpo_root.get("calibration") or {}, "calibration")
     monotonicity_cfg = _mapping(
         finalists.get("monotonicity"),
         "finalists.monotonicity",
@@ -1329,7 +1386,8 @@ def load_hyperparameter_search_config(
     if not output_root:
         raise ValueError("output.root must not be empty.")
 
-    resolved_raw = copy.deepcopy(root)
+    resolved_raw = copy.deepcopy(hpo_root)
+    resolved_raw["lead_type_id"] = int(lead_type_id)
     resolved_raw["models"] = {
         selected_model_type: copy.deepcopy(root["models"][selected_model_type])
     }

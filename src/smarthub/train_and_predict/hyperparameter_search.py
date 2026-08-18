@@ -996,7 +996,10 @@ def run_hyperparameter_search(
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run SmartHub-aware hyperparameter search for one model family."""
-    search_config = config.load_hyperparameter_search_config(config_path)
+    search_config = config.load_hyperparameter_search_config(
+        lead_type_id,
+        config_path,
+    )
     _validate_probability_scoring(search_config.scoring)
     settings = _hpo_settings(search_config)
 
