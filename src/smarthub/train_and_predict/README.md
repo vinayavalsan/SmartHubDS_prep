@@ -27,17 +27,21 @@ src/smarthub/
 │   ├── train.py
 │   ├── flow.py
 │   ├── hyperparameter_search.py
+│   ├── feature_target_association.py
 │   ├── optimizer.py
 │   ├── optimizer_evaluation.py
 │   ├── registry.py
+│   ├── model_storage.py
 │   ├── mlflow_utils.py
-│   ├── plots_and_reports.py
+│   ├── training_artifacts.py
 │   ├── explain.py
-│   ├── prediction_log_schema.py
-│   └── manual_api_check.py
+│   ├── shap_explain.py
+│   ├── llm_explain.py
+│   └── prediction_log_schema.py
 │
 └── server/
-    └── predict.py
+    ├── predict.py
+    └── manual_api_check.py
 
 config/
 ├── training.yaml
@@ -121,10 +125,10 @@ Typical sections include:
 training:
   model_type: lightgbm
   random_seed: 42
-  drop_zero_variance: true
 
 calibration:
-  method: isotonic  # isotonic, sigmoid, or none
+  enabled: true
+  method: isotonic  # isotonic or sigmoid when enabled
   cv: 3
 
 split:
@@ -199,6 +203,31 @@ search:
   random_seed: 42
   n_jobs: 1
 
+validation:
+  strategy: time  # time or stratified_random
+
+finalists:
+  holdout_fraction: 0.20
+  probability_shortlist_top_n: 10
+  optimizer_top_n: 5
+  max_log_loss_regression: 0.02
+  monotonicity:
+    enabled: true
+    tolerance: 1.0e-8
+    max_violation_rate: 0.0
+
+calibration:
+  enabled: true
+  methods: [none, sigmoid, isotonic]
+  cv: 3
+
+optimizer:
+  enabled: true
+  target_cm: 0.25
+  minimum_bid: 0.25
+  bid_step: 0.25
+  chunk_size: 500
+
 models:
   lightgbm:
     fixed_parameters: {}
@@ -220,9 +249,13 @@ output:
 ### Main responsibilities
 
 - Select one model family to tune.
-- Define the cross-validation scoring metric.
-- Define fixed parameters and the Optuna search space.
-- Define trial count, CV folds, seed, timeout, and parallelism.
+- Define a probability-quality scoring metric (`neg_log_loss` or `neg_brier_score`).
+- Choose time-aware or stratified-random cross-validation.
+- Reserve a recent finalist holdout inside the HPO-eligible pool.
+- Define the wider probability shortlist and smaller optimizer shortlist.
+- Optionally compare calibration methods and run optimizer evaluation.
+- Apply the finalist bid-monotonicity guardrail when enabled.
+- Define fixed parameters, Optuna search space, trial count, seed, timeout, and parallelism.
 - Define where tuning results are written.
 
 The default scoring metric should remain:
@@ -298,7 +331,7 @@ Main responsibilities:
 - Load `TrainingConfig`.
 - Load and prepare the training table.
 - Split data into training and test sets.
-- Remove zero-variance features when enabled.
+- Diagnose feature coverage and zero-variance features without dropping them from the model schema.
 - Build and fit the selected model.
 - Evaluate the model.
 - Run offline optimizer evaluation.
@@ -333,7 +366,8 @@ It:
 - retains the target, expected revenue, and lineage fields,
 - sorts time-based training data,
 - validates that both target classes are present,
-- removes zero-variance columns when requested,
+- provides feature-coverage and zero-variance diagnostics,
+- retains zero-variance features in the model schema,
 - produces model-ready serving frames.
 
 ### `models.py`
@@ -412,7 +446,7 @@ It compares:
 
 Its summary is used for reports, MLflow, and promotion evaluation.
 
-### `plots_and_reports.py`
+### `training_artifacts.py`
 
 Writes training and optimizer reports, including:
 
@@ -554,6 +588,8 @@ challenger_expected_profit
 
 A challenger is eligible only if **all** configured promotion criteria pass. Missing challenger Log Loss, expected profit, or recommended CM causes failure. For an existing serving model, missing serving Log Loss or expected profit also causes failure, and serving expected profit must be greater than zero for the relative comparison.
 
+When `promotion.criteria.monotonicity.enabled` is true, the challenger must also pass the configured bid-response monotonicity limit before the normal promotion comparison is evaluated. The optimizer evaluation collects this diagnostic from the same candidate-bid scoring pass.
+
 ### Diagnostic metrics
 
 The following are logged and reported but do not independently determine promotion:
@@ -598,15 +634,22 @@ src/smarthub/train_and_predict/hyperparameter_search.py
 It:
 
 1. loads `config/hyperparameter_search.yaml`,
-2. loads and prepares the training table,
-3. removes zero-variance features,
-4. builds stratified cross-validation folds,
-5. asks Optuna to select candidate parameters,
-6. evaluates each trial using the configured scorer,
-7. writes a run summary,
-8. writes copy-paste-ready best parameters,
-9. copies the search YAML used for the run,
-10. writes interactive Optuna history, importance, and contour plots when visualization succeeds.
+2. loads and prepares the complete training table,
+3. calculates descriptive feature-to-target mutual information on the complete prepared dataset before any split,
+4. reserves the same final training test partition that `smarthub-train` will later use and keeps it completely untouched by HPO,
+5. splits the remaining HPO pool into development data and a recent finalist holdout,
+6. detects and reports zero-variance features from development data but keeps them in the model schema,
+7. builds either time-aware (`TimeSeriesSplit`) or stratified-random CV folds according to `validation.strategy`,
+8. records feature-coverage and time-range diagnostics for CV folds and the finalist holdout,
+9. runs Optuna on uncalibrated models using the configured probability scorer,
+10. evaluates calibration variants for the strongest probability candidates on the finalist holdout,
+11. applies a Log Loss guardrail to form the smaller optimizer shortlist,
+12. optionally evaluates bid-optimizer profit and bid monotonicity for that shortlist,
+13. selects the best eligible finalist,
+14. writes `summary.json`, `finalist_results.json`, copy-paste-ready `best_parameters.yaml`, and a copy of the search YAML,
+15. writes interactive Optuna history, importance, and contour plots when visualization succeeds.
+
+The feature-target mutual-information ranking is descriptive only. It is stored in the HPO summary and does not select/drop features or influence trial, calibration, optimizer, or promotion decisions.
 
 ### Shared scripts
 
@@ -615,8 +658,9 @@ The workflow reuses:
 - `config.py`
 - `preprocessing.py`
 - `models.py`
+- `optimizer_evaluation.py`
 
-This ensures the search evaluates the same feature preparation and model construction used by official training.
+It also uses `feature_target_association.py` for the pre-split mutual-information diagnostic. This keeps model construction and optimizer evaluation aligned with official training while keeping the association study separate from model selection.
 
 ## Output
 
@@ -628,6 +672,7 @@ data/hyperparameter_tuning/
     └── lightgbm/
         └── 20260723_143000/
             ├── summary.json
+            ├── finalist_results.json
             ├── best_parameters.yaml
             ├── hyperparameter_search.yaml
             └── plots/
@@ -636,7 +681,7 @@ data/hyperparameter_tuning/
                 └── contour_matrix.html
 ```
 
-`best_parameters.yaml` is a recommendation. Review it and copy the selected model block into `config/training.yaml` before starting the official training workflow.
+`best_parameters.yaml` is a recommendation. It contains the selected model parameters and calibration settings. Review them and copy the relevant values into `config/training.yaml` before starting the official training workflow. `summary.json` also retains the feature-target mutual-information ranking, zero-variance diagnostics, split/coverage diagnostics, and selected finalist metrics.
 
 ## Relationship to training
 
@@ -862,14 +907,18 @@ python -m smarthub.train_and_predict.registry promote \
 | `train_and_predict/metrics.py` | Training | Computes Log Loss, Brier, calibration, ranking, F1, and F2 metrics | None directly |
 | `train_and_predict/train.py` | Training | Runs the complete model-training and promotion workflow | `training.yaml` |
 | `train_and_predict/flow.py` | Training | Prefect orchestration, artifact, and notifications | `training.yaml` and operational notification config |
-| `train_and_predict/hyperparameter_search.py` | Search | Runs Optuna cross-validation and writes best parameters | `hyperparameter_search.yaml` |
+| `train_and_predict/hyperparameter_search.py` | Search | Runs Optuna CV, finalist calibration/optimizer evaluation, and writes recommended parameters | `hyperparameter_search.yaml` |
+| `train_and_predict/feature_target_association.py` | Search diagnostics | Computes pre-split feature-to-target mutual information | None directly |
 | `train_and_predict/optimizer.py` | Training, prediction | Generates candidate bids and selects maximum expected profit | Optimizer values from training or serving request/config |
 | `train_and_predict/optimizer_evaluation.py` | Training | Compares current and recommended bids on held-out rows | `training.yaml` |
-| `train_and_predict/registry.py` | Training, prediction | Saves versions, manages serving pointer, promotes, and rolls back | Promotion settings supplied by training |
-| `train_and_predict/mlflow_utils.py` | Training | Logs model, metrics, parameters, and reports | `training.yaml` |
-| `train_and_predict/plots_and_reports.py` | Training | Writes plots, CSVs, and JSON evaluation reports | Output paths from `training.yaml` |
+| `train_and_predict/registry.py` | Training, prediction | Saves candidates, manages serving pointers, promotes models, and publishes promoted artifacts | Promotion and storage settings supplied by training |
+| `train_and_predict/model_storage.py` | Training, prediction | Provides filesystem and S3-compatible model stores | `training.yaml` production storage settings |
+| `train_and_predict/mlflow_utils.py` | Training | Logs model, metrics, parameters, reports, and promoted-model lifecycle metadata | `training.yaml` and optional MLflow environment override |
+| `train_and_predict/training_artifacts.py` | Training | Writes training summaries, plots, evaluation JSON/CSV, and model-comparison artifacts | Output paths from `training.yaml` |
 | `train_and_predict/prediction_log_schema.py` | Prediction | Defines and writes the single-table prediction audit log | `SMARTHUB_PREDICTION_LOG_DB_URL` plus values supplied by serving |
-| `train_and_predict/explain.py` | Prediction support | Produces SHAP and optional Ollama explanations | `smarthub.yaml` explain settings |
+| `train_and_predict/explain.py` | Prediction support | Orchestrates on-demand bid explanations | `smarthub.yaml` explain settings |
+| `train_and_predict/shap_explain.py` | Prediction support | Computes LightGBM SHAP factor breakdowns | `smarthub.yaml` explain settings |
+| `train_and_predict/llm_explain.py` | Prediction support | Formats explanation facts with a local Ollama model | `smarthub.yaml` explain settings and Ollama environment overrides |
 | `server/manual_api_check.py` | Prediction support | Sends a sample request to the local API | URL and sample payload in the script |
 | `server/predict.py` | Prediction | Production FastAPI application and serving-policy entry point | `smarthub.yaml` |
 

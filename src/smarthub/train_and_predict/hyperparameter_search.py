@@ -24,7 +24,13 @@ from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, train_test
 
 from smarthub.core.logging_utils import get_logger
 
-from . import config, models, optimizer_evaluation, preprocessing
+from . import (
+    config,
+    feature_target_association,
+    models,
+    optimizer_evaluation,
+    preprocessing,
+)
 
 logger = get_logger(__name__)
 
@@ -287,6 +293,156 @@ def _iter_splits(cross_validation, X: pd.DataFrame, y: pd.Series) -> Iterable:
     if isinstance(cross_validation, StratifiedKFold):
         return cross_validation.split(X, y)
     return cross_validation.split(X)
+
+
+def _build_hpo_coverage_diagnostics(
+    development: pd.DataFrame,
+    holdout: pd.DataFrame,
+    numeric: list[str],
+    categorical: list[str],
+    cross_validation,
+) -> list[dict[str, Any]]:
+    """Build feature-coverage diagnostics once for all HPO evaluation boundaries."""
+    feature_cols = numeric + categorical
+    X = development[feature_cols]
+    y = development[config.TARGET_COL]
+    features = preprocessing.coverage_features(development, numeric, categorical)
+    diagnostics: list[dict[str, Any]] = []
+
+    for fold_number, (train_idx, valid_idx) in enumerate(
+        _iter_splits(cross_validation, X, y),
+        start=1,
+    ):
+        diagnostics.extend(
+            preprocessing.feature_coverage_rows(
+                development.iloc[train_idx],
+                development.iloc[valid_idx],
+                features,
+                partition=f"cv_fold_{fold_number}",
+            )
+        )
+
+    diagnostics.extend(
+        preprocessing.feature_coverage_rows(
+            development,
+            holdout,
+            features,
+            partition="finalist_holdout",
+        )
+    )
+    return diagnostics
+
+
+def _partition_time_range(
+    train_df: pd.DataFrame,
+    eval_df: pd.DataFrame,
+    partition: str,
+) -> dict[str, Any]:
+    """Return created-at ranges for one training/evaluation boundary."""
+    train_created = pd.to_datetime(train_df["created_at"], errors="coerce")
+    eval_created = pd.to_datetime(eval_df["created_at"], errors="coerce")
+
+    train_min = train_created.min()
+    train_max = train_created.max()
+    eval_min = eval_created.min()
+    eval_max = eval_created.max()
+
+    return {
+        "partition": partition,
+        "train_min_created_at": train_min.isoformat(),
+        "train_max_created_at": train_max.isoformat(),
+        "train_span_days": round(
+            float((train_max - train_min).total_seconds() / 86400.0),
+            2,
+        ),
+        "eval_min_created_at": eval_min.isoformat(),
+        "eval_max_created_at": eval_max.isoformat(),
+        "eval_span_days": round(
+            float((eval_max - eval_min).total_seconds() / 86400.0),
+            2,
+        ),
+    }
+
+
+def _build_hpo_time_range_diagnostics(
+    development: pd.DataFrame,
+    holdout: pd.DataFrame,
+    feature_cols: list[str],
+    cross_validation,
+) -> list[dict[str, Any]]:
+    """Build time ranges once for all HPO evaluation boundaries."""
+    X = development[feature_cols]
+    y = development[config.TARGET_COL]
+    diagnostics: list[dict[str, Any]] = []
+
+    for fold_number, (train_idx, valid_idx) in enumerate(
+        _iter_splits(cross_validation, X, y),
+        start=1,
+    ):
+        diagnostics.append(
+            _partition_time_range(
+                development.iloc[train_idx],
+                development.iloc[valid_idx],
+                partition=f"cv_fold_{fold_number}",
+            )
+        )
+
+    diagnostics.append(
+        _partition_time_range(
+            development,
+            holdout,
+            partition="finalist_holdout",
+        )
+    )
+    return diagnostics
+
+
+def _log_hpo_time_range_diagnostics(
+    diagnostics: list[dict[str, Any]],
+) -> None:
+    """Log train/evaluation date ranges for each HPO boundary."""
+    logger.info("Cross-Validation Time Ranges")
+    if not diagnostics:
+        logger.info("  No time-range diagnostics available.")
+        return
+
+    table = pd.DataFrame(diagnostics)
+    logger.info("\n%s", table.to_string(index=False))
+
+
+def _log_hpo_coverage_diagnostics(diagnostics: list[dict[str, Any]]) -> None:
+    """Log compact feature-coverage diagnostics without affecting HPO."""
+    if not diagnostics:
+        logger.info("Feature Coverage Diagnostics: no categorical/binary features.")
+        return
+
+    table = pd.DataFrame(diagnostics)
+    report = table[
+        (table["train_unique"] != table["eval_unique"])
+        | (table["unseen_eval_unique"] > 0)
+    ].copy()
+
+    logger.info("Feature Coverage Diagnostics")
+    if report.empty:
+        logger.info("  No train/evaluation coverage differences detected.")
+        return
+
+    report["eval_pct_unseen"] = report["eval_pct_unseen"].round(2)
+    logger.info(
+        "\n%s",
+        report[
+            [
+                "partition",
+                "feature",
+                "train_unique",
+                "eval_unique",
+                "unseen_eval_unique",
+                "eval_rows_unseen",
+                "eval_pct_unseen",
+                "min_train_support_for_eval_values",
+            ]
+        ].to_string(index=False),
+    )
 
 
 def _score_trial_folds(
@@ -732,6 +888,9 @@ def _write_outputs(
     holdout_rows: int,
     final_training_test_rows: int,
     zero_variance_features: list[str],
+    feature_target_diagnostics: list[dict[str, Any]],
+    feature_coverage_diagnostics: list[dict[str, Any]],
+    time_range_diagnostics: list[dict[str, Any]],
     settings: dict[str, Any],
 ) -> tuple[Path, Path, Path, dict[str, Path]]:
     """Write tuning summary, finalist details, YAML, and Optuna plots."""
@@ -751,6 +910,9 @@ def _write_outputs(
         "finalist_holdout_rows": holdout_rows,
         "final_training_test_rows": final_training_test_rows,
         "zero_variance_features": list(zero_variance_features),
+        "feature_target_association": feature_target_diagnostics,
+        "feature_coverage_diagnostics": feature_coverage_diagnostics,
+        "time_range_diagnostics": time_range_diagnostics,
         "scoring": search_config.scoring,
         "n_trials": len(study.trials),
         "cv_folds": search_config.cv_folds,
@@ -847,6 +1009,20 @@ def run_hyperparameter_search(
     )
     preprocessing.assert_trainable(frame, lead_type_name)
 
+    feature_target_diagnostics = (
+        feature_target_association.build_feature_target_association(
+            frame=frame,
+            numeric_features=numeric,
+            categorical_features=categorical,
+            target_column=config.TARGET_COL,
+            random_seed=search_config.random_seed,
+        )
+    )
+    feature_target_association.log_feature_target_association(
+        feature_target_diagnostics,
+        logger,
+    )
+
     if settings["optimizer_enabled"] and config.REVENUE_COL not in frame.columns:
         raise ValueError(
             "Enabled SmartHub optimizer evaluation requires expected revenue "
@@ -903,6 +1079,21 @@ def run_hyperparameter_search(
         n_splits=search_config.cv_folds,
         random_seed=search_config.random_seed,
     )
+    feature_coverage_diagnostics = _build_hpo_coverage_diagnostics(
+        development=development,
+        holdout=holdout,
+        numeric=numeric,
+        categorical=categorical,
+        cross_validation=cross_validation,
+    )
+    _log_hpo_coverage_diagnostics(feature_coverage_diagnostics)
+    time_range_diagnostics = _build_hpo_time_range_diagnostics(
+        development=development,
+        holdout=holdout,
+        feature_cols=feature_cols,
+        cross_validation=cross_validation,
+    )
+    _log_hpo_time_range_diagnostics(time_range_diagnostics)
 
     fixed_parameters = {
         **model_config["fixed_parameters"],
@@ -1055,6 +1246,9 @@ def run_hyperparameter_search(
         holdout_rows=len(holdout),
         final_training_test_rows=len(final_training_test),
         zero_variance_features=zero_variance_features,
+        feature_target_diagnostics=feature_target_diagnostics,
+        feature_coverage_diagnostics=feature_coverage_diagnostics,
+        time_range_diagnostics=time_range_diagnostics,
         settings=settings,
     )
 
@@ -1096,6 +1290,9 @@ def run_hyperparameter_search(
         "finalist_holdout_rows": int(len(holdout)),
         "final_training_test_rows": int(len(final_training_test)),
         "zero_variance_features": list(zero_variance_features),
+        "feature_target_association": feature_target_diagnostics,
+        "feature_coverage_diagnostics": feature_coverage_diagnostics,
+        "time_range_diagnostics": time_range_diagnostics,
         "summary_path": str(summary_path),
         "parameters_path": str(parameters_path),
         "finalist_results_path": str(finalist_path),

@@ -18,8 +18,12 @@ from prefect.artifacts import create_markdown_artifact
 from smarthub.core import notifications, storage
 from smarthub.core.lead_types import lead_type_name as registered_lead_type_name
 
-from . import build
-from .build import _DAY_DEFS, _pct, run_build_features
+# Absolute (not `from . import ...`): Prefect loads this entrypoint as a bare
+# top-level module named ``flow``, so relative imports would pull this package in
+# under a ``flow.*`` namespace (see train_and_predict/flow.py for the failure
+# mode this prevents). Import by canonical path instead.
+from smarthub.feature_engineering import build
+from smarthub.feature_engineering.build import _DAY_DEFS, _pct, run_build_features
 
 
 @task(name="build-training-table")

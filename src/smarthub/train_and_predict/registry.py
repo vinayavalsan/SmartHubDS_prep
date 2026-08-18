@@ -323,7 +323,18 @@ def load_currently_serving_model(lead_type_name: str):
         return None, None
     import joblib
 
-    return joblib.load(model_file), manifest
+    try:
+        return joblib.load(model_file), manifest
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Currently-serving model %s for %r failed to load; " "skipping comparison.",
+            version,
+            lead_type_name,
+            exc_info=True,
+        )
+        return None, None
 
 
 def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
