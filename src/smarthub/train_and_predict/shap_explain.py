@@ -312,6 +312,18 @@ def explain_prepared_row(
     frame = pd.DataFrame([{col: row.get(col) for col in feature_cols}])
     for col in numeric:
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    # Categoricals must match the dtype the model's OrdinalEncoder was fit on:
+    # transform_model_features stores them as strings (missing -> MISSING_CATEGORY).
+    # A row reloaded from the prediction log may carry a categorical as a JSON
+    # number (int); leaving it as int makes sklearn's unknown-category check
+    # compare int vs the encoder's str categories -> "'<' not supported between
+    # instances of 'int' and 'str'". Normalize to string here.
+    from smarthub.feature_engineering.feature_registry import MISSING_CATEGORY
+
+    for col in categorical:
+        frame[col] = frame[col].map(
+            lambda v: MISSING_CATEGORY if pd.isna(v) else str(v)
+        )
     frame = frame[feature_cols]
     shap_values, base_value, predicted = _shap_for_row(model, frame, feature_cols)
     return {
