@@ -425,28 +425,34 @@ def load_training_config(
     with resolved_path.open("r", encoding="utf-8") as config_file:
         root = _mapping(yaml.safe_load(config_file) or {}, "root")
 
-    training = _mapping(root.get("training"), "training")
-    calibration_root = _mapping(root.get("calibration"), "calibration")
-    split_root = _mapping(root.get("split"), "split")
-    models_root = _mapping(root.get("models"), "models")
-    optimizer_root = _mapping(root.get("optimizer"), "optimizer")
-    promotion = _mapping(root.get("promotion"), "promotion")
+    training_root = _mapping(root.get("training"), "training")
+    calibration_root = _mapping(
+        training_root.get("calibration"),
+        "training.calibration",
+    )
+    split_root = _mapping(training_root.get("split"), "training.split")
+    models_root = _mapping(training_root.get("models"), "training.models")
+    optimizer_root = _mapping(
+        training_root.get("optimizer"),
+        "training.optimizer",
+    )
+    promotion = _mapping(training_root.get("promotion"), "training.promotion")
     promotion_criteria = _mapping(
         promotion.get("criteria"),
-        "promotion.criteria",
+        "training.promotion.criteria",
     )
     promotion_monotonicity_root = promotion_criteria.get("monotonicity") or {}
     promotion_monotonicity_root = _mapping(
         promotion_monotonicity_root,
-        "promotion.criteria.monotonicity",
+        "training.promotion.criteria.monotonicity",
     )
-    output = _mapping(root.get("output"), "output")
-    mlflow = _mapping(root.get("mlflow"), "mlflow")
-    storage_root = root.get("storage") or {}
+    output = _mapping(training_root.get("output"), "training.output")
+    mlflow = _mapping(training_root.get("mlflow"), "training.mlflow")
+    storage_root = training_root.get("storage") or {}
     production_storage = _resolve_production_storage(storage_root.get("production"))
     mlflow_production = _resolve_mlflow_production(mlflow.get("production"))
 
-    model_type = str(training.get("model_type", "")).strip().lower()
+    model_type = str(training_root.get("model_type", "")).strip().lower()
     if model_type not in _SUPPORTED_MODELS:
         choices = ", ".join(sorted(_SUPPORTED_MODELS))
         raise ValueError(f"Unsupported training.model_type {model_type!r}: {choices}")
@@ -457,50 +463,50 @@ def load_training_config(
     strategy = str(split_root.get("strategy", "")).strip().lower()
     if strategy not in _SUPPORTED_SPLIT_STRATEGIES:
         choices = ", ".join(sorted(_SUPPORTED_SPLIT_STRATEGIES))
-        raise ValueError(f"Unsupported split.strategy {strategy!r}: {choices}")
+        raise ValueError(f"Unsupported training.split.strategy {strategy!r}: {choices}")
 
     selected_split = copy.deepcopy(
-        _mapping(split_root.get(strategy), f"split.{strategy}")
+        _mapping(split_root.get(strategy), f"training.split.{strategy}")
     )
     selected_split["strategy"] = strategy
     selected_split["test_size"] = _fraction(
         selected_split.get("test_size"),
-        f"split.{strategy}.test_size",
+        f"training.split.{strategy}.test_size",
     )
 
     if strategy == "random":
         if "stratify" not in selected_split:
-            raise ValueError("Missing required config: split.random.stratify")
+            raise ValueError("Missing required config: training.split.random.stratify")
         if not isinstance(selected_split["stratify"], bool):
-            raise TypeError("split.random.stratify must be a YAML boolean.")
+            raise TypeError("training.split.random.stratify must be a YAML boolean.")
 
-    random_seed = int(training["random_seed"])
+    random_seed = int(training_root["random_seed"])
     if "enabled" not in calibration_root:
-        raise ValueError("Missing required config: calibration.enabled")
+        raise ValueError("Missing required config: training.calibration.enabled")
     calibration_enabled = calibration_root["enabled"]
     if not isinstance(calibration_enabled, bool):
-        raise TypeError("calibration.enabled must be a YAML boolean.")
+        raise TypeError("training.calibration.enabled must be a YAML boolean.")
 
     if calibration_enabled:
         if "method" not in calibration_root:
             raise ValueError(
-                "Missing required config: calibration.method "
-                "when calibration.enabled is true."
+                "Missing required config: training.calibration.method "
+                "when training.calibration.enabled is true."
             )
         if "cv" not in calibration_root:
             raise ValueError(
-                "Missing required config: calibration.cv "
-                "when calibration.enabled is true."
+                "Missing required config: training.calibration.cv "
+                "when training.calibration.enabled is true."
             )
 
         calibration_method = str(calibration_root["method"]).strip().lower()
         if calibration_method not in {"sigmoid", "isotonic"}:
             raise ValueError(
-                "calibration.method must be one of 'sigmoid' or 'isotonic'."
+                "training.calibration.method must be one of 'sigmoid' or 'isotonic'."
             )
         calibration_cv = _positive_int(
             calibration_root["cv"],
-            "calibration.cv",
+            "training.calibration.cv",
         )
     else:
         calibration_method = None
@@ -508,7 +514,7 @@ def load_training_config(
     model_parameters = copy.deepcopy(
         _mapping(
             models_root[model_type],
-            f"models.{model_type}",
+            f"training.models.{model_type}",
         )
     )
     model_parameters["random_state"] = random_seed
@@ -516,24 +522,24 @@ def load_training_config(
     optimizer = OptimizerConfig(
         target_cm=_fraction(
             optimizer_root.get("target_cm"),
-            "optimizer.target_cm",
+            "training.optimizer.target_cm",
         ),
         minimum_bid=_positive_float(
             optimizer_root.get("minimum_bid"),
-            "optimizer.minimum_bid",
+            "training.optimizer.minimum_bid",
         ),
         bid_step=_positive_float(
             optimizer_root.get("bid_step"),
-            "optimizer.bid_step",
+            "training.optimizer.bid_step",
         ),
         chunk_size=_positive_int(
             get_with_logged_fallback(
                 optimizer_root,
                 "chunk_size",
                 _DEFAULT_OPTIMIZER_CHUNK_SIZE,
-                "optimizer.chunk_size",
+                "training.optimizer.chunk_size",
             ),
-            "optimizer.chunk_size",
+            "training.optimizer.chunk_size",
         ),
     )
 
@@ -541,11 +547,11 @@ def load_training_config(
         promotion_monotonicity_root,
         "enabled",
         _DEFAULT_PROMOTION_MONOTONICITY_ENABLED,
-        "promotion.criteria.monotonicity.enabled",
+        "training.promotion.criteria.monotonicity.enabled",
     )
     if not isinstance(promotion_monotonicity_enabled, bool):
         raise TypeError(
-            "promotion.criteria.monotonicity.enabled must be a YAML boolean."
+            "training.promotion.criteria.monotonicity.enabled must be a YAML boolean."
         )
 
     promotion_monotonicity_tolerance = _non_negative_float(
@@ -553,22 +559,22 @@ def load_training_config(
             promotion_monotonicity_root,
             "tolerance",
             _DEFAULT_MONOTONICITY_TOLERANCE,
-            "promotion.criteria.monotonicity.tolerance",
+            "training.promotion.criteria.monotonicity.tolerance",
         ),
-        "promotion.criteria.monotonicity.tolerance",
+        "training.promotion.criteria.monotonicity.tolerance",
     )
     promotion_monotonicity_max_violation_rate = _non_negative_float(
         get_with_logged_fallback(
             promotion_monotonicity_root,
             "max_violation_rate",
             _DEFAULT_MONOTONICITY_MAX_VIOLATION_RATE,
-            "promotion.criteria.monotonicity.max_violation_rate",
+            "training.promotion.criteria.monotonicity.max_violation_rate",
         ),
-        "promotion.criteria.monotonicity.max_violation_rate",
+        "training.promotion.criteria.monotonicity.max_violation_rate",
     )
     if promotion_monotonicity_max_violation_rate > 1.0:
         raise ValueError(
-            "promotion.criteria.monotonicity.max_violation_rate "
+            "training.promotion.criteria.monotonicity.max_violation_rate "
             "must be between 0 and 1."
         )
 
@@ -579,52 +585,56 @@ def load_training_config(
     )
 
     if "comparison_artifacts" not in output:
-        raise ValueError("Missing required config: output.comparison_artifacts")
+        raise ValueError(
+            "Missing required config: training.output.comparison_artifacts"
+        )
     comparison_artifacts = output["comparison_artifacts"]
     if not isinstance(comparison_artifacts, bool):
-        raise TypeError("output.comparison_artifacts must be a YAML boolean.")
+        raise TypeError("training.output.comparison_artifacts must be a YAML boolean.")
 
     promotion_mode = str(promotion.get("mode", "")).strip().lower()
     if promotion_mode not in _SUPPORTED_PROMOTION_MODES:
         choices = ", ".join(sorted(_SUPPORTED_PROMOTION_MODES))
-        raise ValueError(f"Unsupported promotion.mode {promotion_mode!r}: {choices}")
+        raise ValueError(
+            f"Unsupported training.promotion.mode {promotion_mode!r}: {choices}"
+        )
 
-    resolved_raw = copy.deepcopy(root)
+    resolved_raw = copy.deepcopy(training_root)
     resolved_raw["models"] = {model_type: copy.deepcopy(models_root[model_type])}
     promotion_max_log_loss_regression = _non_negative_float(
         promotion_criteria.get("max_log_loss_regression"),
-        "promotion.criteria.max_log_loss_regression",
+        "training.promotion.criteria.max_log_loss_regression",
     )
     promotion_min_profit_ratio = _positive_float(
         promotion_criteria.get("min_profit_ratio"),
-        "promotion.criteria.min_profit_ratio",
+        "training.promotion.criteria.min_profit_ratio",
     )
     promotion_max_log_loss = _positive_float(
         get_with_logged_fallback(
             promotion_criteria,
             "max_log_loss",
             _DEFAULT_PROMOTION_MAX_LOG_LOSS,
-            "promotion.criteria.max_log_loss",
+            "training.promotion.criteria.max_log_loss",
         ),
-        "promotion.criteria.max_log_loss",
+        "training.promotion.criteria.max_log_loss",
     )
     promotion_min_expected_profit = _non_negative_float(
         get_with_logged_fallback(
             promotion_criteria,
             "min_expected_profit",
             _DEFAULT_PROMOTION_MIN_EXPECTED_PROFIT,
-            "promotion.criteria.min_expected_profit",
+            "training.promotion.criteria.min_expected_profit",
         ),
-        "promotion.criteria.min_expected_profit",
+        "training.promotion.criteria.min_expected_profit",
     )
     promotion_max_absolute_profit_loss_tolerance = _non_negative_float(
         get_with_logged_fallback(
             promotion_criteria,
             "max_absolute_profit_loss_tolerance",
             _DEFAULT_PROMOTION_MAX_ABSOLUTE_PROFIT_LOSS_TOLERANCE,
-            "promotion.criteria.max_absolute_profit_loss_tolerance",
+            "training.promotion.criteria.max_absolute_profit_loss_tolerance",
         ),
-        "promotion.criteria.max_absolute_profit_loss_tolerance",
+        "training.promotion.criteria.max_absolute_profit_loss_tolerance",
     )
     resolved_raw["resolved"] = {
         "config_path": str(resolved_path),
@@ -1083,7 +1093,9 @@ def load_hyperparameter_search_config(
     split_strategy = str(split_root.get("strategy", "")).strip().lower()
     if split_strategy not in _SUPPORTED_SPLIT_STRATEGIES:
         choices = ", ".join(sorted(_SUPPORTED_SPLIT_STRATEGIES))
-        raise ValueError(f"Unsupported split.strategy {split_strategy!r}: {choices}")
+        raise ValueError(
+            f"Unsupported training.split.strategy {split_strategy!r}: {choices}"
+        )
 
     selected_split = copy.deepcopy(
         _mapping(split_root.get(split_strategy), f"split.{split_strategy}")
@@ -1095,9 +1107,9 @@ def load_hyperparameter_search_config(
     )
     if split_strategy == "random":
         if "stratify" not in selected_split:
-            raise ValueError("Missing required config: split.random.stratify")
+            raise ValueError("Missing required config: training.split.random.stratify")
         if not isinstance(selected_split["stratify"], bool):
-            raise TypeError("split.random.stratify must be a YAML boolean.")
+            raise TypeError("training.split.random.stratify must be a YAML boolean.")
 
     holdout_fraction = float(
         get_with_logged_fallback(
@@ -1168,9 +1180,9 @@ def load_hyperparameter_search_config(
                 calibration_cfg,
                 "cv",
                 _DEFAULT_HPO_CALIBRATION_CV,
-                "calibration.cv",
+                "training.calibration.cv",
             ),
-            "calibration.cv",
+            "training.calibration.cv",
         )
         if calibration_cv < 2:
             raise ValueError("calibration.cv must be at least 2.")
@@ -1206,9 +1218,9 @@ def load_hyperparameter_search_config(
                 optimizer_cfg,
                 "chunk_size",
                 _DEFAULT_OPTIMIZER_CHUNK_SIZE,
-                "optimizer.chunk_size",
+                "training.optimizer.chunk_size",
             ),
-            "optimizer.chunk_size",
+            "training.optimizer.chunk_size",
         )
         if not 0.0 <= target_cm < 1.0:
             raise ValueError("optimizer.target_cm must be in [0, 1).")
