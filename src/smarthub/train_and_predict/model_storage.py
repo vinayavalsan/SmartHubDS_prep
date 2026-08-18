@@ -44,6 +44,16 @@ class ModelStore(ABC):
         """Return all keys under ``prefix`` (keys are relative to the store)."""
 
     @abstractmethod
+    def claim(self, key: str) -> bool:
+        """Atomically create an empty marker at ``key`` iff it does not exist.
+
+        Returns ``True`` when this call created it, ``False`` when it already
+        existed. Must be atomic against concurrent callers — used to reserve a
+        production version number so two simultaneous promotions can never be
+        assigned the same ``_vN``.
+        """
+
+    @abstractmethod
     def local_path(self, key: str) -> Path:
         """Return a local filesystem path for ``key`` suitable for
         ``joblib.load`` — the file itself for a filesystem store, or a
@@ -106,6 +116,17 @@ class FilesystemModelStore(ModelStore):
             raise FileNotFoundError(f"No object at key {key!r} under {self.root}.")
         return path
 
+    def claim(self, key: str) -> bool:
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            # "x" = exclusive create; atomic on POSIX — only one caller wins.
+            with open(path, "x"):
+                pass
+            return True
+        except FileExistsError:
+            return False
+
 
 class S3ModelStore(ModelStore):
     """Model store backed by S3 or any S3-compatible endpoint (via boto3).
@@ -151,8 +172,16 @@ class S3ModelStore(ModelStore):
         try:
             self._client.head_object(Bucket=self.bucket, Key=self._full_key(key))
             return True
-        except ClientError:
-            return False
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            # Only a genuine "not found" means absent. Any other error (auth,
+            # throttling, 5xx, network) is a real failure and must surface --
+            # never masked as "doesn't exist", which would let serving silently
+            # fall back to a stale local copy.
+            if code in ("404", "NoSuchKey", "NotFound") or status == 404:
+                return False
+            raise
 
     def list(self, prefix: str = "") -> list[str]:
         paginator = self._client.get_paginator("list_objects_v2")
@@ -166,6 +195,27 @@ class S3ModelStore(ModelStore):
                     name = name[len(strip) :]
                 keys.append(name)
         return sorted(keys)
+
+    def claim(self, key: str) -> bool:
+        from botocore.exceptions import ClientError
+
+        try:
+            # IfNoneMatch="*" -> the put succeeds only if the object does not
+            # already exist; S3 returns 412 PreconditionFailed otherwise. This
+            # is an atomic compare-and-create, safe under concurrent promotions.
+            self._client.put_object(
+                Bucket=self.bucket,
+                Key=self._full_key(key),
+                Body=b"",
+                IfNoneMatch="*",
+            )
+            return True
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in ("PreconditionFailed", "412") or status == 412:
+                return False
+            raise
 
     def local_path(self, key: str) -> Path:
         import tempfile
