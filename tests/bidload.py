@@ -210,15 +210,15 @@ def cmd_analyze(args) -> None:
     print("\n==================== LATENCY (ms) ====================")
     if lat:
         print(
-            f"n={len(lat)}  min={min(lat):.0f}  p50={_pct(lat,50):.0f}  "
-            f"p90={_pct(lat,90):.0f}  p95={_pct(lat,95):.0f}  "
-            f"p99={_pct(lat,99):.0f}  max={max(lat):.0f}  "
+            f"n={len(lat)}  min={min(lat):.0f}  p50={_pct(lat, 50):.0f}  "
+            f"p90={_pct(lat, 90):.0f}  p95={_pct(lat, 95):.0f}  "
+            f"p99={_pct(lat, 99):.0f}  max={max(lat):.0f}  "
             f"mean={statistics.mean(lat):.0f}"
         )
         within1s = sum(1 for x in lat if x <= 1000) / len(lat) * 100
         print(
             f"within 1s:   {within1s:.1f}%   "
-            f"SLO(p99<=1s): {'PASS' if _pct(lat,99) <= 1000 and not bad else 'FAIL'}"
+            f"SLO(p99<=1s): {'PASS' if _pct(lat, 99) <= 1000 and not bad else 'FAIL'}"
         )
     else:
         print("no successful requests to measure")
@@ -243,8 +243,8 @@ def cmd_analyze(args) -> None:
             if nums and len(nums) == len(vals):
                 print(
                     f"[num] {key:42s} "
-                    f"min={min(nums):.4g} p50={_pct(nums,50):.4g} "
-                    f"p95={_pct(nums,95):.4g} max={max(nums):.4g} "
+                    f"min={min(nums):.4g} p50={_pct(nums, 50):.4g} "
+                    f"p95={_pct(nums, 95):.4g} max={max(nums):.4g} "
                     f"mean={statistics.mean(nums):.4g}"
                 )
             else:
@@ -275,8 +275,8 @@ def cmd_analyze(args) -> None:
             ]
             if nums and len(nums) == len(vals):
                 print(
-                    f"{key:38s} p50={_pct(nums,50):.4g}  "
-                    f"p95={_pct(nums,95):.4g}  mean={statistics.mean(nums):.4g}"
+                    f"{key:38s} p50={_pct(nums, 50):.4g}  "
+                    f"p95={_pct(nums, 95):.4g}  mean={statistics.mean(nums):.4g}"
                 )
             else:
                 top = Counter(str(v) for v in vals).most_common(5)
