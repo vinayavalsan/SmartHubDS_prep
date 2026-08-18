@@ -23,6 +23,13 @@ logger = get_logger(__name__)
 MODEL_DIR_ROOT = paths.data_dir() / "models"
 _PRODUCTION_VERSION_RE = re.compile(r"^(?P<lead>[a-z0-9_]+)_v(?P<number>\d+)$")
 
+
+class RegistryError(RuntimeError):
+    """Raised when a promotion/registry invariant cannot be satisfied — e.g.
+    production storage is configured but unavailable, or a production version
+    cannot be assigned."""
+
+
 # --- production storage (promoted models) ------------------------------------
 # Local training always writes to the filesystem under MODEL_DIR_ROOT. When
 # production storage is configured, `promote()` also publishes the promoted
@@ -33,26 +40,49 @@ _PRODUCTION_STORE = None
 _PRODUCTION_STORE_RESOLVED = False
 
 
-def _production_store():
-    """Lazily build (and cache) the production model store from config.
+def _local_store():
+    """Filesystem store rooted at the local model dir (always available)."""
+    from smarthub.train_and_predict.model_storage import FilesystemModelStore
 
-    Returns None when production storage is disabled, so every production step
-    degrades to a no-op.
+    return FilesystemModelStore(str(MODEL_DIR_ROOT))
+
+
+def _production_store():
+    """Return the production model store, or None when production is disabled.
+
+    Distinguishes two cases that used to be conflated:
+
+    * **Disabled** (no backend configured) -> returns ``None``. Local-only dev;
+      falling back to local storage is legitimate.
+    * **Configured but unbuildable** (e.g. bad creds / unreachable endpoint) ->
+      **raises** :class:`RegistryError`. Once production storage is the source
+      of truth, a broken store must be visible, never silently downgraded to a
+      possibly-stale local artifact.
+
+    The result is cached only on success (or when disabled); a failure is not
+    cached so a transient issue can recover on the next call.
     """
     global _PRODUCTION_STORE, _PRODUCTION_STORE_RESOLVED
-    if not _PRODUCTION_STORE_RESOLVED:
-        _PRODUCTION_STORE_RESOLVED = True
-        try:
-            from . import config
+    if _PRODUCTION_STORE_RESOLVED:
+        return _PRODUCTION_STORE
 
-            _PRODUCTION_STORE = config.load_training_config().production_model_store()
-        except Exception:  # noqa: BLE001 -- never let prod config break local use
-            logger.warning(
-                "Could not initialise production model store; using local only.",
-                exc_info=True,
-            )
-            _PRODUCTION_STORE = None
-    return _PRODUCTION_STORE
+    from . import config
+
+    cfg = config.load_training_config()
+    if cfg.production_storage is None:
+        _PRODUCTION_STORE = None
+        _PRODUCTION_STORE_RESOLVED = True
+        return None
+    try:
+        store = cfg.production_model_store()
+    except Exception as exc:  # noqa: BLE001
+        raise RegistryError(
+            "Production storage is configured but could not be initialised; "
+            "refusing to silently fall back to local storage."
+        ) from exc
+    _PRODUCTION_STORE = store
+    _PRODUCTION_STORE_RESOLVED = True
+    return store
 
 
 def reset_production_store_cache() -> None:
@@ -153,12 +183,66 @@ def _production_version_number(version: str) -> int:
     return int(match.group("number")) if match else 0
 
 
+def _assigned_version_numbers(lead_type_name: str) -> set[int]:
+    """Every production version number already assigned, gathered from BOTH the
+    local manifests and (when configured) production storage — so a version
+    assigned on another box or a prior promotion can never be reused."""
+    numbers: set[int] = set()
+    folder = model_dir(lead_type_name)
+    if folder.exists():
+        for path in folder.glob("run_*.json"):
+            try:
+                value = json.loads(path.read_text()).get("production_model_version")
+            except (OSError, json.JSONDecodeError):
+                continue
+            if value:
+                numbers.add(_production_version_number(value))
+
+    store = _production_store()  # raises if configured-but-broken (visible)
+    if store is not None:
+        lead = lead_type_name.strip().lower()
+        # Reserved version markers (authoritative from this change onward).
+        for key in store.list(f"{lead}/versions/"):
+            match = _PRODUCTION_VERSION_RE.match(Path(key).stem)
+            if match:
+                numbers.add(int(match.group("number")))
+        # Promoted manifests that predate the marker scheme.
+        for key in store.list(f"{lead}/"):
+            name = Path(key).name
+            if name.startswith("run_") and name.endswith(".json"):
+                try:
+                    value = json.loads(store.read_text(key)).get(
+                        "production_model_version"
+                    )
+                except json.JSONDecodeError:
+                    continue
+                if value:
+                    numbers.add(_production_version_number(value))
+
+    numbers.discard(0)
+    return numbers
+
+
 def _next_production_model_version(lead_type_name: str) -> str:
-    existing = [
-        _production_version_number(v) for v in list_production_versions(lead_type_name)
-    ]
-    number = max(existing, default=0) + 1
-    return f"{_lead_type_slug(lead_type_name)}_v{number}"
+    """Reserve and return the next free ``<lead>_vN`` via an **atomic claim**.
+
+    Starts from ``max(assigned) + 1`` and creates a marker with a create-if-
+    absent op; on conflict (another promotion grabbed it, or it predates the
+    marker scheme) it bumps and retries. This guarantees two concurrent
+    promotions can never be assigned the same production version.
+    """
+    lead_slug = _lead_type_slug(lead_type_name)
+    lead_path = lead_type_name.strip().lower()
+    store = _production_store() or _local_store()
+    number = max(_assigned_version_numbers(lead_type_name), default=0) + 1
+    for _ in range(10_000):
+        candidate = f"{lead_slug}_v{number}"
+        if store.claim(f"{lead_path}/versions/{candidate}.json"):
+            return candidate
+        number += 1
+    raise RegistryError(
+        f"Could not assign a production version for '{lead_type_name}'."
+    )
 
 
 def save_version(
@@ -250,9 +334,11 @@ def _read_serving_pointer(lead_type_name: str) -> dict | None:
     truth for what serves; otherwise the local pointer is used. So the same
     serving-read helpers work in both local-only and production deployments.
     """
-    prod = production_serving_pointer(lead_type_name)
-    if prod is not None:
-        return prod
+    # When production storage is configured it is the source of truth: use its
+    # pointer (or None = cold start). Do NOT fall back to a possibly-stale local
+    # pointer. Only local-only deployments read the local pointer.
+    if _production_store() is not None:  # raises if configured-but-broken
+        return production_serving_pointer(lead_type_name)
     path = _serving_pointer_path(lead_type_name)
     if not path.exists():
         return None
@@ -266,18 +352,16 @@ def serving_model_path(lead_type_name: str, version: str) -> Path | None:
     cache path (usable by ``joblib.load``). Falls back to the local artifact,
     or None when neither exists.
     """
-    store = _production_store()
+    store = _production_store()  # raises if configured-but-broken (visible)
     if store is not None:
         key = f"{lead_type_name.strip().lower()}/{version}.pkl"
-        try:
-            if store.exists(key):
-                return store.local_path(key)
-        except Exception:  # noqa: BLE001 -- fall back to local on any error
-            logger.warning(
-                "Could not fetch %s from production storage.",
-                version,
-                exc_info=True,
-            )
+        # Let production errors (download/head failures) propagate — never mask
+        # them by serving a possibly-stale local copy.
+        if store.exists(key):
+            return store.local_path(key)
+        # Production is authoritative: if the promoted artifact isn't there, do
+        # not serve a local copy.
+        return None
     local = version_path(lead_type_name, version)
     return local if local.exists() else None
 
@@ -358,25 +442,14 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
     if not production_version:
         production_version = _next_production_model_version(lead_type_name)
 
-    manifest.update(
-        {
-            "production_model_version": production_version,
-            "promotion_status": "promoted",
-            "promoted": True,
-            "promoted_at": promoted_at,
-            "promotion_reason": reason,
-        }
-    )
-    update_manifest(
-        lead_type_name,
-        version,
-        production_model_version=production_version,
-        promotion_status="promoted",
-        promoted=True,
-        promoted_at=promoted_at,
-        promotion_reason=reason,
-    )
-
+    promoted_fields = {
+        "production_model_version": production_version,
+        "promotion_status": "promoted",
+        "promoted": True,
+        "promoted_at": promoted_at,
+        "promotion_reason": reason,
+    }
+    promoted_manifest = {**manifest, **promoted_fields}
     pointer = {
         "version": version,
         "training_run_id": version,
@@ -386,50 +459,58 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
         "previous_production_model_version": previous_production_version,
         "reason": reason,
     }
+
+    # 1) Publish to production storage FIRST — artifact + manifest, then the
+    #    pointer (the commit). Any failure raises here, BEFORE we mark the run
+    #    promoted or switch the local pointer, so the previously-serving model
+    #    stays authoritative and nothing claims this model is serving.
+    store = _production_store()  # raises if configured-but-broken (visible)
+    if store is not None:
+        _publish_to_production(
+            store, lead_type_name, version, promoted_manifest, pointer
+        )
+
+    # 2) Only after a successful publish: mark the local manifest promoted and
+    #    mirror the serving pointer locally. In local-only mode (no production
+    #    store), the local pointer write below is itself the commit.
+    update_manifest(lead_type_name, version, **promoted_fields)
     _serving_pointer_path(lead_type_name).write_text(
         json.dumps(pointer, indent=2, ensure_ascii=False, default=str)
     )
-    # Publish the promoted model to production storage (only promoted models
-    # reach production). No-op when production storage is disabled.
-    _publish_to_production(lead_type_name, version, pointer)
-    # Register it in the production MLflow server (audit/registry). No-op when
-    # production MLflow isn't configured.
+
+    # 3) Best-effort audit registration; a failure here never un-promotes.
     _publish_production_mlflow(lead_type_name, version, pointer)
     return pointer
 
 
-def _publish_to_production(lead_type_name: str, version: str, pointer: dict) -> None:
-    """Copy a promoted run's artifact + manifest to production storage and
-    update the production serving pointer. No-op when production is disabled.
+def _publish_to_production(
+    store, lead_type_name: str, version: str, promoted_manifest: dict, pointer: dict
+) -> None:
+    """Upload the promoted artifact + manifest, then flip the production serving
+    pointer (the commit). **Raises on any failure** — a promotion that can't
+    fully publish to production is not a completed promotion.
 
-    Raises on failure: a promotion that can't publish to production is not a
-    completed promotion, so the operator should see it.
+    Order matters: the ``.pkl`` and ``.json`` are written before ``current.json``
+    so serving never flips to a version whose artifact isn't uploaded yet.
     """
-    store = _production_store()
-    if store is None:
-        return
     lead = lead_type_name.strip().lower()
-    try:
-        store.write_bytes(
-            f"{lead}/{version}.pkl",
-            version_path(lead_type_name, version).read_bytes(),
-        )
-        store.write_text(
-            f"{lead}/{version}.json",
-            manifest_path(lead_type_name, version).read_text(),
-        )
-        store.write_text(
-            f"{lead}/current.json",
-            json.dumps(pointer, indent=2, ensure_ascii=False, default=str),
-        )
-        logger.info(
-            "Published %s to production storage (%s).",
-            version,
-            getattr(store, "backend", "?"),
-        )
-    except Exception:
-        logger.exception("Failed to publish %s to production storage.", version)
-        raise
+    store.write_bytes(
+        f"{lead}/{version}.pkl",
+        version_path(lead_type_name, version).read_bytes(),
+    )
+    store.write_text(
+        f"{lead}/{version}.json",
+        json.dumps(promoted_manifest, indent=2, ensure_ascii=False, default=str),
+    )
+    store.write_text(
+        f"{lead}/current.json",
+        json.dumps(pointer, indent=2, ensure_ascii=False, default=str),
+    )
+    logger.info(
+        "Published %s to production storage (%s).",
+        version,
+        getattr(store, "backend", "?"),
+    )
 
 
 def _publish_production_mlflow(

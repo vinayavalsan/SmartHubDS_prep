@@ -715,11 +715,36 @@ def run_training(
 
     promoted = False
     if promotion_mode == "automatic" and decision is not None and decision.promote:
-        registry.promote(
-            lead_type_name,
-            manifest["training_run_id"],
-            reason=decision.reason,
-        )
+        try:
+            registry.promote(
+                lead_type_name,
+                manifest["training_run_id"],
+                reason=decision.reason,
+            )
+        except Exception:
+            # Passing eligibility is NOT the same as being promoted. If
+            # publishing to production or switching the serving pointer failed,
+            # the model is not serving — do not record a successful promotion.
+            # Mark the run and fail loudly so it's visible and can be re-promoted.
+            logger.error(
+                "Automatic promotion FAILED for %s ('%s'): the model was "
+                "trained but is NOT serving. Re-promote once production storage "
+                "is healthy.",
+                manifest["training_run_id"],
+                lead_type_name,
+                exc_info=True,
+            )
+            try:
+                registry.update_manifest(
+                    lead_type_name,
+                    manifest["training_run_id"],
+                    promotion_status="promotion_failed",
+                )
+            except Exception:  # noqa: BLE001 -- best-effort status write
+                logger.warning(
+                    "Could not record promotion_failed status.", exc_info=True
+                )
+            raise
         promoted = True
         manifest = registry.load_manifest(lead_type_name, manifest["training_run_id"])
         promotion_status = "promoted"
