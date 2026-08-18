@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from smarthub.server import predict
-from smarthub.train_and_predict import config, explain, llm_explain
+from smarthub.train_and_predict import config, explain, llm_explain, shap_explain
 
 # --- _to_native (JSON-safety for numpy scalars) ------------------------------
 
@@ -770,3 +770,18 @@ def test_explain_row_respects_top_n_default_from_ini(small_feature_columns):
     # availability
     expected = min(explain.TOP_N_FACTORS, len(NUMERIC + CATEGORICAL))
     assert len(result["top_factors"]) == expected
+
+
+def test_explain_prepared_row_handles_int_typed_categorical(small_feature_columns):
+    """Regression: a prediction reloaded from the log may carry a categorical as
+    a JSON number (int). The model's OrdinalEncoder was fit on *string*
+    categories, so an int input made sklearn compare int vs str and raise
+    "'<' not supported between instances of 'int' and 'str'". explain_prepared_row
+    must normalize categoricals to string before transforming."""
+    pytest.importorskip("shap")
+    model = _tiny_lightgbm_pipeline(calibrate=False)
+    # 'state' is categorical here; pass it as an int to mimic a JSON-logged row.
+    prepared = {"bid": 7.0, "age": 33, "state": 5}
+    result = shap_explain.explain_prepared_row(model, prepared, lead_type_id=6, top_n=2)
+    assert 0.0 <= result["base_win_rate"] <= 1.0
+    assert len(result["top_factors"]) == 2
