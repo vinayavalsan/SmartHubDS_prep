@@ -208,3 +208,104 @@ def test_storage_settings_invalid_backend(monkeypatch):
 
     with pytest.raises(ConfigError):
         StorageSettings.from_env()
+
+
+# --- Atomicity regressions (C2 / C3) ---
+
+
+def test_duckdb_upsert_rolls_back_on_failed_insert(tmp_path):
+    """C2: a failure between the DELETE and INSERT must not drop existing rows.
+
+    The upsert is DELETE-then-INSERT; without a transaction, an INSERT failure
+    would leave the overlapping window's rows deleted and never re-inserted.
+    Force the INSERT to fail (non-castable value) and assert the prior row
+    survives intact.
+    """
+    db = tmp_path / "s.duckdb"
+    first = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "age": [30, 40],
+            "created_at": pd.to_datetime(["2026-06-20"] * 2),
+        }
+    )
+    assert storage.append_duckdb(first, path=db) == 2
+
+    # id=1 re-pulled but 'age' can't cast to the table's INTEGER -> INSERT fails
+    # after the DELETE has already removed id=1.
+    bad = pd.DataFrame(
+        {"id": [1], "age": ["oops"], "created_at": pd.to_datetime(["2026-06-21"])}
+    )
+    with pytest.raises(Exception):
+        storage.append_duckdb(bad, path=db)
+
+    out = storage.read_duckdb_table(path=db).set_index("id")
+    assert len(out) == 2  # nothing lost
+    assert out.loc[1, "age"] == 30  # original row rolled back, unchanged
+
+
+def test_parquet_write_is_atomic_and_leaves_no_temp(tmp_path):
+    """C3: a successful partition write leaves a valid file and no .tmp debris."""
+    root = tmp_path / "leads"
+    df = _frame([1, 2], ["false", "true"], ["2026-06-20 02:00"] * 2)
+    storage.append_parquet(df, root)
+
+    part = root / "2026" / "06" / "20-06-2026.parquet"
+    assert part.exists()
+    assert len(pd.read_parquet(part)) == 2
+    # no leftover temp files from the write
+    assert not list(part.parent.glob("*.parquet.tmp"))
+
+
+def test_parquet_write_failure_preserves_existing_partition(tmp_path, monkeypatch):
+    """C3: if the atomic rename fails, the previous partition is untouched and no
+    temp file is left behind (crash-safety of the read-modify-write)."""
+    root = tmp_path / "leads"
+    first = _frame([1], ["false"], ["2026-06-20 02:00"])
+    storage.append_parquet(first, root)
+    part = root / "2026" / "06" / "20-06-2026.parquet"
+    before = part.read_bytes()
+
+    # Simulate a crash at the rename step.
+    def boom(src, dst):
+        raise OSError("simulated crash during rename")
+
+    monkeypatch.setattr(storage.os, "replace", boom)
+    second = _frame([2], ["true"], ["2026-06-20 03:00"])
+    with pytest.raises(OSError):
+        storage.append_parquet(second, root)
+
+    # Old partition intact, new (partial) write discarded, no temp debris.
+    assert part.read_bytes() == before
+    assert not list(part.parent.glob("*.parquet.tmp"))
+
+
+def test_fetch_task_forwards_lead_type_ids_list(monkeypatch):
+    """C1: the data-pull flow's fetch task must call fetch_leads with the plural
+    ``lead_type_ids`` (a list), matching the real signature. Guards against the
+    kwarg-name drift that made every scheduled run raise TypeError."""
+    import inspect
+
+    # flow imports data_pull.pull, which imports redshift_connector; skip where
+    # the warehouse driver isn't installed (it is in CI / on the box).
+    pytest.importorskip("redshift_connector")
+    from smarthub.data_pull import flow, pull
+
+    captured = {}
+
+    def fake_fetch_leads(settings, min_s, max_s, **kwargs):
+        captured.update(kwargs)
+        # Fails if the forwarded kwargs don't fit the real signature.
+        inspect.signature(pull.fetch_leads).bind(settings, min_s, max_s, **kwargs)
+        return "DF"
+
+    monkeypatch.setattr(flow, "fetch_leads", fake_fetch_leads)
+    monkeypatch.setattr(
+        flow,
+        "PullSettings",
+        type("PS", (), {"from_env": staticmethod(lambda: object())}),
+    )
+
+    out = flow.fetch.fn("2026-06-01 00:00:00", "2026-06-02 00:00:00", 6, True, True)
+    assert out == "DF"
+    assert captured["lead_type_ids"] == [6]

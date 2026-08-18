@@ -112,7 +112,7 @@ def fetch(
         max_s,
         with_expected_revenue=with_expected_revenue,
         selected_only=selected_only,
-        lead_type_id=lead_type_id,
+        lead_type_ids=[lead_type_id],
     )
 
 

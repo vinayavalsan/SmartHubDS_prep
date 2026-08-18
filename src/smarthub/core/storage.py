@@ -11,6 +11,7 @@ The enabled backend(s) come from ``StorageSettings`` (env-driven).
 from __future__ import annotations
 
 import os
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -230,20 +231,33 @@ def append_duckdb(
             # are filled with NULL on insert via BY NAME.
             existing = set(_table_columns(con, table))
             new_cols = [c for c in df.columns if c not in existing]
-            if new_cols:
-                types = {
-                    r[0]: r[1]
-                    for r in con.execute("DESCRIBE SELECT * FROM incoming").fetchall()
-                }
-                for col in new_cols:
-                    con.execute(
-                        f'ALTER TABLE "{table}" ADD COLUMN "{col}" {types[col]}'
-                    )
-                logger.info("Added new columns to '%s': %s", table, new_cols)
-            con.execute(
-                f'DELETE FROM "{table}" WHERE {key} IN (SELECT {key} FROM incoming)'
-            )
-            con.execute(f'INSERT INTO "{table}" BY NAME SELECT * FROM incoming')
+            # Schema-evolution + delete + insert must be all-or-nothing: without
+            # a transaction, a failure (or crash) after the DELETE but before the
+            # INSERT commits would permanently drop the overlapping window's rows
+            # with no re-insert. Wrap them so a failure rolls the whole upsert
+            # back and the previous rows survive.
+            con.execute("BEGIN TRANSACTION")
+            try:
+                if new_cols:
+                    types = {
+                        r[0]: r[1]
+                        for r in con.execute(
+                            "DESCRIBE SELECT * FROM incoming"
+                        ).fetchall()
+                    }
+                    for col in new_cols:
+                        con.execute(
+                            f'ALTER TABLE "{table}" ADD COLUMN "{col}" {types[col]}'
+                        )
+                    logger.info("Added new columns to '%s': %s", table, new_cols)
+                con.execute(
+                    f'DELETE FROM "{table}" WHERE {key} IN (SELECT {key} FROM incoming)'
+                )
+                con.execute(f'INSERT INTO "{table}" BY NAME SELECT * FROM incoming')
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
         total = con.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
         logger.info("DuckDB '%s': upserted %s rows (now %s)", table, len(df), total)
         return int(total)
@@ -465,7 +479,20 @@ def append_parquet(
             combined = pd.concat([pd.read_parquet(target), group], ignore_index=True)
         else:
             combined = group
-        _dedupe(combined, key).to_parquet(target, index=False)
+        # Write to a temp file in the same directory, then atomically rename over
+        # the target. An in-place overwrite that crashes mid-write would leave a
+        # truncated/corrupt parquet for the whole day; os.replace() is atomic on
+        # the same filesystem, so readers always see either the old or the new
+        # complete file, never a partial one.
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".parquet.tmp")
+        os.close(fd)
+        try:
+            _dedupe(combined, key).to_parquet(tmp, index=False)
+            os.replace(tmp, target)
+        except Exception:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
         written += len(group)
         logger.info("Parquet partition %s: +%s rows", target.name, len(group))
     return written
