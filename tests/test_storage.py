@@ -286,8 +286,10 @@ def test_fetch_task_forwards_lead_type_ids_list(monkeypatch):
     kwarg-name drift that made every scheduled run raise TypeError."""
     import inspect
 
-    # flow imports data_pull.pull, which imports redshift_connector; skip where
-    # the warehouse driver isn't installed (it is in CI / on the box).
+    # flow imports prefect and data_pull.pull (which imports redshift_connector);
+    # skip where either isn't installed (they are on the box / in the pull image,
+    # but the CI unit-test env installs neither).
+    pytest.importorskip("prefect")
     pytest.importorskip("redshift_connector")
     from smarthub.data_pull import flow, pull
 
