@@ -23,7 +23,6 @@ import argparse
 import json
 import random
 import statistics
-import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -105,7 +104,7 @@ def cmd_run(args) -> None:
         payload = gen_payload() if args.vary else PAYLOAD
         rec: dict = {"ts": round(start - t0, 4)}
         if args.vary:
-            rec["request"] = payload   # keep input to correlate with the bid later
+            rec["request"] = payload  # keep input to correlate with the bid later
         try:
             r = requests.post(endpoint, json=payload, timeout=args.timeout)
             rec["latency_ms"] = round((time.perf_counter() - start) * 1000, 2)
@@ -131,8 +130,10 @@ def cmd_run(args) -> None:
                 pass
 
     print(f">> {endpoint}")
-    print(f">> rate={args.rpm}/min  duration={args.duration}s  "
-          f"workers={args.workers}  out={args.out}\n")
+    print(
+        f">> rate={args.rpm}/min  duration={args.duration}s  "
+        f"workers={args.workers}  out={args.out}\n"
+    )
 
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -154,8 +155,10 @@ def cmd_run(args) -> None:
             fh.write(json.dumps(rec) + "\n")
 
     ok = sum(1 for r in results if r["ok"])
-    print(f">> dispatched {sent}, captured {len(results)} "
-          f"({ok} ok / {len(results)-ok} failed) in {wall:.1f}s")
+    print(
+        f">> dispatched {sent}, captured {len(results)} "
+        f"({ok} ok / {len(results)-ok} failed) in {wall:.1f}s"
+    )
     print(f">> saved to {args.out}")
     print(f">> analyze with:  python3 bidload.py analyze {args.out}")
 
@@ -206,13 +209,17 @@ def cmd_analyze(args) -> None:
 
     print("\n==================== LATENCY (ms) ====================")
     if lat:
-        print(f"n={len(lat)}  min={min(lat):.0f}  p50={_pct(lat,50):.0f}  "
-              f"p90={_pct(lat,90):.0f}  p95={_pct(lat,95):.0f}  "
-              f"p99={_pct(lat,99):.0f}  max={max(lat):.0f}  "
-              f"mean={statistics.mean(lat):.0f}")
+        print(
+            f"n={len(lat)}  min={min(lat):.0f}  p50={_pct(lat,50):.0f}  "
+            f"p90={_pct(lat,90):.0f}  p95={_pct(lat,95):.0f}  "
+            f"p99={_pct(lat,99):.0f}  max={max(lat):.0f}  "
+            f"mean={statistics.mean(lat):.0f}"
+        )
         within1s = sum(1 for x in lat if x <= 1000) / len(lat) * 100
-        print(f"within 1s:   {within1s:.1f}%   "
-              f"SLO(p99<=1s): {'PASS' if _pct(lat,99) <= 1000 and not bad else 'FAIL'}")
+        print(
+            f"within 1s:   {within1s:.1f}%   "
+            f"SLO(p99<=1s): {'PASS' if _pct(lat,99) <= 1000 and not bad else 'FAIL'}"
+        )
     else:
         print("no successful requests to measure")
 
@@ -228,13 +235,18 @@ def cmd_analyze(args) -> None:
         print("\n==================== RESPONSE FIELDS ====================")
         for key in sorted(fields):
             vals = fields[key]
-            nums = [v for v in vals if isinstance(v, (int, float))
-                    and not isinstance(v, bool)]
+            nums = [
+                v
+                for v in vals
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            ]
             if nums and len(nums) == len(vals):
-                print(f"[num] {key:42s} "
-                      f"min={min(nums):.4g} p50={_pct(nums,50):.4g} "
-                      f"p95={_pct(nums,95):.4g} max={max(nums):.4g} "
-                      f"mean={statistics.mean(nums):.4g}")
+                print(
+                    f"[num] {key:42s} "
+                    f"min={min(nums):.4g} p50={_pct(nums,50):.4g} "
+                    f"p95={_pct(nums,95):.4g} max={max(nums):.4g} "
+                    f"mean={statistics.mean(nums):.4g}"
+                )
             else:
                 top = Counter(str(v) for v in vals).most_common(5)
                 shown = ", ".join(f"{k}={n}" for k, n in top)
@@ -243,22 +255,29 @@ def cmd_analyze(args) -> None:
 
         # Highlight the money fields if present.
         print("\n-------------------- KEY BID METRICS --------------------")
-        for key in ("recommended_bid",
-                    "recommended_bid_predicted_win_rate",
-                    "recommended_bid_predicted_profit",
-                    "recommended_bid_predicted_cm",
-                    "decision_path",
-                    "decision_reason",
-                    "model_version"):
+        for key in (
+            "recommended_bid",
+            "recommended_bid_predicted_win_rate",
+            "recommended_bid_predicted_profit",
+            "recommended_bid_predicted_cm",
+            "decision_path",
+            "decision_reason",
+            "model_version",
+        ):
             match = next((k for k in fields if k == key or k.endswith("." + key)), None)
             if not match:
                 continue
             vals = fields[match]
-            nums = [v for v in vals if isinstance(v, (int, float))
-                    and not isinstance(v, bool)]
+            nums = [
+                v
+                for v in vals
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            ]
             if nums and len(nums) == len(vals):
-                print(f"{key:38s} p50={_pct(nums,50):.4g}  "
-                      f"p95={_pct(nums,95):.4g}  mean={statistics.mean(nums):.4g}")
+                print(
+                    f"{key:38s} p50={_pct(nums,50):.4g}  "
+                    f"p95={_pct(nums,95):.4g}  mean={statistics.mean(nums):.4g}"
+                )
             else:
                 top = Counter(str(v) for v in vals).most_common(5)
                 print(f"{key:38s} " + ", ".join(f"{k}({n})" for k, n in top))
@@ -267,7 +286,9 @@ def cmd_analyze(args) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Bid API load test + response capture + analysis")
+    ap = argparse.ArgumentParser(
+        description="Bid API load test + response capture + analysis"
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="run the load test and save responses")
@@ -276,10 +297,15 @@ def main() -> None:
     r.add_argument("--rpm", type=int, default=1000, help="requests per minute")
     r.add_argument("--duration", type=int, default=60, help="seconds")
     r.add_argument("--workers", type=int, default=128, help="max concurrent in-flight")
-    r.add_argument("--timeout", type=float, default=10.0, help="per-request timeout (s)")
+    r.add_argument(
+        "--timeout", type=float, default=10.0, help="per-request timeout (s)"
+    )
     r.add_argument("--warmup", type=int, default=0, help="warm-up requests (not saved)")
-    r.add_argument("--vary", action="store_true",
-                   help="randomize each request so responses span real scenarios")
+    r.add_argument(
+        "--vary",
+        action="store_true",
+        help="randomize each request so responses span real scenarios",
+    )
     r.add_argument("--out", default="results.jsonl", help="output JSONL file")
     r.set_defaults(func=cmd_run)
 
