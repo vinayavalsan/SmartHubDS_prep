@@ -21,6 +21,7 @@ from prefect.variables import Variable
 
 from smarthub.core import notifications, storage, task_config
 from smarthub.core.config import PullSettings, StorageSettings
+from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.data_pull import validation_report as vreport
 from smarthub.data_pull.pull import fetch_leads
 from smarthub.data_pull.validation_runner import validate_leads
@@ -206,7 +207,6 @@ def update_watermark(df: pd.DataFrame, var_name: str, window_max: str) -> str:
 @flow(name="smarthub-data-pull", on_failure=[notifications.flow_failure_hook])
 def data_pull_flow(
     lead_type_id: int = 6,
-    lead_type_name: str = "auto",
     overlap_hours: float = 1.0,
     default_lookback_hours: float = 168.0,
     with_expected_revenue: bool = True,
@@ -221,9 +221,8 @@ def data_pull_flow(
     Inputs
     ------
     lead_type_id : int
-        Lead type id to pull (e.g. 6=auto, 1=home).
-    lead_type_name : str
-        Human name for the lead type, used in watermarks and reports.
+        Registered lead type id to pull. The canonical lead type name is
+        resolved from this id and used for watermarks, reports, and notifications.
     overlap_hours : float
         Hours to re-pull before the watermark, for late-resolving outcomes.
     default_lookback_hours : float
@@ -240,6 +239,7 @@ def data_pull_flow(
     """
     logger = get_run_logger()
     started_at = _utc_now_naive()
+    lead_type_name = resolve_lead_type_name(lead_type_id)
     var_name = watermark_variable(lead_type_name)
 
     min_s, max_s = resolve_window(var_name, overlap_hours, default_lookback_hours)
@@ -412,4 +412,4 @@ def _report(
 
 
 if __name__ == "__main__":
-    data_pull_flow(lead_type_id=6, lead_type_name="auto")
+    data_pull_flow(lead_type_id=6)
