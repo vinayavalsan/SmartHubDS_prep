@@ -44,7 +44,8 @@ import time
 
 from sqlalchemy import select, update
 
-from smarthub.train_and_predict import config, registry
+from smarthub.core.lead_types import lead_type_name as get_lead_type_name
+from smarthub.train_and_predict import registry
 from smarthub.train_and_predict.prediction_log_schema import (
     PredictionLogStore,
     _decode_row,
@@ -69,7 +70,7 @@ def _load_model_for_row(row: dict):
     Explaining with the same version that produced the bid keeps the logged
     factors faithful even if a newer model has since been promoted.
     """
-    lead_type_name = row.get("lead_type_name") or config.lead_type_name(
+    lead_type_name = row.get("lead_type_name") or get_lead_type_name(
         int(row["lead_type_id"])
     )
     version = row.get("model_version")

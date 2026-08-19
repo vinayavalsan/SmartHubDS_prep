@@ -155,10 +155,10 @@ def _bid_curve(model, prediction: PredictionOutput) -> list:
     """
     if prediction.expected_revenue is None or prediction.max_bid is None:
         return []
+    from smarthub.feature_engineering import features as fe
     from smarthub.server import predict
-    from smarthub.train_and_predict import config
 
-    numeric, categorical = config.feature_columns(prediction.lead_type_id)
+    numeric, categorical = fe.model_feature_columns(prediction.lead_type_id)
     feature_cols = list(numeric) + list(categorical)
     row = pd.Series(
         {col: prediction.model_input_features.get(col) for col in feature_cols}
