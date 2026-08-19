@@ -14,6 +14,11 @@ Everything here is detect-only; nothing mutates the data.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from numbers import Number
+
+import numpy as np
 import pandas as pd
 
 from smarthub.core import auction
@@ -95,6 +100,114 @@ def _null_or_blank(series: pd.Series) -> pd.Series:
 
 def _lower(series: pd.Series) -> pd.Series:
     return series.astype("string").str.strip().str.lower()
+
+
+_BINARY_VALUES = frozenset({"true", "false"})
+
+
+@dataclass(frozen=True)
+class KindValidationResult:
+    """Result of validating one raw column against its declared kind."""
+
+    check: str
+    count: int
+    examples: list = field(default_factory=list)
+
+
+def _invalid_numeric_mask(series: pd.Series) -> pd.Series:
+    """Return present values that cannot be interpreted as numeric."""
+    present = ~_null_or_blank(series)
+    parsed = pd.to_numeric(series, errors="coerce")
+    invalid_bool = series.map(
+        lambda value: isinstance(value, (bool, np.bool_)) if pd.notna(value) else False
+    )
+    return present & (parsed.isna() | invalid_bool)
+
+
+def _invalid_categorical_mask(series: pd.Series) -> pd.Series:
+    """Return present categorical values that are not strings."""
+    present = ~_null_or_blank(series)
+    is_string = series.map(
+        lambda value: isinstance(value, str) if pd.notna(value) else False
+    )
+    return present & ~is_string
+
+
+def _invalid_binary_mask(series: pd.Series) -> pd.Series:
+    """Return present values outside the canonical warehouse boolean domain."""
+    present = ~_null_or_blank(series)
+    normalized = _lower(series)
+    return present & ~normalized.isin(_BINARY_VALUES)
+
+
+def _is_datetime_like(value) -> bool:
+    """Return whether one raw value is a supported datetime representation."""
+    if pd.isna(value):
+        return True
+    if isinstance(value, (bool, np.bool_)):
+        return False
+    if isinstance(value, Number):
+        return False
+    if isinstance(value, (datetime, date, pd.Timestamp, np.datetime64)):
+        return True
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    if not stripped:
+        return True
+    return not pd.isna(pd.to_datetime(stripped, errors="coerce"))
+
+
+def _invalid_datetime_mask(series: pd.Series) -> pd.Series:
+    """Return present values that cannot be interpreted as datetimes."""
+    present = ~_null_or_blank(series)
+    valid = series.map(_is_datetime_like)
+    return present & ~valid
+
+
+_KIND_VALIDATORS = {
+    "numeric": _invalid_numeric_mask,
+    "categorical": _invalid_categorical_mask,
+    "binary": _invalid_binary_mask,
+    "datetime": _invalid_datetime_mask,
+}
+
+
+def validate_kind(series: pd.Series, kind: str) -> KindValidationResult:
+    """Validate present raw values against a registry-declared field kind.
+
+    Missing and blank values are ignored here because missingness is reported
+    separately. This check is intentionally pure pandas so fundamental type
+    validation still runs when optional Pandera validation is unavailable.
+
+    Inputs
+    ------
+    series : pandas.Series
+        Raw values exactly as returned by the warehouse query.
+    kind : str
+        Registry kind: numeric, categorical, binary, or datetime.
+
+    Returns
+    -------
+    KindValidationResult
+        Stable check label, violating-row count, and up to five examples.
+
+    Raises
+    ------
+    ValueError
+        If ``kind`` is not one of the supported registry kinds.
+    """
+    validator = _KIND_VALIDATORS.get(kind)
+    if validator is None:
+        raise ValueError(f"Unsupported validation kind: {kind!r}.")
+
+    invalid = validator(series)
+    examples = series.loc[invalid].dropna().unique().tolist()[:5]
+    return KindValidationResult(
+        check=f"invalid {kind} value",
+        count=int(invalid.sum()),
+        examples=examples,
+    )
 
 
 def erred_mask(df: pd.DataFrame) -> pd.Series:

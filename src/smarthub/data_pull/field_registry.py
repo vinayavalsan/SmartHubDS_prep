@@ -60,7 +60,6 @@ class ValidationSpec:
     max_value: float | int | None = None
     allowed_values: frozenset[Any] | None = None
     custom_rule: ValidationRule | None = None
-    severity: str = "error"  # "error" | "warn"
     unique: bool = False  # values must be unique across the batch (e.g. id)
 
 

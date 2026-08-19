@@ -62,7 +62,6 @@ smarthub-pull = "smarthub.data_pull.pull:main"
 smarthub-build-features = "smarthub.feature_engineering.build:main"
 smarthub-train = "smarthub.train_and_predict.train:main"
 smarthub-hyperparameter-search = "smarthub.train_and_predict.hyperparameter_search:main"
-smarthub-analysis = "smarthub.train_and_predict.analysis.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
