@@ -628,6 +628,71 @@ def run_training(
                 "  Monotonicity result                   : %s",
                 "PASS" if monotonicity_passed else "FAIL",
             )
+
+        challenger_profit = promotion_comparison.get("challenger_profit")
+        serving_profit = promotion_comparison.get("currently_serving_profit")
+        if challenger_profit is not None:
+            logger.info(
+                "  Challenger expected profit            : %.4f",
+                challenger_profit,
+            )
+        if serving_profit is not None:
+            logger.info(
+                "  Serving expected profit               : %.4f",
+                serving_profit,
+            )
+        if challenger_profit is not None and serving_profit is not None:
+            logger.info(
+                "  Profit difference (challenger-serving): %.4f",
+                challenger_profit - serving_profit,
+            )
+
+        profit_ratio = promotion_comparison.get("profit_ratio")
+        if profit_ratio is not None:
+            logger.info(
+                "  Challenger / serving profit ratio     : %.2f%%",
+                profit_ratio * 100.0,
+            )
+            logger.info(
+                "  Minimum required profit ratio         : %.2f%%",
+                training_config.promotion_min_profit_ratio * 100.0,
+            )
+
+        absolute_profit_loss = promotion_comparison.get("absolute_profit_loss")
+        if absolute_profit_loss is not None:
+            logger.info(
+                "  Absolute profit loss                   : %.4f",
+                absolute_profit_loss,
+            )
+            logger.info(
+                "  Maximum allowed absolute profit loss   : %.4f",
+                training_config.promotion_max_absolute_profit_loss_tolerance,
+            )
+
+        challenger_log_loss = promotion_comparison.get("challenger_log_loss")
+        serving_log_loss = promotion_comparison.get("currently_serving_log_loss")
+        if challenger_log_loss is not None:
+            logger.info(
+                "  Challenger log loss                   : %.4f",
+                challenger_log_loss,
+            )
+        if serving_log_loss is not None:
+            logger.info(
+                "  Serving log loss                      : %.4f",
+                serving_log_loss,
+            )
+
+        log_loss_regression = promotion_comparison.get("log_loss_regression")
+        if log_loss_regression is not None:
+            logger.info(
+                "  Log-loss regression                   : %.4f",
+                log_loss_regression,
+            )
+            logger.info(
+                "  Maximum allowed log-loss regression   : %.4f",
+                training_config.promotion_max_log_loss_regression,
+            )
+
         logger.info(
             "  Policy recommendation                 : %s",
             "ELIGIBLE" if decision.promote else "NOT ELIGIBLE",
