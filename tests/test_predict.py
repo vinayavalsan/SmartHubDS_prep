@@ -197,7 +197,9 @@ def test_decide_bid_no_recency_note_when_manifest_missing():
 # --- decide_bid: exploration path ---------------------------------------------
 
 
-def test_decide_bid_exploration_perturbs_and_rescores_at_the_new_bid():
+def test_decide_bid_exploration_perturbs_and_rescores_at_the_new_bid(monkeypatch):
+    monkeypatch.setattr(config, "exploration_variance_pct", lambda: 0.10)
+
     model = _LinearWinRateModel(intercept=1.0, slope=0.02)
     row = _row()
     expected_revenue, target_cm, min_bid, bid_step = 20.0, 0.25, 5.0, 0.5
