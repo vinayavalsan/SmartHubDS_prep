@@ -114,8 +114,6 @@ def build_feature_value_counts_dataframe(df, features, top_n_per_feature=30):
     """
     long_df = df[features].copy()
 
-    # for col in features:
-    #    long_df[col] = long_df[col].fillna("<NA>").replace("", "<EMPTY>").astype(str)
     for col in features:
         long_df[col] = (
             long_df[col].astype("string").fillna("<NA>").replace("", "<EMPTY>")

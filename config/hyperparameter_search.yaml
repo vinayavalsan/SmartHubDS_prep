@@ -1,163 +1,143 @@
-search:
-  model_type: lightgbm
-  scoring: neg_log_loss
-  n_trials: 50
-  cv_folds: 3
-  timeout_seconds: null
-  random_seed: 42
-  n_jobs: 1
-validation:
-  strategy: time
-finalists:
-  holdout_fraction: 0.2
-  # Wider, cheap probability-quality stage: top Optuna trials are evaluated
-  # across all configured calibration methods on the finalist holdout.
-  probability_shortlist_top_n: 10
-  # Expensive optimizer/monotonicity evaluation runs only for the strongest
-  # model + calibration combinations that pass the log-loss guardrail.
-  optimizer_top_n: 5
-  max_log_loss_regression_from_best: 0.02
-  monotonicity:
-    enabled: true
-    tolerance: 1.0e-08
-    max_violation_rate: 0.0
-calibration:
-  # Optional: when false, HPO evaluates only uncalibrated models.
-  enabled: true
-  methods:
-  - none
-  - sigmoid
-  - isotonic
-  cv: 3
-optimizer:
-  # Optional: when false, finalists are selected by held-out probability quality
-  # and no optimizer/monotonicity evaluation is run.
-  enabled: true
-  target_cm: 0.25
-  minimum_bid: 0.25
-  bid_step: 0.25
-  chunk_size: 500
-output:
-  root: data/hyperparameter_tuning
-models:
-  logistic_regression:
-    fixed_parameters:
-      max_iter: 5000
-    search_space:
-      C:
-        type: float
-        low: 0.0001
-        high: 100.0
-        log: true
-      solver:
-        type: categorical
-        choices:
-        - liblinear
-        - saga
-      penalty:
-        choices:
-        - l1
-        - l2
-        type: categorical
-      class_weight:
-        choices:
-        - null
-        - balanced
-        type: categorical
-      fit_intercept:
-        choices:
-        - true
-        - false
-        type: categorical
-      tol:
-        type: float
-        low: 1e-6
-        high: 1e-2
-        log: true
-  xgboost:
-    fixed_parameters:
-      eval_metric: logloss
+hyperparameter_search:
+  defaults:
+    search:
+      scoring: neg_log_loss
+      n_trials: 50
+      cv_folds: 3
+      timeout_seconds: null
+      random_seed: 42
       n_jobs: 1
-    search_space:
-      n_estimators:
-        type: int
-        low: 200
-        high: 1000
-        step: 100
-      max_depth:
-        type: int
-        low: 3
-        high: 10
-      learning_rate:
-        type: float
-        low: 0.005
-        high: 0.2
-        log: true
-      min_child_weight:
-        type: int
-        low: 1
-        high: 10
-      subsample:
-        type: float
-        low: 0.6
-        high: 1.0
-      colsample_bytree:
-        type: float
-        low: 0.6
-        high: 1.0
-      reg_alpha:
-        type: float
-        low: 1.0e-06
-        high: 10.0
-        log: true
-      reg_lambda:
-        type: float
-        low: 1.0e-06
-        high: 20.0
-        log: true
-  lightgbm:
-    fixed_parameters:
-      verbosity: -1
-      n_jobs: 1
-      subsample_freq: 1
-    search_space:
-      n_estimators:
-        type: int
-        low: 200
-        high: 1000
-        step: 100
-      num_leaves:
-        type: int
-        low: 15
-        high: 127
-      max_depth:
-        type: int
-        low: 3
-        high: 12
-      learning_rate:
-        type: float
-        low: 0.005
-        high: 0.2
-        log: true
-      min_child_samples:
-        type: int
-        low: 10
-        high: 150
-      subsample:
-        type: float
-        low: 0.6
-        high: 1.0
-      colsample_bytree:
-        type: float
-        low: 0.6
-        high: 1.0
-      reg_alpha:
-        type: float
-        low: 1.0e-06
-        high: 10.0
-        log: true
-      reg_lambda:
-        type: float
-        low: 1.0e-06
-        high: 20.0
-        log: true
+    validation:
+      strategy: time
+    split:
+      strategy: time
+      time:
+        test_size: 0.2
+      random:
+        test_size: 0.2
+        stratify: true
+    finalists:
+      holdout_fraction: 0.2
+      probability_shortlist_top_n: 10
+      optimizer_top_n: 5
+      max_log_loss_regression_from_best: 0.02
+      monotonicity:
+        enabled: true
+        tolerance: 1.0e-08
+        max_violation_rate: 0.0
+    optimizer:
+      enabled: true
+      target_cm: 0.25
+      minimum_bid: 0.25
+      bid_step: 0.25
+      chunk_size: 500
+    calibration:
+      enabled: true
+      methods:
+      - none
+      - sigmoid
+      - isotonic
+      cv: 3
+    output:
+      root: data/hyperparameter_tuning
+  lead_types:
+    6:
+      name: auto
+      model_type: lightgbm
+      models:
+        lightgbm:
+          fixed_parameters:
+            verbosity: -1
+            n_jobs: 1
+            subsample_freq: 1
+          search_space:
+            n_estimators:
+              type: int
+              low: 200
+              high: 1000
+              step: 100
+            num_leaves:
+              type: int
+              low: 15
+              high: 127
+            max_depth:
+              type: int
+              low: 3
+              high: 12
+            learning_rate:
+              type: float
+              low: 0.005
+              high: 0.2
+              log: true
+            min_child_samples:
+              type: int
+              low: 10
+              high: 150
+            subsample:
+              type: float
+              low: 0.6
+              high: 1.0
+            colsample_bytree:
+              type: float
+              low: 0.6
+              high: 1.0
+            reg_alpha:
+              type: float
+              low: 1.0e-06
+              high: 10.0
+              log: true
+            reg_lambda:
+              type: float
+              low: 1.0e-06
+              high: 20.0
+              log: true
+    1:
+      name: home
+      model_type: lightgbm
+      models:
+        lightgbm:
+          fixed_parameters:
+            verbosity: -1
+            n_jobs: 1
+            subsample_freq: 1
+          search_space:
+            n_estimators:
+              type: int
+              low: 200
+              high: 1000
+              step: 100
+            num_leaves:
+              type: int
+              low: 15
+              high: 127
+            max_depth:
+              type: int
+              low: 3
+              high: 12
+            learning_rate:
+              type: float
+              low: 0.005
+              high: 0.2
+              log: true
+            min_child_samples:
+              type: int
+              low: 10
+              high: 150
+            subsample:
+              type: float
+              low: 0.6
+              high: 1.0
+            colsample_bytree:
+              type: float
+              low: 0.6
+              high: 1.0
+            reg_alpha:
+              type: float
+              low: 1.0e-06
+              high: 10.0
+              log: true
+            reg_lambda:
+              type: float
+              low: 1.0e-06
+              high: 20.0
+              log: true

@@ -3,7 +3,7 @@
 Two backends behind one small interface:
 
 - :class:`FilesystemModelStore` — local development/training storage
-  (e.g. ``data/models``); the historical, default behaviour.
+  (e.g. ``data/models``).
 - :class:`S3ModelStore` — production storage on S3 or any S3-compatible
   endpoint (MinIO, Ceph, etc.) via ``boto3``, with a configurable
   ``endpoint_url`` so it isn't tied to AWS.

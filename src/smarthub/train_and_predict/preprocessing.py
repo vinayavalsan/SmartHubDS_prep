@@ -100,7 +100,7 @@ def prepare_training_data(lead_type_id, lead_type_name, version=None):
     table = io.load_training_table(lead_type_name, resolved_version)
     raw_rows = len(table)
 
-    numeric, categorical = config.feature_columns(lead_type_id)
+    numeric, categorical = fe.model_feature_columns(lead_type_id)
     feature_cols = numeric + categorical
 
     if config.TARGET_COL not in table.columns:
@@ -371,7 +371,7 @@ def serving_frame(records, lead_type_id):
     """
     raw = records.copy() if isinstance(records, pd.DataFrame) else pd.DataFrame(records)
 
-    numeric, categorical = config.feature_columns(lead_type_id)
+    numeric, categorical = fe.model_feature_columns(lead_type_id)
     feature_cols = numeric + categorical
 
     # Serving starts from raw request data, so it must run the shared

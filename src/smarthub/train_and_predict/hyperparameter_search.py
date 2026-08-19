@@ -22,6 +22,7 @@ from sklearn.base import clone
 from sklearn.metrics import brier_score_loss, get_scorer, log_loss
 from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, train_test_split
 
+from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.core.logging_utils import get_logger
 
 from . import (
@@ -171,6 +172,7 @@ def _hpo_settings(
     """Return normalized SmartHub-specific HPO settings."""
     return {
         "validation_strategy": search_config.validation_strategy,
+        "split": dict(search_config.split),
         "holdout_fraction": search_config.holdout_fraction,
         "probability_shortlist_top_n": (search_config.probability_shortlist_top_n),
         "optimizer_top_n": search_config.optimizer_top_n,
@@ -186,36 +188,36 @@ def _hpo_settings(
     }
 
 
-def _reserve_final_training_test(
+def _reserve_final_test(
     frame: pd.DataFrame,
     split_settings: dict[str, Any],
     random_seed: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Reserve the final test partition that training will evaluate later.
+    """Reserve HPO's untouched final test partition.
 
-    Hyperparameter search must never inspect this partition. The split mirrors
-    ``train.split_training_data`` so that the rows held out here are the same
-    rows later used for the final training evaluation and promotion decision.
+    The split is configured entirely by ``hyperparameter_search.yaml``. HPO
+    must not inspect these rows during CV, finalist selection, calibration
+    selection, optimizer scoring, or monotonicity evaluation.
 
     Inputs
     ------
     frame : pandas.DataFrame
         Prepared model-ready training data.
     split_settings : dict[str, Any]
-        Resolved training split settings from ``training.yaml``.
+        HPO-owned split strategy and options from ``hyperparameter_search.yaml``.
     random_seed : int
-        Training random seed used for reproducible random splitting.
+        HPO random seed used for reproducible random splitting.
 
     Returns
     -------
     tuple[pandas.DataFrame, pandas.DataFrame]
-        HPO-eligible rows followed by the untouched final training test rows.
+        HPO-eligible rows followed by the untouched final HPO test rows.
     """
     strategy = str(split_settings["strategy"]).strip().lower()
     test_size = float(split_settings["test_size"])
 
     if not 0.0 < test_size < 1.0:
-        raise ValueError("Training split test_size must be between 0 and 1.")
+        raise ValueError("HPO split test_size must be between 0 and 1.")
 
     if strategy == "time":
         if "created_at" not in frame.columns:
@@ -241,11 +243,11 @@ def _reserve_final_training_test(
         hpo_pool = hpo_pool.copy()
         final_test = final_test.copy()
     else:
-        raise ValueError(f"Unsupported training split strategy: {strategy!r}.")
+        raise ValueError(f"Unsupported HPO split strategy: {strategy!r}.")
 
     if hpo_pool.empty or final_test.empty:
         raise ValueError(
-            "Training split produced an empty HPO pool or final test partition."
+            "HPO split produced an empty HPO pool or final test partition."
         )
 
     return hpo_pool.reset_index(drop=True), final_test.reset_index(drop=True)
@@ -956,7 +958,13 @@ def _write_outputs(
             "enabled": calibration_method != "none",
         },
         "models": {
-            model_type: selected["parameters"],
+            # random_state is derived from the active workflow seed by config.py.
+            # Do not write a second seed option into the generated YAML.
+            model_type: {
+                key: value
+                for key, value in selected["parameters"].items()
+                if key != "random_state"
+            },
         },
     }
     if calibration_method != "none":
@@ -988,13 +996,16 @@ def run_hyperparameter_search(
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run SmartHub-aware hyperparameter search for one model family."""
-    search_config = config.load_hyperparameter_search_config(config_path)
+    search_config = config.load_hyperparameter_search_config(
+        lead_type_id,
+        config_path,
+    )
     _validate_probability_scoring(search_config.scoring)
     settings = _hpo_settings(search_config)
 
     normalized_model_type = search_config.model_type.strip().lower()
     model_config = search_config.model_config(normalized_model_type)
-    lead_type_name = config.lead_type_name(lead_type_id)
+    lead_type_name = resolve_lead_type_name(lead_type_id)
     np.random.seed(search_config.random_seed)
 
     logger.info(
@@ -1029,14 +1040,12 @@ def run_hyperparameter_search(
             f"column {config.REVENUE_COL!r}."
         )
 
-    # Protect the same final test partition that ``smarthub-train`` will use.
-    # HPO must not use these rows for CV, finalist selection, calibration
-    # selection, optimizer scoring, monotonicity checks, or feature cleanup.
-    training_config = config.load_training_config()
-    hpo_pool, final_training_test = _reserve_final_training_test(
+    # Reserve an HPO-only final test partition using HPO configuration only.
+    # No settings are read from training.yaml.
+    hpo_pool, final_training_test = _reserve_final_test(
         frame,
-        split_settings=training_config.split,
-        random_seed=training_config.random_seed,
+        split_settings=search_config.split,
+        random_seed=search_config.random_seed,
     )
     preprocessing.assert_trainable(hpo_pool, lead_type_name)
 
@@ -1267,7 +1276,7 @@ def run_hyperparameter_search(
         )
     else:
         logger.info("Selected finalist by held-out probability quality.")
-    logger.info("Copy the following into config/training.yaml:\n%s", yaml_text)
+    logger.info("Selected parameters YAML:\n%s", yaml_text)
     logger.info("Saved summary: %s", summary_path)
     logger.info("Saved finalist results: %s", finalist_path)
     logger.info("Saved parameters: %s", parameters_path)

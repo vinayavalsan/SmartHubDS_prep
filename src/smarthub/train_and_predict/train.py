@@ -15,6 +15,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from smarthub.core import notifications
+from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.core.logging_utils import get_logger
 
 from . import (
@@ -188,8 +189,8 @@ def run_training(
     ValueError
         If the prepared data cannot support model training.
     """
-    training_config = config.load_training_config()
-    lead_type_name = config.lead_type_name(lead_type_id)
+    training_config = config.load_training_config(lead_type_id)
+    lead_type_name = resolve_lead_type_name(lead_type_id)
     np.random.seed(training_config.random_seed)
 
     logger.info(

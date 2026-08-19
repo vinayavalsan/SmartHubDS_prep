@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from smarthub.core import paths
+from smarthub.core.lead_types import lead_type_id as resolve_lead_type_id
 from smarthub.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -33,11 +34,9 @@ class RegistryError(RuntimeError):
 # --- production storage (promoted models) ------------------------------------
 # Local training always writes to the filesystem under MODEL_DIR_ROOT. When
 # production storage is configured, `promote()` also publishes the promoted
-# artifact + manifest + serving pointer there, and serving prefers it. When it
-# is not configured everything below is a no-op, so local behaviour is
-# unchanged.
-_PRODUCTION_STORE = None
-_PRODUCTION_STORE_RESOLVED = False
+# artifact + manifest + serving pointer there, and serving prefers it. Without
+# production storage, the registry operates entirely on the local filesystem.
+_PRODUCTION_STORES = {}
 
 
 def _local_store():
@@ -47,32 +46,20 @@ def _local_store():
     return FilesystemModelStore(str(MODEL_DIR_ROOT))
 
 
-def _production_store():
-    """Return the production model store, or None when production is disabled.
-
-    Distinguishes two cases that used to be conflated:
-
-    * **Disabled** (no backend configured) -> returns ``None``. Local-only dev;
-      falling back to local storage is legitimate.
-    * **Configured but unbuildable** (e.g. bad creds / unreachable endpoint) ->
-      **raises** :class:`RegistryError`. Once production storage is the source
-      of truth, a broken store must be visible, never silently downgraded to a
-      possibly-stale local artifact.
-
-    The result is cached only on success (or when disabled); a failure is not
-    cached so a transient issue can recover on the next call.
-    """
-    global _PRODUCTION_STORE, _PRODUCTION_STORE_RESOLVED
-    if _PRODUCTION_STORE_RESOLVED:
-        return _PRODUCTION_STORE
+def _production_store(lead_type_name: str):
+    """Return the configured production model store for one lead type."""
+    lead_key = lead_type_name.strip().lower()
+    if lead_key in _PRODUCTION_STORES:
+        return _PRODUCTION_STORES[lead_key]
 
     from . import config
 
-    cfg = config.load_training_config()
+    lead_type_id = resolve_lead_type_id(lead_key)
+    cfg = config.load_training_config(lead_type_id)
     if cfg.production_storage is None:
-        _PRODUCTION_STORE = None
-        _PRODUCTION_STORE_RESOLVED = True
+        _PRODUCTION_STORES[lead_key] = None
         return None
+
     try:
         store = cfg.production_model_store()
     except Exception as exc:  # noqa: BLE001
@@ -80,16 +67,14 @@ def _production_store():
             "Production storage is configured but could not be initialised; "
             "refusing to silently fall back to local storage."
         ) from exc
-    _PRODUCTION_STORE = store
-    _PRODUCTION_STORE_RESOLVED = True
+
+    _PRODUCTION_STORES[lead_key] = store
     return store
 
 
 def reset_production_store_cache() -> None:
-    """Force re-resolution of the production store (tests / config reloads)."""
-    global _PRODUCTION_STORE, _PRODUCTION_STORE_RESOLVED
-    _PRODUCTION_STORE = None
-    _PRODUCTION_STORE_RESOLVED = False
+    """Force re-resolution of cached production stores."""
+    _PRODUCTION_STORES.clear()
 
 
 def model_dir(lead_type_name: str) -> Path:
@@ -127,7 +112,7 @@ def load_manifest(lead_type_name: str, version: str) -> dict:
         return json.loads(path.read_text())
     # Production-only model (promoted elsewhere, not trained on this box):
     # fall back to the manifest published in production storage.
-    store = _production_store()
+    store = _production_store(lead_type_name)
     if store is not None:
         key = f"{lead_type_name.strip().lower()}/{version}.json"
         if store.exists(key):
@@ -198,15 +183,17 @@ def _assigned_version_numbers(lead_type_name: str) -> set[int]:
             if value:
                 numbers.add(_production_version_number(value))
 
-    store = _production_store()  # raises if configured-but-broken (visible)
+    store = _production_store(
+        lead_type_name
+    )  # raises if configured-but-broken (visible)
     if store is not None:
         lead = lead_type_name.strip().lower()
-        # Reserved version markers (authoritative from this change onward).
+        # Reserved version markers are authoritative for assigned versions.
         for key in store.list(f"{lead}/versions/"):
             match = _PRODUCTION_VERSION_RE.match(Path(key).stem)
             if match:
                 numbers.add(int(match.group("number")))
-        # Promoted manifests that predate the marker scheme.
+        # Promoted manifests also reserve their assigned version numbers.
         for key in store.list(f"{lead}/"):
             name = Path(key).name
             if name.startswith("run_") and name.endswith(".json"):
@@ -233,7 +220,7 @@ def _next_production_model_version(lead_type_name: str) -> str:
     """
     lead_slug = _lead_type_slug(lead_type_name)
     lead_path = lead_type_name.strip().lower()
-    store = _production_store() or _local_store()
+    store = _production_store(lead_type_name) or _local_store()
     number = max(_assigned_version_numbers(lead_type_name), default=0) + 1
     for _ in range(10_000):
         candidate = f"{lead_slug}_v{number}"
@@ -288,7 +275,7 @@ def save_version(
 
     manifest = {
         "training_run_id": training_run_id,
-        "version": training_run_id,  # compatibility for existing serving code
+        "version": training_run_id,
         "production_model_version": None,
         "lead_type_name": lead_type_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -337,7 +324,7 @@ def _read_serving_pointer(lead_type_name: str) -> dict | None:
     # When production storage is configured it is the source of truth: use its
     # pointer (or None = cold start). Do NOT fall back to a possibly-stale local
     # pointer. Only local-only deployments read the local pointer.
-    if _production_store() is not None:  # raises if configured-but-broken
+    if _production_store(lead_type_name) is not None:  # raises if configured-but-broken
         return production_serving_pointer(lead_type_name)
     path = _serving_pointer_path(lead_type_name)
     if not path.exists():
@@ -352,7 +339,9 @@ def serving_model_path(lead_type_name: str, version: str) -> Path | None:
     cache path (usable by ``joblib.load``). Falls back to the local artifact,
     or None when neither exists.
     """
-    store = _production_store()  # raises if configured-but-broken (visible)
+    store = _production_store(
+        lead_type_name
+    )  # raises if configured-but-broken (visible)
     if store is not None:
         key = f"{lead_type_name.strip().lower()}/{version}.pkl"
         # Let production errors (download/head failures) propagate — never mask
@@ -464,7 +453,9 @@ def promote(lead_type_name: str, version: str, reason: str = "") -> dict:
     #    pointer (the commit). Any failure raises here, BEFORE we mark the run
     #    promoted or switch the local pointer, so the previously-serving model
     #    stays authoritative and nothing claims this model is serving.
-    store = _production_store()  # raises if configured-but-broken (visible)
+    store = _production_store(
+        lead_type_name
+    )  # raises if configured-but-broken (visible)
     if store is not None:
         _publish_to_production(
             store, lead_type_name, version, promoted_manifest, pointer
@@ -527,7 +518,7 @@ def _publish_production_mlflow(
     try:
         from . import config
 
-        cfg = config.load_training_config()
+        cfg = config.load_training_config(resolve_lead_type_id(lead_type_name))
         if not cfg.production_mlflow_enabled:
             return
         import joblib
@@ -570,7 +561,7 @@ def _publish_production_mlflow(
 
 def production_serving_pointer(lead_type_name: str) -> dict | None:
     """Return the production serving pointer, or None when unavailable."""
-    store = _production_store()
+    store = _production_store(lead_type_name)
     if store is None:
         return None
     key = f"{lead_type_name.strip().lower()}/current.json"
@@ -818,7 +809,9 @@ def main(argv: list[str] | None = None) -> int:
             reason=args.reason,
         )
         manifest = load_manifest(args.lead_type_name, args.version)
-        training_config = config.load_training_config()
+        training_config = config.load_training_config(
+            resolve_lead_type_id(args.lead_type_name)
+        )
         experiment_name = (
             f"{training_config.mlflow_experiment_name}_{args.lead_type_name}"
         )

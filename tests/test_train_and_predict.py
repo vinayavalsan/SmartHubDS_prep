@@ -115,7 +115,7 @@ def test_serving_frame_selects_and_normalizes():
         "bid": 0.25,
     }
     frame = preprocessing.serving_frame([record], lead_type_id("auto"))
-    numeric, categorical = config.feature_columns(lead_type_id("auto"))
+    numeric, categorical = fe.model_feature_columns(lead_type_id("auto"))
 
     assert list(frame.columns) == numeric + categorical
     assert frame.loc[0, "campaign_id"] == "123"

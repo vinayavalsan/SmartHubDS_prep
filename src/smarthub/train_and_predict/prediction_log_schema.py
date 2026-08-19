@@ -1,11 +1,9 @@
 """Prediction logging: one row per call to /recommend_bid or /explain_bid.
 
-Single-table design (schema_version 2) per the 2026-07-22 DS weekly decision
-(Vinaya + Nimesh) - see docs/PREDICTION_LOG_SCHEMA.md for the full design
-writeup, worked example, and what changed from the original 3-table (v1)
-design. In short: no per-candidate-bid table, no separate SHAP table - both
-fold into JSON columns on a single row, and every call is logged whether it
-succeeded or failed.
+Single-table design (schema_version 2); see docs/PREDICTION_LOG_SCHEMA.md for
+the full design and worked example. Candidate-bid and SHAP details are stored
+in JSON columns on the same row, and every call is logged whether it succeeds
+or fails.
 
 Uses plain SQLAlchemy Core (Table/Column, not the ORM) and stores JSON as
 serialized text, matching this codebase's existing
@@ -54,9 +52,7 @@ except Exception:  # pragma: no cover - version metadata unavailable
 DEFAULT_PREDICTION_LOG_DB_URL = (
     "postgresql+psycopg2://prefect:prefect@postgres:5432/prefect"
 )
-SCHEMA_VERSION = (
-    2  # bumped from the 3-table v1 design -- see docs/PREDICTION_LOG_SCHEMA.md
-)
+SCHEMA_VERSION = 2
 VALID_ENDPOINTS = ("recommend_bid", "explain_bid")
 VALID_STATUSES = ("success", "error")
 
@@ -136,13 +132,10 @@ prediction_log_table = Table(
     Column("decision_reason", Text),
     Column("recommended_bid", Numeric(10, 2)),
     Column("recommended_bid_predicted_win_rate", Numeric(6, 5)),
-    # Renamed from recommended_bid_expected_profit (2026-07-23) -- matches
-    # recommended_bid_predicted_win_rate's "predicted_" naming, avoiding two
-    # different words ("expected" vs. "predicted") for the same idea: a
-    # model-predicted metric at the recommended bid, not a realized one.
+    # Model-predicted profit at the recommended bid, not realized profit.
     Column("recommended_bid_predicted_profit", Numeric(12, 4)),
-    # recommended_bid_predicted_profit / expected_revenue -- added 2026-07-23.
-    # Same nullability as predicted_profit (null whenever there's no
+    # recommended_bid_predicted_profit / expected_revenue. Same nullability as
+    # predicted_profit (null whenever there's no
     # predicted profit to divide: cold start, no viable bid, or an error
     # before a bid was reached).
     Column("recommended_bid_predicted_cm", Numeric(6, 5)),
@@ -438,12 +431,10 @@ class PredictionLogStore:
         recommended_bid, recommended_bid_predicted_win_rate,
         recommended_bid_predicted_profit : float | None
             From ``predict.decide_bid``. ``None`` recommended_bid means "no
-            viable bid" (or an error before one was reached). Renamed from
-            recommended_bid_expected_profit (2026-07-23) for consistency
-            with recommended_bid_predicted_win_rate's naming.
+            viable bid" (or an error before one was reached).
         recommended_bid_predicted_cm : float | None
-            ``recommended_bid_predicted_profit / expected_revenue`` -- added
-            2026-07-23. ``None`` under the same conditions as
+            ``recommended_bid_predicted_profit / expected_revenue``. ``None``
+            under the same conditions as
             recommended_bid_predicted_profit.
         shap_explanation : dict | None
             Everything ``/explain_bid`` adds beyond ``/recommend_bid``

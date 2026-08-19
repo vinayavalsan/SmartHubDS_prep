@@ -20,6 +20,7 @@ import pandas as pd
 from smarthub import __version__ as _PACKAGE_VERSION
 from smarthub.core.lead_types import all_lead_type_ids
 from smarthub.core.lead_types import lead_type_id as get_lead_type_id
+from smarthub.core.lead_types import lead_type_name as get_lead_type_name
 from smarthub.train_and_predict import config, optimizer, preprocessing, registry
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ def resolve_model_uri(lead_type_id: int = get_lead_type_id("auto")) -> str:
     if env_override:
         return env_override
 
-    lead_type_name = config.lead_type_name(lead_type_id)
+    lead_type_name = get_lead_type_name(lead_type_id)
     pinned_version = config.active_model_version()
     if pinned_version:
         return str(registry.version_path(lead_type_name, pinned_version))
@@ -252,7 +253,7 @@ def load_model_and_manifest(lead_type_id: int = get_lead_type_id("auto")):
     if env_override:
         return load_model(model_uri=env_override), None
 
-    lead_type_name = config.lead_type_name(lead_type_id)
+    lead_type_name = get_lead_type_name(lead_type_id)
 
     pinned_version = config.active_model_version()
     version = pinned_version or registry.currently_serving_version(lead_type_name)
@@ -1136,7 +1137,7 @@ if _FASTAPI_AVAILABLE:
         # after that -- the prediction-log insert and SHAP -- runs in background
         # tasks after the response is sent, so it's deliberately NOT counted.
         _t_start = time.perf_counter()
-        lead_type_name = config.lead_type_name(request.lead_type_id)
+        lead_type_name = get_lead_type_name(request.lead_type_id)
         record = None
         try:
             model, manifest = load_model_and_manifest(request.lead_type_id)

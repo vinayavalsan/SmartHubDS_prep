@@ -15,7 +15,6 @@ import yaml
 
 from smarthub.core import paths, task_config
 from smarthub.core.config import get_with_logged_fallback
-from smarthub.core.lead_types import lead_type_name as canonical_lead_type_name
 from smarthub.core.logging_utils import get_logger
 from smarthub.feature_engineering import features as fe
 
@@ -120,12 +119,6 @@ class TrainingConfig:
     mlflow_production_experiment_name: str = "SmartHub Production"
     mlflow_production_registered_model_name: str = ""
 
-    def local_model_store(self):
-        """Filesystem store for local (all-runs) model artifacts."""
-        from smarthub.train_and_predict.model_storage import FilesystemModelStore
-
-        return FilesystemModelStore(str(paths.resolve(self.model_root)))
-
     def production_model_store(self):
         """Production model store (promoted models), or None when disabled."""
         spec = self.production_storage
@@ -176,54 +169,6 @@ class TrainingConfig:
         """
         path = f"{self.report_root}/{lead_type_name_value}"
         return str(paths.resolve(path))
-
-    def model_path(self, lead_type_name_value: str) -> str:
-        """Return the legacy model path for a lead type.
-
-        Inputs
-        ------
-        lead_type_name_value : str
-            Human-readable lead type name.
-
-        Returns
-        -------
-        str
-            Absolute legacy model path.
-        """
-        filename = f"anton_model_{lead_type_name_value}.pkl"
-        return str(paths.resolve(f"{self.model_root}/{filename}"))
-
-
-def lead_type_name(lead_type_id: int) -> str:
-    """Return the human-readable name for a lead type.
-
-    Inputs
-    ------
-    lead_type_id : int
-        SmartHub lead type identifier.
-
-    Returns
-    -------
-    str
-        Human-readable lead type name.
-    """
-    return canonical_lead_type_name(lead_type_id)
-
-
-def feature_columns(lead_type_id: int) -> tuple[list[str], list[str]]:
-    """Return numeric and categorical model features for a lead type.
-
-    Inputs
-    ------
-    lead_type_id : int
-        SmartHub lead type identifier.
-
-    Returns
-    -------
-    tuple[list[str], list[str]]
-        Numeric features followed by categorical features.
-    """
-    return fe.model_feature_columns(lead_type_id)
 
 
 def _env_or_default_path(variable_name: str, default_rel_path: str) -> Path:
@@ -384,11 +329,50 @@ def _positive_int(value: Any, field_name: str) -> int:
     return result
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Return a recursive merge where override values take precedence."""
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def _lead_type_config(
+    root: dict[str, Any],
+    lead_type_id: int,
+    section: str,
+) -> dict[str, Any]:
+    """Resolve shared defaults plus one lead type's overrides."""
+    defaults = _mapping(root.get("defaults"), f"{section}.defaults")
+    lead_types = _mapping(root.get("lead_types"), f"{section}.lead_types")
+
+    lead_config = lead_types.get(lead_type_id)
+    if lead_config is None:
+        lead_config = lead_types.get(str(lead_type_id))
+    if lead_config is None:
+        raise ValueError(
+            f"No {section} configuration found for lead_type_id={lead_type_id}."
+        )
+
+    resolved = _deep_merge(
+        defaults,
+        _mapping(
+            lead_config,
+            f"{section}.lead_types.{lead_type_id}",
+        ),
+    )
+    resolved.pop("name", None)
+    return resolved
+
+
 def _resolve_production_storage(cfg: Any) -> dict[str, Any] | None:
     """Resolve the production model-storage spec, or None when disabled.
 
     An empty ``backend`` (or an absent ``storage.production`` section) means
-    local-only, preserving today's behaviour. ``SMARTHUB_S3_ENDPOINT_URL``
+    local-only operation. ``SMARTHUB_S3_ENDPOINT_URL``
     overrides the endpoint so the same config targets AWS or a MinIO/
     S3-compatible service per environment.
     """
@@ -448,6 +432,7 @@ def _resolve_mlflow_production(cfg: Any) -> dict[str, str]:
 
 
 def load_training_config(
+    lead_type_id: int,
     config_path: str | Path | None = None,
 ) -> TrainingConfig:
     """Load and validate the complete training configuration.
@@ -480,28 +465,39 @@ def load_training_config(
     with resolved_path.open("r", encoding="utf-8") as config_file:
         root = _mapping(yaml.safe_load(config_file) or {}, "root")
 
-    training = _mapping(root.get("training"), "training")
-    calibration_root = _mapping(root.get("calibration"), "calibration")
-    split_root = _mapping(root.get("split"), "split")
-    models_root = _mapping(root.get("models"), "models")
-    optimizer_root = _mapping(root.get("optimizer"), "optimizer")
-    promotion = _mapping(root.get("promotion"), "promotion")
+    training_namespace = _mapping(root.get("training"), "training")
+    training_root = _lead_type_config(
+        training_namespace,
+        lead_type_id,
+        "training",
+    )
+    calibration_root = _mapping(
+        training_root.get("calibration"),
+        "training.calibration",
+    )
+    split_root = _mapping(training_root.get("split"), "training.split")
+    models_root = _mapping(training_root.get("models"), "training.models")
+    optimizer_root = _mapping(
+        training_root.get("optimizer"),
+        "training.optimizer",
+    )
+    promotion = _mapping(training_root.get("promotion"), "training.promotion")
     promotion_criteria = _mapping(
         promotion.get("criteria"),
-        "promotion.criteria",
+        "training.promotion.criteria",
     )
     promotion_monotonicity_root = promotion_criteria.get("monotonicity") or {}
     promotion_monotonicity_root = _mapping(
         promotion_monotonicity_root,
-        "promotion.criteria.monotonicity",
+        "training.promotion.criteria.monotonicity",
     )
-    output = _mapping(root.get("output"), "output")
-    mlflow = _mapping(root.get("mlflow"), "mlflow")
-    storage_root = root.get("storage") or {}
+    output = _mapping(training_root.get("output"), "training.output")
+    mlflow = _mapping(training_root.get("mlflow"), "training.mlflow")
+    storage_root = training_root.get("storage") or {}
     production_storage = _resolve_production_storage(storage_root.get("production"))
     mlflow_production = _resolve_mlflow_production(mlflow.get("production"))
 
-    model_type = str(training.get("model_type", "")).strip().lower()
+    model_type = str(training_root.get("model_type", "")).strip().lower()
     if model_type not in _SUPPORTED_MODELS:
         choices = ", ".join(sorted(_SUPPORTED_MODELS))
         raise ValueError(f"Unsupported training.model_type {model_type!r}: {choices}")
@@ -512,50 +508,50 @@ def load_training_config(
     strategy = str(split_root.get("strategy", "")).strip().lower()
     if strategy not in _SUPPORTED_SPLIT_STRATEGIES:
         choices = ", ".join(sorted(_SUPPORTED_SPLIT_STRATEGIES))
-        raise ValueError(f"Unsupported split.strategy {strategy!r}: {choices}")
+        raise ValueError(f"Unsupported training.split.strategy {strategy!r}: {choices}")
 
     selected_split = copy.deepcopy(
-        _mapping(split_root.get(strategy), f"split.{strategy}")
+        _mapping(split_root.get(strategy), f"training.split.{strategy}")
     )
     selected_split["strategy"] = strategy
     selected_split["test_size"] = _fraction(
         selected_split.get("test_size"),
-        f"split.{strategy}.test_size",
+        f"training.split.{strategy}.test_size",
     )
 
     if strategy == "random":
         if "stratify" not in selected_split:
-            raise ValueError("Missing required config: split.random.stratify")
+            raise ValueError("Missing required config: training.split.random.stratify")
         if not isinstance(selected_split["stratify"], bool):
-            raise TypeError("split.random.stratify must be a YAML boolean.")
+            raise TypeError("training.split.random.stratify must be a YAML boolean.")
 
-    random_seed = int(training["random_seed"])
+    random_seed = int(training_root["random_seed"])
     if "enabled" not in calibration_root:
-        raise ValueError("Missing required config: calibration.enabled")
+        raise ValueError("Missing required config: training.calibration.enabled")
     calibration_enabled = calibration_root["enabled"]
     if not isinstance(calibration_enabled, bool):
-        raise TypeError("calibration.enabled must be a YAML boolean.")
+        raise TypeError("training.calibration.enabled must be a YAML boolean.")
 
     if calibration_enabled:
         if "method" not in calibration_root:
             raise ValueError(
-                "Missing required config: calibration.method "
-                "when calibration.enabled is true."
+                "Missing required config: training.calibration.method "
+                "when training.calibration.enabled is true."
             )
         if "cv" not in calibration_root:
             raise ValueError(
-                "Missing required config: calibration.cv "
-                "when calibration.enabled is true."
+                "Missing required config: training.calibration.cv "
+                "when training.calibration.enabled is true."
             )
 
         calibration_method = str(calibration_root["method"]).strip().lower()
         if calibration_method not in {"sigmoid", "isotonic"}:
             raise ValueError(
-                "calibration.method must be one of 'sigmoid' or 'isotonic'."
+                "training.calibration.method must be one of 'sigmoid' or 'isotonic'."
             )
         calibration_cv = _positive_int(
             calibration_root["cv"],
-            "calibration.cv",
+            "training.calibration.cv",
         )
     else:
         calibration_method = None
@@ -563,7 +559,7 @@ def load_training_config(
     model_parameters = copy.deepcopy(
         _mapping(
             models_root[model_type],
-            f"models.{model_type}",
+            f"training.models.{model_type}",
         )
     )
     model_parameters["random_state"] = random_seed
@@ -571,24 +567,24 @@ def load_training_config(
     optimizer = OptimizerConfig(
         target_cm=_fraction(
             optimizer_root.get("target_cm"),
-            "optimizer.target_cm",
+            "training.optimizer.target_cm",
         ),
         minimum_bid=_positive_float(
             optimizer_root.get("minimum_bid"),
-            "optimizer.minimum_bid",
+            "training.optimizer.minimum_bid",
         ),
         bid_step=_positive_float(
             optimizer_root.get("bid_step"),
-            "optimizer.bid_step",
+            "training.optimizer.bid_step",
         ),
         chunk_size=_positive_int(
             get_with_logged_fallback(
                 optimizer_root,
                 "chunk_size",
                 _DEFAULT_OPTIMIZER_CHUNK_SIZE,
-                "optimizer.chunk_size",
+                "training.optimizer.chunk_size",
             ),
-            "optimizer.chunk_size",
+            "training.optimizer.chunk_size",
         ),
     )
 
@@ -596,11 +592,11 @@ def load_training_config(
         promotion_monotonicity_root,
         "enabled",
         _DEFAULT_PROMOTION_MONOTONICITY_ENABLED,
-        "promotion.criteria.monotonicity.enabled",
+        "training.promotion.criteria.monotonicity.enabled",
     )
     if not isinstance(promotion_monotonicity_enabled, bool):
         raise TypeError(
-            "promotion.criteria.monotonicity.enabled must be a YAML boolean."
+            "training.promotion.criteria.monotonicity.enabled must be a YAML boolean."
         )
 
     promotion_monotonicity_tolerance = _non_negative_float(
@@ -608,22 +604,22 @@ def load_training_config(
             promotion_monotonicity_root,
             "tolerance",
             _DEFAULT_MONOTONICITY_TOLERANCE,
-            "promotion.criteria.monotonicity.tolerance",
+            "training.promotion.criteria.monotonicity.tolerance",
         ),
-        "promotion.criteria.monotonicity.tolerance",
+        "training.promotion.criteria.monotonicity.tolerance",
     )
     promotion_monotonicity_max_violation_rate = _non_negative_float(
         get_with_logged_fallback(
             promotion_monotonicity_root,
             "max_violation_rate",
             _DEFAULT_MONOTONICITY_MAX_VIOLATION_RATE,
-            "promotion.criteria.monotonicity.max_violation_rate",
+            "training.promotion.criteria.monotonicity.max_violation_rate",
         ),
-        "promotion.criteria.monotonicity.max_violation_rate",
+        "training.promotion.criteria.monotonicity.max_violation_rate",
     )
     if promotion_monotonicity_max_violation_rate > 1.0:
         raise ValueError(
-            "promotion.criteria.monotonicity.max_violation_rate "
+            "training.promotion.criteria.monotonicity.max_violation_rate "
             "must be between 0 and 1."
         )
 
@@ -634,52 +630,57 @@ def load_training_config(
     )
 
     if "comparison_artifacts" not in output:
-        raise ValueError("Missing required config: output.comparison_artifacts")
+        raise ValueError(
+            "Missing required config: training.output.comparison_artifacts"
+        )
     comparison_artifacts = output["comparison_artifacts"]
     if not isinstance(comparison_artifacts, bool):
-        raise TypeError("output.comparison_artifacts must be a YAML boolean.")
+        raise TypeError("training.output.comparison_artifacts must be a YAML boolean.")
 
     promotion_mode = str(promotion.get("mode", "")).strip().lower()
     if promotion_mode not in _SUPPORTED_PROMOTION_MODES:
         choices = ", ".join(sorted(_SUPPORTED_PROMOTION_MODES))
-        raise ValueError(f"Unsupported promotion.mode {promotion_mode!r}: {choices}")
+        raise ValueError(
+            f"Unsupported training.promotion.mode {promotion_mode!r}: {choices}"
+        )
 
-    resolved_raw = copy.deepcopy(root)
+    resolved_raw = copy.deepcopy(training_root)
+    resolved_raw["lead_type_id"] = int(lead_type_id)
     resolved_raw["models"] = {model_type: copy.deepcopy(models_root[model_type])}
     promotion_max_log_loss_regression = _non_negative_float(
         promotion_criteria.get("max_log_loss_regression"),
-        "promotion.criteria.max_log_loss_regression",
+        "training.promotion.criteria.max_log_loss_regression",
     )
     promotion_min_profit_ratio = _positive_float(
         promotion_criteria.get("min_profit_ratio"),
-        "promotion.criteria.min_profit_ratio",
+        "training.promotion.criteria.min_profit_ratio",
     )
     promotion_max_log_loss = _positive_float(
         get_with_logged_fallback(
             promotion_criteria,
             "max_log_loss",
             _DEFAULT_PROMOTION_MAX_LOG_LOSS,
-            "promotion.criteria.max_log_loss",
+            "training.promotion.criteria.max_log_loss",
         ),
-        "promotion.criteria.max_log_loss",
+        "training.promotion.criteria.max_log_loss",
     )
     promotion_min_expected_profit = _non_negative_float(
         get_with_logged_fallback(
             promotion_criteria,
             "min_expected_profit",
             _DEFAULT_PROMOTION_MIN_EXPECTED_PROFIT,
-            "promotion.criteria.min_expected_profit",
+            "training.promotion.criteria.min_expected_profit",
         ),
-        "promotion.criteria.min_expected_profit",
+        "training.promotion.criteria.min_expected_profit",
     )
     promotion_max_absolute_profit_loss_tolerance = _non_negative_float(
         get_with_logged_fallback(
             promotion_criteria,
             "max_absolute_profit_loss_tolerance",
             _DEFAULT_PROMOTION_MAX_ABSOLUTE_PROFIT_LOSS_TOLERANCE,
-            "promotion.criteria.max_absolute_profit_loss_tolerance",
+            "training.promotion.criteria.max_absolute_profit_loss_tolerance",
         ),
-        "promotion.criteria.max_absolute_profit_loss_tolerance",
+        "training.promotion.criteria.max_absolute_profit_loss_tolerance",
     )
     resolved_raw["resolved"] = {
         "config_path": str(resolved_path),
@@ -821,7 +822,7 @@ def shap_enrichment_mode() -> str:
     Three modes, so the current behaviour and the offloaded behaviour can run
     side by side and be compared before either is removed:
 
-    - ``"inprocess"`` (default -- unchanged legacy behaviour): the serving
+    - ``"inprocess"`` (default): the serving
       process computes SHAP in a Starlette ``BackgroundTask`` right after the
       response is sent. Correct, but the ~1.5 s of CPU-bound work runs on the
       same worker and contends for the GIL with later requests.
@@ -856,37 +857,6 @@ def shap_enrichment_mode() -> str:
     return mode
 
 
-# Compatibility aliases allow existing prediction and optimizer modules to use
-# the new YAML-backed values without a second configuration source.
-_DEFAULT_CONFIG = load_training_config()
-RANDOM_SEED = _DEFAULT_CONFIG.random_seed
-TARGET_CM = _DEFAULT_CONFIG.optimizer.target_cm
-MIN_BID = _DEFAULT_CONFIG.optimizer.minimum_bid
-BID_STEP = _DEFAULT_CONFIG.optimizer.bid_step
-
-
-def target_cm_value() -> float:
-    """Return the configured target contribution margin.
-
-    Returns
-    -------
-    float
-        Configured target contribution margin.
-    """
-    return _DEFAULT_CONFIG.optimizer.target_cm
-
-
-def min_bid_value() -> float:
-    """Return the configured minimum candidate bid.
-
-    Returns
-    -------
-    float
-        Configured minimum candidate bid.
-    """
-    return _DEFAULT_CONFIG.optimizer.minimum_bid
-
-
 @dataclass(frozen=True)
 class HyperparameterSearchConfig:
     """Store resolved settings for manual hyperparameter search."""
@@ -900,6 +870,7 @@ class HyperparameterSearchConfig:
     random_seed: int
     n_jobs: int
     validation_strategy: str
+    split: dict[str, Any]
     holdout_fraction: float
     probability_shortlist_top_n: int
     optimizer_top_n: int
@@ -1103,6 +1074,7 @@ def _validate_search_parameter(
 
 
 def load_hyperparameter_search_config(
+    lead_type_id: int,
     config_path: str | Path | None = None,
 ) -> HyperparameterSearchConfig:
     """Load and validate manual hyperparameter-search configuration.
@@ -1137,13 +1109,24 @@ def load_hyperparameter_search_config(
     with resolved_path.open("r", encoding="utf-8") as config_file:
         root = _mapping(yaml.safe_load(config_file) or {}, "root")
 
-    search = _mapping(root.get("search"), "search")
-    output = _mapping(root.get("output"), "output")
-    models_root = _mapping(root.get("models"), "models")
-    validation = _mapping(root.get("validation"), "validation")
-    finalists = _mapping(root.get("finalists"), "finalists")
-    optimizer_cfg = _mapping(root.get("optimizer") or {}, "optimizer")
-    calibration_cfg = _mapping(root.get("calibration") or {}, "calibration")
+    hpo_namespace = _mapping(
+        root.get("hyperparameter_search"),
+        "hyperparameter_search",
+    )
+    hpo_root = _lead_type_config(
+        hpo_namespace,
+        lead_type_id,
+        "hyperparameter_search",
+    )
+    search = _mapping(hpo_root.get("search"), "search")
+    search["model_type"] = hpo_root.get("model_type")
+    output = _mapping(hpo_root.get("output"), "output")
+    models_root = _mapping(hpo_root.get("models"), "models")
+    validation = _mapping(hpo_root.get("validation"), "validation")
+    split_root = _mapping(hpo_root.get("split"), "split")
+    finalists = _mapping(hpo_root.get("finalists"), "finalists")
+    optimizer_cfg = _mapping(hpo_root.get("optimizer") or {}, "optimizer")
+    calibration_cfg = _mapping(hpo_root.get("calibration") or {}, "calibration")
     monotonicity_cfg = _mapping(
         finalists.get("monotonicity"),
         "finalists.monotonicity",
@@ -1163,6 +1146,27 @@ def load_hyperparameter_search_config(
     )
     if validation_strategy not in {"time", "stratified_random"}:
         raise ValueError("validation.strategy must be 'time' or 'stratified_random'.")
+
+    split_strategy = str(split_root.get("strategy", "")).strip().lower()
+    if split_strategy not in _SUPPORTED_SPLIT_STRATEGIES:
+        choices = ", ".join(sorted(_SUPPORTED_SPLIT_STRATEGIES))
+        raise ValueError(
+            f"Unsupported training.split.strategy {split_strategy!r}: {choices}"
+        )
+
+    selected_split = copy.deepcopy(
+        _mapping(split_root.get(split_strategy), f"split.{split_strategy}")
+    )
+    selected_split["strategy"] = split_strategy
+    selected_split["test_size"] = _fraction(
+        selected_split.get("test_size"),
+        f"split.{split_strategy}.test_size",
+    )
+    if split_strategy == "random":
+        if "stratify" not in selected_split:
+            raise ValueError("Missing required config: training.split.random.stratify")
+        if not isinstance(selected_split["stratify"], bool):
+            raise TypeError("training.split.random.stratify must be a YAML boolean.")
 
     holdout_fraction = float(
         get_with_logged_fallback(
@@ -1233,9 +1237,9 @@ def load_hyperparameter_search_config(
                 calibration_cfg,
                 "cv",
                 _DEFAULT_HPO_CALIBRATION_CV,
-                "calibration.cv",
+                "training.calibration.cv",
             ),
-            "calibration.cv",
+            "training.calibration.cv",
         )
         if calibration_cv < 2:
             raise ValueError("calibration.cv must be at least 2.")
@@ -1271,9 +1275,9 @@ def load_hyperparameter_search_config(
                 optimizer_cfg,
                 "chunk_size",
                 _DEFAULT_OPTIMIZER_CHUNK_SIZE,
-                "optimizer.chunk_size",
+                "training.optimizer.chunk_size",
             ),
-            "optimizer.chunk_size",
+            "training.optimizer.chunk_size",
         )
         if not 0.0 <= target_cm < 1.0:
             raise ValueError("optimizer.target_cm must be in [0, 1).")
@@ -1382,7 +1386,8 @@ def load_hyperparameter_search_config(
     if not output_root:
         raise ValueError("output.root must not be empty.")
 
-    resolved_raw = copy.deepcopy(root)
+    resolved_raw = copy.deepcopy(hpo_root)
+    resolved_raw["lead_type_id"] = int(lead_type_id)
     resolved_raw["models"] = {
         selected_model_type: copy.deepcopy(root["models"][selected_model_type])
     }
@@ -1402,6 +1407,7 @@ def load_hyperparameter_search_config(
         random_seed=int(search["random_seed"]),
         n_jobs=int(search["n_jobs"]),
         validation_strategy=validation_strategy,
+        split=selected_split,
         holdout_fraction=holdout_fraction,
         probability_shortlist_top_n=probability_shortlist_top_n,
         optimizer_top_n=optimizer_top_n,
