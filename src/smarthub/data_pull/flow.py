@@ -23,8 +23,9 @@ from smarthub.core import notifications, storage, task_config
 from smarthub.core.config import PullSettings, StorageSettings
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.data_pull import validation_report as vreport
+from smarthub.data_pull.models import coerce_leads_dtypes
 from smarthub.data_pull.pull import fetch_leads
-from smarthub.data_pull.validation_runner import validate_leads
+from smarthub.data_pull.validation_runner import validate_leads, validate_raw_kinds
 from smarthub.data_pull.windowing import compute_pull_window, format_dt, parse_dt
 
 WATERMARK_PREFIX = "smarthub_last_pull_timestamp"
@@ -118,13 +119,19 @@ def fetch(
 
 
 @task
+def coerce(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce a raw pull to the stable storage/modeling dtypes."""
+    return coerce_leads_dtypes(df)
+
+
+@task
 def persist(df: pd.DataFrame) -> dict:
-    """Upsert the pulled frame into the configured storage backend(s).
+    """Upsert the coerced frame into the configured storage backend(s).
 
     Inputs
     ------
     df : pandas.DataFrame
-        The pulled leads frame to store.
+        The dtype-coerced leads frame to store.
 
     Returns
     -------
@@ -135,7 +142,12 @@ def persist(df: pd.DataFrame) -> dict:
 
 
 @task(name="validate-leads")
-def validate(df: pd.DataFrame, lead_type_name: str, lead_type_id: int):
+def validate(
+    raw_df: pd.DataFrame,
+    df: pd.DataFrame,
+    lead_type_name: str,
+    lead_type_id: int,
+):
     """Validate the freshly-pulled batch (warn + report only; never gates).
 
     Publishes a per-lead-type data-quality Prefect artifact so the success
@@ -144,8 +156,10 @@ def validate(df: pd.DataFrame, lead_type_name: str, lead_type_id: int):
 
     Inputs
     ------
+    raw_df : pandas.DataFrame
+        Raw warehouse values before dtype coercion.
     df : pandas.DataFrame
-        The freshly-pulled leads batch.
+        Dtype-coerced leads batch used for semantic validation.
     lead_type_name : str
         Lead type name, used in the artifact key and description.
     lead_type_id : int
@@ -159,8 +173,12 @@ def validate(df: pd.DataFrame, lead_type_name: str, lead_type_id: int):
     logger = get_run_logger()
     threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
     try:
+        raw_kind_violations = validate_raw_kinds(raw_df)
         rep = validate_leads(
-            df, high_missing_threshold=threshold, lead_type_id=lead_type_id
+            df,
+            high_missing_threshold=threshold,
+            lead_type_id=lead_type_id,
+            raw_kind_violations=raw_kind_violations,
         )
     except Exception as exc:  # noqa: BLE001 - validation must never break a pull
         logger.warning("Data validation skipped (error): %s", exc)
@@ -246,8 +264,9 @@ def data_pull_flow(
     logger.info("[%s] pulling window %s -> %s", lead_type_name, min_s, max_s)
 
     previous_watermark = Variable.get(var_name, default="(none — first run)")
-    df = fetch(min_s, max_s, lead_type_id, with_expected_revenue, selected_only)
-    quality = validate(df, lead_type_name, lead_type_id)
+    raw_df = fetch(min_s, max_s, lead_type_id, with_expected_revenue, selected_only)
+    df = coerce(raw_df)
+    quality = validate(raw_df, df, lead_type_name, lead_type_id)
     result = persist(df)
     watermark = update_watermark(df, var_name, max_s)
 

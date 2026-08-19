@@ -151,8 +151,7 @@ def fetch_leads(
             )
             leads_df = _run(_build_engine(rs, "localhost", tunnel.local_bind_port))
 
-    leads_df = coerce_leads_dtypes(leads_df)
-    logger.info("Fetched leads frame with shape %s", leads_df.shape)
+    logger.info("Fetched raw leads frame with shape %s", leads_df.shape)
     return leads_df
 
 
@@ -187,7 +186,7 @@ def run(
     pandas.DataFrame
         The fetched (and persisted) leads frame.
     """
-    leads_df = fetch_leads(
+    raw_df = fetch_leads(
         PullSettings.from_env(),
         min_created_at,
         max_created_at,
@@ -195,7 +194,16 @@ def run(
         selected_only=selected_only,
         lead_type_ids=lead_type_ids,
     )
-    _validate(leads_df, lead_type_ids=lead_type_ids)
+
+    from smarthub.data_pull.validation_runner import validate_raw_kinds
+
+    raw_kind_violations = validate_raw_kinds(raw_df)
+    leads_df = coerce_leads_dtypes(raw_df)
+    _validate(
+        leads_df,
+        lead_type_ids=lead_type_ids,
+        raw_kind_violations=raw_kind_violations,
+    )
     results = storage.save_pull(leads_df, StorageSettings.from_env())
     logger.info("Persisted pull: %s", results)
     return leads_df
@@ -204,6 +212,7 @@ def run(
 def _validate(
     leads_df: pd.DataFrame,
     lead_type_ids: Sequence[int] | None = None,
+    raw_kind_violations=None,
 ) -> None:
     """Run data validation on the fetched batch (warn + report only).
 
@@ -220,7 +229,12 @@ def _validate(
 
         ids = list(lead_type_ids or [])
         if not ids:
-            report = validate_leads(leads_df, threshold, lead_type_id=None)
+            report = validate_leads(
+                leads_df,
+                threshold,
+                lead_type_id=None,
+                raw_kind_violations=raw_kind_violations,
+            )
             vreport.log_detailed(report, logger)
             return
 
@@ -233,10 +247,16 @@ def _validate(
                 lead_type_id,
                 f"{len(subset):,}",
             )
+            subset_raw_kind_violations = [
+                violation
+                for violation in (raw_kind_violations or [])
+                if violation.column in subset.columns
+            ]
             report = validate_leads(
                 subset,
                 threshold,
                 lead_type_id=lead_type_id,
+                raw_kind_violations=subset_raw_kind_violations,
             )
             vreport.log_detailed(report, logger)
     except Exception as exc:  # noqa: BLE001 - validation must never break a pull

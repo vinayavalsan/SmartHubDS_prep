@@ -136,6 +136,44 @@ def _run_schema_checks(df: pd.DataFrame):
         return violations, True
 
 
+def validate_raw_kinds(df: pd.DataFrame) -> list[RuleViolation]:
+    """Validate raw values against each registry field's declared kind.
+
+    This check runs before storage dtype coercion so malformed source values
+    remain distinguishable from genuinely missing values. Missing and blank
+    values are ignored here because missingness is reported separately by the
+    ordinary validation pass.
+
+    Inputs
+    ------
+    df : pandas.DataFrame
+        Raw dataframe exactly as returned by the warehouse query.
+
+    Returns
+    -------
+    list[RuleViolation]
+        One violation per field with malformed raw values.
+    """
+    violations: list[RuleViolation] = []
+    for name, spec in field_registry.RAW_FIELD_REGISTRY.items():
+        if name not in df.columns:
+            continue
+
+        result = rules.validate_kind(df[name], spec.validation.kind)
+        if result.count <= 0:
+            continue
+
+        violations.append(
+            RuleViolation(
+                column=name,
+                check=result.check,
+                count=result.count,
+                examples=list(result.examples),
+            )
+        )
+    return violations
+
+
 def _run_custom_rules(df: pd.DataFrame) -> list[RuleViolation]:
     """Run each registered field's ``custom_rule`` and fold hits into violations.
 
@@ -180,6 +218,7 @@ def validate_leads(
     df: pd.DataFrame,
     high_missing_threshold: float = DEFAULT_HIGH_MISSING_THRESHOLD,
     lead_type_id: int | None = None,
+    raw_kind_violations: list[RuleViolation] | None = None,
 ) -> ValidationReport:
     """Validate a raw ``lead_pings`` batch. Detect-only; never mutates ``df``.
 
@@ -196,6 +235,9 @@ def validate_leads(
         pull) — aren't flagged as high-missing. ``None`` (e.g. an all-types
         pull) applies no scoping. The full per-column ``missing`` rates are
         always kept intact regardless.
+    raw_kind_violations : list[RuleViolation] | None
+        Raw-value kind violations captured before dtype coercion. These are
+        merged into the ordinary rule violations for one combined report.
 
     Returns
     -------
@@ -222,7 +264,11 @@ def validate_leads(
     # batch. Row-level validation runs on the training-eligible population.
     schema_issues = rules.schema_drift(df)
     rule_violations, schema_checked = _run_schema_checks(validation_df)
-    rule_violations = rule_violations + _run_custom_rules(validation_df)
+    rule_violations = (
+        list(raw_kind_violations or [])
+        + rule_violations
+        + _run_custom_rules(validation_df)
+    )
 
     # Checks that depend on rows removed by the pre-validation filters must run
     # before those rows are excluded.

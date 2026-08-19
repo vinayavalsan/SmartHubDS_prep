@@ -26,8 +26,18 @@ from smarthub.core.lead_types import all_lead_types
 
 from . import field_registry
 
-# Columns the pull is expected to produce (drives schema-drift detection).
+# Registered raw fields must always be present in the pull. The enriched
+# expected-revenue query also adds a small set of intentional derived/joined
+# columns; those are allowed when present but are not required because callers
+# may explicitly disable the expected-revenue join.
 EXPECTED_COLUMNS: tuple[str, ...] = tuple(field_registry.field_names())
+ALLOWED_DERIVED_COLUMNS: frozenset[str] = frozenset(
+    {
+        "expected_revenue",
+        "realized_payout",
+        "num_selected_listings",
+    }
+)
 
 
 def leads_schema():
@@ -449,9 +459,10 @@ def schema_drift(df: pd.DataFrame) -> list[str]:
     """
     have = set(df.columns)
     expected = set(EXPECTED_COLUMNS)
+    allowed = expected | set(ALLOWED_DERIVED_COLUMNS)
     issues = []
     missing = sorted(expected - have)
-    extra = sorted(have - expected)
+    extra = sorted(have - allowed)
     if missing:
         issues.append(f"missing columns: {', '.join(missing)}")
     if extra:
