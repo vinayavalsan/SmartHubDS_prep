@@ -31,22 +31,21 @@ from smarthub.data_pull.windowing import compute_pull_window, format_dt, parse_d
 WATERMARK_PREFIX = "smarthub_last_pull_timestamp"
 
 
-def watermark_variable(lead_type_name: str) -> str:
-    """Build the watermark Variable name for a lead type.
-
-    Lowercased and underscore-safe, one watermark per lead type.
+def watermark_variable(lead_type_id: int) -> str:
+    """Build the watermark Variable name for a registered lead type ID.
 
     Inputs
     ------
-    lead_type_name : str
-        Lead type name (e.g. ``"auto"``); whitespace/case are normalised.
+    lead_type_id : int
+        Registered lead-type ID.
 
     Returns
     -------
     str
         Variable name ``smarthub_last_pull_timestamp_<lead_type_name>``.
     """
-    return f"{WATERMARK_PREFIX}_{lead_type_name.strip().lower()}"
+    name = resolve_lead_type_name(lead_type_id)
+    return f"{WATERMARK_PREFIX}_{name.strip().lower()}"
 
 
 def _utc_now_naive() -> datetime:
@@ -145,7 +144,6 @@ def persist(df: pd.DataFrame) -> dict:
 def validate(
     raw_df: pd.DataFrame,
     df: pd.DataFrame,
-    lead_type_name: str,
     lead_type_id: int,
 ):
     """Validate the freshly-pulled batch (warn + report only; never gates).
@@ -160,8 +158,6 @@ def validate(
         Raw warehouse values before dtype coercion.
     df : pandas.DataFrame
         Dtype-coerced leads batch used for semantic validation.
-    lead_type_name : str
-        Lead type name, used in the artifact key and description.
     lead_type_id : int
         Lead type id; scopes the high-missing catalogue to this type's fields.
 
@@ -171,6 +167,7 @@ def validate(
         The validation report, or ``None`` if validation raised.
     """
     logger = get_run_logger()
+    lead_type_name = resolve_lead_type_name(lead_type_id)
     threshold = task_config.get_float("validation", "high_missing_threshold", 0.5)
     try:
         raw_kind_violations = validate_raw_kinds(raw_df)
@@ -258,7 +255,7 @@ def data_pull_flow(
     logger = get_run_logger()
     started_at = _utc_now_naive()
     lead_type_name = resolve_lead_type_name(lead_type_id)
-    var_name = watermark_variable(lead_type_name)
+    var_name = watermark_variable(lead_type_id)
 
     min_s, max_s = resolve_window(var_name, overlap_hours, default_lookback_hours)
     logger.info("[%s] pulling window %s -> %s", lead_type_name, min_s, max_s)
@@ -266,7 +263,7 @@ def data_pull_flow(
     previous_watermark = Variable.get(var_name, default="(none — first run)")
     raw_df = fetch(min_s, max_s, lead_type_id, with_expected_revenue, selected_only)
     df = coerce(raw_df)
-    quality = validate(raw_df, df, lead_type_name, lead_type_id)
+    quality = validate(raw_df, df, lead_type_id)
     result = persist(df)
     watermark = update_watermark(df, var_name, max_s)
 
@@ -274,7 +271,6 @@ def data_pull_flow(
         "[%s] persisted %s; watermark now %s", lead_type_name, result, watermark
     )
     _report(
-        lead_type_name,
         lead_type_id,
         min_s,
         max_s,
@@ -284,7 +280,6 @@ def data_pull_flow(
         watermark,
     )
     _notify_success(
-        lead_type_name,
         lead_type_id,
         min_s,
         max_s,
@@ -299,7 +294,6 @@ def data_pull_flow(
 
 
 def _notify_success(
-    lead_type_name,
     lead_type_id,
     min_s,
     max_s,
@@ -317,8 +311,6 @@ def _notify_success(
 
     Inputs
     ------
-    lead_type_name : str
-        Lead type name shown in the subject.
     lead_type_id : int
         Lead type id shown in the subject.
     min_s : str
@@ -338,6 +330,7 @@ def _notify_success(
     quality : ValidationReport | None
         Optional validation report to append as a group.
     """
+    lead_type_name = resolve_lead_type_name(lead_type_id)
     rows = int(len(df))
     parquet_paths = result.get("parquet_paths") or []
     parquet_txt = ", ".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
@@ -379,15 +372,11 @@ def _notify_success(
     )
 
 
-def _report(
-    lead_type_name, lead_type_id, min_s, max_s, df, result, prev_wm, new_wm
-) -> None:
+def _report(lead_type_id, min_s, max_s, df, result, prev_wm, new_wm) -> None:
     """Publish a Prefect markdown artifact summarising this pull.
 
     Inputs
     ------
-    lead_type_name : str
-        Lead type name for the artifact key and heading.
     lead_type_id : int
         Lead type id shown in the summary.
     min_s : str
@@ -403,6 +392,7 @@ def _report(
     new_wm : str
         Watermark value after this pull.
     """
+    lead_type_name = resolve_lead_type_name(lead_type_id)
     rows = int(len(df))
     won = "-"
     if rows and "won" in df.columns:
