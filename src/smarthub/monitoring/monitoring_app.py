@@ -178,8 +178,8 @@ def main():
 
     days = st.selectbox(
         "History window",
-        options=[7, 14, 30, 60, 90],
-        index=1,
+        options=[3, 4, 5, 6, 7],
+        index=0,
         format_func=lambda d: f"last {d} days",
         key="mon_days",
     )
