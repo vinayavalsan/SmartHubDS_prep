@@ -49,7 +49,7 @@ prediction:
   # Fraction of a bid's optimum to probe above/below on a scheduled explore
   # slot (hour-of-week bucketed — see exploration_slot()). Also sets schedule
   # density: N = round(1/this), so 0.10 = 1-in-10 hour-of-week buckets explore.
-  exploration_variance_pct: 0.10
+  exploration_variance_pct: 0.00
   # How many days old a currently-serving model's training data can be before
   # it's flagged as stale in /recommend_bid and /explain_bid responses
   # (decision_reason, model_data_age_days). Informational only — the explicit

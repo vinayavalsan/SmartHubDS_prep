@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from smarthub.core.lead_types import all_lead_types
+from smarthub.core.lead_types import all_lead_types, lead_type_name
 
 from .validation_custom import validate_us_state
 
@@ -60,7 +60,6 @@ class ValidationSpec:
     max_value: float | int | None = None
     allowed_values: frozenset[Any] | None = None
     custom_rule: ValidationRule | None = None
-    severity: str = "error"  # "error" | "warn"
     unique: bool = False  # values must be unique across the batch (e.g. id)
 
 
@@ -689,6 +688,27 @@ def numeric_validation_bounds(
     if spec.validation.kind != "numeric":
         raise ValueError(f"Field {name!r} is not configured as numeric.")
     return spec.validation.min_value, spec.validation.max_value
+
+
+def columns_not_for_lead_type_id(lead_type_id: int) -> set[str]:
+    """Registered raw columns that do NOT apply to a given lead type ID.
+
+    Inputs
+    ------
+    lead_type_id : int
+        Registered lead-type ID.
+
+    Returns
+    -------
+    set[str]
+        Enabled field names outside the resolved lead type's scope. Returns an
+        empty set when the ID is not registered.
+    """
+    try:
+        resolved_name = lead_type_name(lead_type_id)
+    except ValueError:
+        return set()
+    return columns_not_for_lead_type(resolved_name)
 
 
 def columns_not_for_lead_type(lead_type_name: str) -> set[str]:

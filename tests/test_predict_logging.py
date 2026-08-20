@@ -70,6 +70,7 @@ def client(tmp_path, monkeypatch, log_store):
     monkeypatch.setattr(registry, "MODEL_DIR_ROOT", tmp_path / "models")
     monkeypatch.delenv("MODEL_URI", raising=False)
     monkeypatch.setattr(config, "active_model_version", lambda: None)
+    monkeypatch.setattr(config, "exploration_variance_pct", lambda: 0.0)
     # Prediction logging is decoupled (async writer thread) in production; force
     # synchronous inline writes in tests so the row is visible immediately after
     # the request (no polling), keeping these assertions deterministic.

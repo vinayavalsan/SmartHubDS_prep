@@ -41,12 +41,10 @@ deployments:
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-          lead_type_name: auto
       - cron: "15 */4 * * *"     # home (staggered 15 min)
         timezone: "UTC"
         parameters:
           lead_type_id: 1
-          lead_type_name: home
 
   # STEP 2 — RUN AFTER data-pull.
   # Feature extraction: same work pool, separate queue ('features').

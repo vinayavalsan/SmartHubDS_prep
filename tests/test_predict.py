@@ -136,7 +136,9 @@ def test_decide_bid_cold_start_fallback_bid_formula(monkeypatch):
 # --- decide_bid: model path ---------------------------------------------------
 
 
-def test_decide_bid_model_path_matches_raw_optimizer_when_not_exploring():
+def test_decide_bid_model_path_matches_raw_optimizer_when_not_exploring(monkeypatch):
+    monkeypatch.setattr(config, "exploration_variance_pct", lambda: 0.0)
+
     model = _ConstantWinRateModel(win_rate=0.6)
     row = _row()
     result = predict.decide_bid(
@@ -161,6 +163,7 @@ def test_decide_bid_model_path_matches_raw_optimizer_when_not_exploring():
 
 
 def test_decide_bid_recency_flag_when_model_is_stale(monkeypatch):
+    monkeypatch.setattr(config, "exploration_variance_pct", lambda: 0.0)
     monkeypatch.setattr(config, "recency_window_days", lambda: 30)
     stale_manifest = {"created_at": "2020-01-01T00:00:00+00:00"}
     result = predict.decide_bid(
@@ -178,7 +181,9 @@ def test_decide_bid_recency_flag_when_model_is_stale(monkeypatch):
     assert "recency window" in result["decision_reason"]
 
 
-def test_decide_bid_no_recency_note_when_manifest_missing():
+def test_decide_bid_no_recency_note_when_manifest_missing(monkeypatch):
+    monkeypatch.setattr(config, "exploration_variance_pct", lambda: 0.0)
+
     result = predict.decide_bid(
         row=_row(),
         model=_ConstantWinRateModel(),
@@ -197,7 +202,9 @@ def test_decide_bid_no_recency_note_when_manifest_missing():
 # --- decide_bid: exploration path ---------------------------------------------
 
 
-def test_decide_bid_exploration_perturbs_and_rescores_at_the_new_bid():
+def test_decide_bid_exploration_perturbs_and_rescores_at_the_new_bid(monkeypatch):
+    monkeypatch.setattr(config, "exploration_variance_pct", lambda: 0.10)
+
     model = _LinearWinRateModel(intercept=1.0, slope=0.02)
     row = _row()
     expected_revenue, target_cm, min_bid, bid_step = 20.0, 0.25, 5.0, 0.5

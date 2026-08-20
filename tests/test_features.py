@@ -128,8 +128,8 @@ def test_implausible_age_is_not_fixed_when_age_cohort_is_disabled(monkeypatch):
     assert "age_cohort" not in table.columns
 
 
-def test_is_workday_from_pst_date(monkeypatch, tmp_path):
-    """is_workday is derived from the Pacific date (weekday vs weekend)."""
+def test_is_workday_from_created_at_pacific(monkeypatch, tmp_path):
+    """is_workday uses the Pacific calendar date derived from UTC created_at."""
     from smarthub.core import holidays
     from smarthub.feature_engineering.features import build_training_table
 
@@ -142,16 +142,19 @@ def test_is_workday_from_pst_date(monkeypatch, tmp_path):
                 "won": ["true", "", "true"],
                 "bid": [5.0, 6.0, 7.0],
                 "created_at": pd.to_datetime(
-                    ["2026-06-22 10:00", "2026-06-20 10:00", "2026-06-22 11:00"]
+                    [
+                        "2026-06-22 10:00",
+                        "2026-06-21 06:00",
+                        "2026-06-23 06:30",
+                    ]
                 ),
-                "pst_date": pd.to_datetime(["2026-06-22", "2026-06-20", "2026-06-22"]),
             }
         )
         table = build_training_table(raw).set_index("id")
         assert "is_workday" in table.columns
-        assert table.loc[1, "is_workday"] == 1  # Monday
-        assert table.loc[2, "is_workday"] == 0  # Saturday
-        assert table.loc[3, "is_workday"] == 1  # Monday
+        assert table.loc[1, "is_workday"] == 1  # Mon 03:00 Pacific
+        assert table.loc[2, "is_workday"] == 0  # Sat 23:00 Pacific
+        assert table.loc[3, "is_workday"] == 1  # Mon 23:30 Pacific
     finally:
         holidays.reload()
 
@@ -175,19 +178,21 @@ def test_expected_revenue_prefers_exp_rev():
     assert table.loc[2, "expected_revenue"] == 9.0  # fell back to listings
 
 
-def test_time_features_prefer_pacific():
-    """Time features use Pacific pst_hour/pst_date over UTC created_at."""
+def test_time_features_derive_pacific_from_created_at():
+    """Time features convert UTC created_at to Pacific before derivation."""
     raw = _raw()
-    # UTC created_at on id 1 is 01:00 Sat; give Pacific pst_hour/pst_date instead.
+
+    # Deliberately conflicting warehouse Pacific helper columns must be ignored.
     raw["pst_hour"] = [17, 9, 9, 2, 14]
     raw["pst_date"] = pd.to_datetime(
         ["2026-06-22", "2026-06-20", "2026-06-20", "2026-06-21", "2026-06-20"]
     )
+
     table = build_training_table(raw).set_index("id")
-    assert table.loc[1, "created_hour"] == "17"  # categorical; from pst_hour, not UTC 1
-    assert (
-        table.loc[1, "created_dayofweek"] == "0"
-    )  # categorical; 2026-06-22 = Monday (PT)
+
+    # 2026-06-20 01:00 UTC is 2026-06-19 18:00 PDT (Friday).
+    assert table.loc[1, "created_hour"] == "18"
+    assert table.loc[1, "created_dayofweek"] == "4"
 
 
 def test_training_table_is_lead_type_clean():

@@ -14,6 +14,7 @@ from typing import Callable
 
 import pandas as pd
 
+from smarthub.core import holidays
 from smarthub.data_pull.field_registry import numeric_validation_bounds
 from smarthub.data_pull.validation_custom import US_STATES
 
@@ -52,39 +53,31 @@ class FeatureSpec:
 # ---------------------------------------------------------------------------
 
 
-def _derive_created_hour(frame: pd.DataFrame) -> pd.Series:
-    """Return the Pacific hour when available, otherwise the created-at hour."""
-    if "pst_hour" in frame.columns:
-        return pd.to_numeric(frame["pst_hour"], errors="coerce")
+def _created_at_pacific(frame: pd.DataFrame) -> pd.Series:
+    """Interpret ``created_at`` as UTC and convert it to Pacific time."""
+    created_at = pd.to_datetime(frame["created_at"], errors="coerce", utc=True)
+    return created_at.dt.tz_convert("America/Los_Angeles")
 
-    created_at = pd.to_datetime(frame["created_at"], errors="coerce")
-    return created_at.dt.hour
+
+def _derive_created_hour(frame: pd.DataFrame) -> pd.Series:
+    """Return the Pacific hour derived from ``created_at``."""
+    return _created_at_pacific(frame).dt.hour
 
 
 def _derive_created_dayofweek(frame: pd.DataFrame) -> pd.Series:
-    """Return the Pacific day of week when available."""
-    if "pst_date" in frame.columns:
-        date_values = pd.to_datetime(frame["pst_date"], errors="coerce")
-    else:
-        date_values = pd.to_datetime(frame["created_at"], errors="coerce")
-
-    return date_values.dt.dayofweek
+    """Return the Pacific day of week derived from ``created_at``."""
+    return _created_at_pacific(frame).dt.dayofweek
 
 
 def _derive_is_workday(frame: pd.DataFrame) -> pd.Series:
-    """Return workday status while preserving a missing timestamp."""
-    from smarthub.core import holidays
-
-    if "pst_date" in frame.columns:
-        date_values = pd.to_datetime(frame["pst_date"], errors="coerce")
-    else:
-        date_values = pd.to_datetime(frame["created_at"], errors="coerce")
+    """Return Pacific-calendar workday status from ``created_at``."""
+    created_at = _created_at_pacific(frame)
 
     result = pd.Series(MISSING_NUMERIC, index=frame.index, dtype="int64")
-    known = date_values.notna()
+    known = created_at.notna()
     if known.any():
         result.loc[known] = (
-            date_values.loc[known]
+            created_at.loc[known]
             .map(lambda value: int(holidays.is_workday(value.date())))
             .astype("int64")
         )
