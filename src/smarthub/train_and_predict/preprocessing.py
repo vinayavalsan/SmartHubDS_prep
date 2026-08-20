@@ -45,7 +45,11 @@ def normalize_model_frame(
 
     for column in numeric_features:
         if column in out.columns:
-            out[column] = pd.to_numeric(out[column], errors="coerce")
+            # Cast to numpy float64 (not pandas nullable Float64): pd.to_numeric on
+            # a nullable source (Int64/boolean, as parquet round-trips) yields a
+            # nullable dtype whose pd.NA sklearn's ColumnTransformer rejects at fit.
+            # float64 turns pd.NA into np.nan, which LightGBM/XGBoost handle natively.
+            out[column] = pd.to_numeric(out[column], errors="coerce").astype("float64")
 
     for column in categorical_features:
         if column in out.columns:
