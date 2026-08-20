@@ -141,10 +141,20 @@ def _log_drop(
 def _log_transformation(
     lead_type: str | None,
     message: str,
+    *,
+    n_rows: int | None = None,
 ) -> None:
-    """Log one feature-engineering transformation."""
+    """Log one feature-engineering transformation.
+
+    Serving processes a single lead per request, so on that hot path these
+    per-feature messages are demoted to DEBUG to avoid flooding the logs (and
+    adding logging overhead) on every ``/recommend_bid`` call. Batch/training
+    runs (many rows) keep logging at INFO, where the per-feature summaries are
+    useful. ``n_rows`` is the number of rows being transformed (``1`` = serving).
+    """
     prefix = f"[{lead_type}] " if lead_type else ""
-    logger.info("%s%s", prefix, message)
+    log = logger.debug if n_rows == 1 else logger.info
+    log("%s%s", prefix, message)
 
 
 def _apply_training_filters(
@@ -258,19 +268,21 @@ def _apply_registered_derivations(
             )
             if age_implausible_examples:
                 message += f"; examples={age_implausible_examples}"
-            _log_transformation(lead_type, message)
+            _log_transformation(lead_type, message, n_rows=len(frame))
 
         if age_missing_count:
             _log_transformation(
                 lead_type,
                 f"feature 'age': replaced {age_missing_count:,} "
                 "missing/non-numeric value(s) with -1",
+                n_rows=len(frame),
             )
 
         source = spec.api_input or "registered inputs"
         _log_transformation(
             lead_type,
             f"derived feature '{spec.name}' from '{source}'; {len(frame):,} row(s)",
+            n_rows=len(frame),
         )
         derived.append(spec.name)
 
@@ -306,6 +318,7 @@ def apply_registered_missing_values(
                 lead_type,
                 f"feature '{spec.name}': replaced {affected:,} "
                 f"missing/blank value(s) with {missing_value!r}",
+                n_rows=len(frame),
             )
 
     return frame
