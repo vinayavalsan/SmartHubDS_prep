@@ -72,9 +72,12 @@ data/**
 
 # Keep the folder itself (optional)
 !data/.gitkeep
+# Ignore everything in docs
+docs/*
 
-docs/SmartHub_Architecture.drawio
-docs/SmartHub_Overview.drawio
+# Keep these two files tracked
+!docs/API.pdf
+!docs/TECH_DOCUMENTATION.pdf
 
 # macOS
 .DS_Store
