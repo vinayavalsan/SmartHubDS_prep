@@ -311,7 +311,9 @@ def apply_registered_missing_values(
             numeric = pd.to_numeric(values, errors="coerce")
             missing = numeric.isna()
             affected = int(missing.sum())
-            frame[spec.name] = numeric.fillna(missing_value)
+            # numpy float64 (not pandas nullable Float64): a nullable dtype's
+            # pd.NA is rejected by sklearn's ColumnTransformer at model.fit.
+            frame[spec.name] = numeric.fillna(missing_value).astype("float64")
 
         if affected:
             _log_transformation(
