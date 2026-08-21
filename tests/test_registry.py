@@ -360,7 +360,10 @@ def test_decide_promotion_blocks_when_challenger_profit_is_unavailable():
         **POLICY,
     )
     assert decision.promote is False
-    assert "Challenger expected profit is unavailable" in decision.reason
+    assert (
+        "Challenger probability-weighted expected profit is unavailable"
+        in decision.reason
+    )
 
 
 def test_decide_promotion_blocks_invalid_nonpositive_serving_profit():

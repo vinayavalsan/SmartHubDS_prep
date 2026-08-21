@@ -381,6 +381,7 @@ def test_run_bid_optimizer_evaluation_summary():
         df[c] = "A"
     df["bid"] = [5.0, 6.0, 7.0, 8.0]
     df[config.REVENUE_COL] = [20.0, 22.0, 25.0, 30.0]
+    df[config.TARGET_COL] = [1, 0, 1, 0]
 
     out = optimizer_evaluation.run_bid_optimizer_evaluation(
         test_eval_df=df,

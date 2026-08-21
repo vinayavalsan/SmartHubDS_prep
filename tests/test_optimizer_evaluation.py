@@ -26,6 +26,7 @@ def _eval_frame():
             "bid": [1.0, 2.0, 3.0],
             "expected_revenue": [10.0, 20.0, 30.0],
             "feature": [5.0, 6.0, 7.0],
+            "won_flag": [1, 0, 1],
         }
     )
 
@@ -75,6 +76,7 @@ def test_add_diagnostics_computes_lift_change_and_cm():
             "current_bid_expected_profit": [1.0, 2.0],
             "recommended_bid": [3.0, 4.0],
             "recommended_bid_expected_profit": [1.5, 3.0],
+            "won_flag": [1, 0],
         }
     )
 
@@ -94,6 +96,10 @@ def test_summarize_results_aggregates_directional_bid_diagnostics():
             "recommended_bid_predicted_win_rate": [0.2, 0.25, 0.35],
             "bid_change": [1.0, -2.0, 0.0],
             "recommended_bid_cm_if_won": [0.5, 0.6, 0.7],
+            "won_flag": [1, 0, 1],
+            "observed_policy_expected_revenue": [10.0, 0.0, 30.0],
+            "observed_policy_bid_cost": [2.0, 0.0, 5.0],
+            "observed_policy_expected_profit": [8.0, 0.0, 25.0],
         }
     )
 
@@ -123,6 +129,10 @@ def test_summarize_results_zero_current_profit_returns_nan_lift_ratio():
             "recommended_bid_predicted_win_rate": [0.1, 0.2],
             "bid_change": [1.0, 1.0],
             "recommended_bid_cm_if_won": [0.5, 0.5],
+            "won_flag": [0, 0],
+            "observed_policy_expected_revenue": [0.0, 0.0],
+            "observed_policy_bid_cost": [0.0, 0.0],
+            "observed_policy_expected_profit": [0.0, 0.0],
         }
     )
 
@@ -135,6 +145,12 @@ def test_optimizer_summary_mlflow_metrics_are_prefixed():
     summary = oe.OptimizerSummary(
         optimizer_rows=2,
         target_cm=0.25,
+        observed_policy_wins=1,
+        observed_policy_win_rate=0.5,
+        observed_policy_total_expected_revenue=10.0,
+        observed_policy_total_bid_cost=2.0,
+        observed_policy_total_expected_profit=8.0,
+        observed_policy_expected_cm=0.8,
         current_bid_total_expected_profit=10.0,
         recommended_bid_total_expected_profit=12.0,
         expected_profit_lift_total=2.0,

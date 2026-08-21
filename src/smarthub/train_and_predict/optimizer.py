@@ -1,6 +1,7 @@
 """Bid optimization for SmartHub model prediction.
 
-This module scores candidate bids and selects the highest expected-profit bid.
+This module scores candidate bids and selects the highest probability-weighted
+expected-profit bid.
 """
 
 from __future__ import annotations
@@ -127,7 +128,7 @@ def optimize_bid_for_row(
     bid_step: float,
     include_candidates: bool = False,
 ) -> dict:
-    """Select the highest expected-profit bid for one lead.
+    """Select the highest probability-weighted expected-profit bid for one lead.
 
     Inputs
     ------
@@ -146,7 +147,8 @@ def optimize_bid_for_row(
     include_candidates : bool
         When ``True``, also return a ``candidate_evaluations`` list -- one entry
         per candidate bid evaluated by the sweep, each
-        ``{bid, predicted_win_rate, expected_profit, selected}`` -- so the full
+        ``{bid, predicted_win_rate, expected_profit, selected}``, where
+        ``expected_profit`` is probability-weighted -- so the full
         optimizer evaluation history can be persisted for auditing/explainability
         (see docs/PREDICTION_LOG_SCHEMA.md). Off by default so the batch/eval
         callers pay nothing for it.

@@ -125,6 +125,12 @@ def _optimizer_metrics_for_mlflow(
     selected_keys = {
         "optimizer_rows",
         "target_cm",
+        "observed_policy_wins",
+        "observed_policy_win_rate",
+        "observed_policy_total_expected_revenue",
+        "observed_policy_total_bid_cost",
+        "observed_policy_total_expected_profit",
+        "observed_policy_expected_cm",
         "current_bid_total_expected_profit",
         "recommended_bid_total_expected_profit",
         "expected_profit_lift_total",
@@ -633,12 +639,12 @@ def run_training(
         serving_profit = promotion_comparison.get("currently_serving_profit")
         if challenger_profit is not None:
             logger.info(
-                "  Challenger expected profit            : %.4f",
+                "  Challenger probability-weighted expected profit: %.4f",
                 challenger_profit,
             )
         if serving_profit is not None:
             logger.info(
-                "  Serving expected profit               : %.4f",
+                "  Serving probability-weighted expected profit   : %.4f",
                 serving_profit,
             )
         if challenger_profit is not None and serving_profit is not None:
@@ -738,6 +744,11 @@ def run_training(
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
         "optimizer": optimizer_config.as_dict(),
+        "observed_production_policy": {
+            key: value
+            for key, value in optimizer_summary_dict.items()
+            if key.startswith("observed_policy_")
+        },
         "promotion_monotonicity": monotonicity_config.as_dict(),
         "bid_monotonicity": monotonicity_summary_dict,
         "lineage": lineage,

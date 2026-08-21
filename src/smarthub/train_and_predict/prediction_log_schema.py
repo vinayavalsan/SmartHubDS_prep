@@ -107,7 +107,8 @@ prediction_log_table = Table(
     Column("bid_step", Numeric(10, 2), nullable=False),
     Column("candidate_bid_generation", Text),
     # Full optimizer sweep (JSON array): every candidate bid the optimizer
-    # evaluated, each {bid, predicted_win_rate, expected_profit, selected}. The
+    # evaluated, each {bid, predicted_win_rate, expected_profit, selected},
+    # where expected_profit is probability-weighted. The
     # `selected: true` entry is the chosen (argmax-profit) bid. Lets the whole
     # optimizer decision be reconstructed without re-running the model. Null on
     # cold start / no-viable-bid (nothing was scored).
@@ -132,7 +133,7 @@ prediction_log_table = Table(
     Column("decision_reason", Text),
     Column("recommended_bid", Numeric(10, 2)),
     Column("recommended_bid_predicted_win_rate", Numeric(6, 5)),
-    # Model-predicted profit at the recommended bid, not realized profit.
+    # Probability-weighted expected profit at the recommended bid, not realized profit.
     Column("recommended_bid_predicted_profit", Numeric(12, 4)),
     # recommended_bid_predicted_profit / expected_revenue. Same nullability as
     # predicted_profit (null whenever there's no

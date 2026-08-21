@@ -47,9 +47,11 @@ PAYLOAD = {
     "bid_step": 0.25,
     "campaign_id": 12345,
     "account_id": 118,
+    "lead_ping_id": 82931,
+    "source_type_id": 10,
+    "traffic_tier": "1",
     "lead_type_id": lead_type_id("auto"),
-    "created_hour": 14,
-    "created_dayofweek": 2,
+    "created_at": "2026-08-20T21:00:00Z",
     "state": "TX",
     "age": 34,
 }
@@ -133,27 +135,24 @@ def test_recommend_bid_logs_success_row_with_model(client, log_store):
 def test_recommend_bid_threads_lead_ping_id_through_to_log_row(client, log_store):
     _promote_constant_model()
 
-    resp = client.post("/recommend_bid", json={**PAYLOAD, "lead_ping_id": 82931})
+    resp = client.post("/recommend_bid", json={**PAYLOAD, "lead_ping_id": 98765})
     assert resp.status_code == 200
     # Echoed back in the response, not just written to the log row.
-    assert resp.json()["lead_ping_id"] == 82931
+    assert resp.json()["lead_ping_id"] == 98765
 
     row = log_store.recent(limit=10)[0]
-    assert row["lead_ping_id"] == 82931
+    assert row["lead_ping_id"] == 98765
     assert resp.json()["prediction_id"] == row["prediction_id"]
 
 
-def test_recommend_bid_lead_ping_id_is_optional(client, log_store):
+def test_recommend_bid_requires_lead_ping_id(client, log_store):
     _promote_constant_model()
+    payload = {key: value for key, value in PAYLOAD.items() if key != "lead_ping_id"}
 
-    # PAYLOAD has no lead_ping_id at all -- must not be a validation error.
-    resp = client.post("/recommend_bid", json=PAYLOAD)
-    assert resp.status_code == 200
-    assert resp.json()["prediction_id"] is not None
-    assert resp.json()["lead_ping_id"] is None
+    resp = client.post("/recommend_bid", json=payload)
 
-    row = log_store.recent(limit=10)[0]
-    assert row["lead_ping_id"] is None
+    assert resp.status_code == 422
+    assert log_store.recent(limit=10) == []
 
 
 def test_recommend_bid_cold_start_logs_null_model_fields(client, log_store):
@@ -376,7 +375,7 @@ def test_explain_bid_uses_the_predictions_model_not_the_current(
 # polling/sleep needed.
 
 NUMERIC = ["bid", "age"]
-CATEGORICAL = ["state"]
+CATEGORICAL = ["state", "created_hour", "created_dayofweek"]
 
 
 @pytest.fixture
@@ -402,6 +401,8 @@ def _promote_tiny_lightgbm_model():
             "bid": [float(i % 10) for i in range(n)],
             "age": [20 + (i % 40) for i in range(n)],
             "state": ["TX", "CA"] * (n // 2),
+            "created_hour": [str(i % 24) for i in range(n)],
+            "created_dayofweek": [str(i % 7) for i in range(n)],
         }
     )
     y = [1 if (i % 10) >= 5 else 0 for i in range(n)]

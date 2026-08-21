@@ -88,6 +88,9 @@ _ALL_LEAD_TYPES = frozenset(all_lead_types())
 # is declared explicitly so its lead-type scope, source, and validation rules
 # are visible at the declaration site.
 RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
+    # -----------------------------------------------------------------------
+    # Fields used by all lead types
+    # -----------------------------------------------------------------------
     "id": RawFieldSpec(
         name="id",
         lead_types=_ALL_LEAD_TYPES,
@@ -375,48 +378,6 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         pii=False,
         enabled=True,
     ),
-    "num_drivers": RawFieldSpec(
-        name="num_drivers",
-        lead_types=frozenset({"auto"}),
-        source=DataSourceSpec(table="lead_pings", column="num_drivers"),
-        validation=ValidationSpec(
-            kind="numeric",
-            flag_missing=True,
-            min_value=0,
-            max_value=10,
-        ),
-        pii=False,
-        enabled=True,
-    ),
-    "num_vehicles": RawFieldSpec(
-        name="num_vehicles",
-        lead_types=frozenset({"auto"}),
-        source=DataSourceSpec(table="lead_pings", column="num_vehicles"),
-        validation=ValidationSpec(
-            kind="numeric",
-            flag_missing=True,
-            min_value=0,
-            max_value=20,
-        ),
-        pii=False,
-        enabled=True,
-    ),
-    "dui": RawFieldSpec(
-        name="dui",
-        lead_types=frozenset({"auto"}),
-        source=DataSourceSpec(table="lead_pings", column="dui"),
-        validation=ValidationSpec(kind="binary", flag_missing=True),
-        pii=False,
-        enabled=True,
-    ),
-    "sr22_required": RawFieldSpec(
-        name="sr22_required",
-        lead_types=frozenset({"auto"}),
-        source=DataSourceSpec(table="lead_pings", column="sr22_required"),
-        validation=ValidationSpec(kind="binary", flag_missing=True),
-        pii=False,
-        enabled=True,
-    ),
     "age": RawFieldSpec(
         name="age",
         lead_types=_ALL_LEAD_TYPES,
@@ -424,69 +385,9 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         validation=ValidationSpec(
             kind="numeric",
             flag_missing=True,
-            min_value=1,
+            min_value=0,
             max_value=130,
         ),
-        pii=False,
-        enabled=True,
-    ),
-    "num_auto_violations": RawFieldSpec(
-        name="num_auto_violations",
-        lead_types=frozenset({"auto"}),
-        source=DataSourceSpec(table="lead_pings", column="num_auto_violations"),
-        validation=ValidationSpec(
-            kind="numeric",
-            flag_missing=True,
-            min_value=0,
-            max_value=20,
-        ),
-        pii=False,
-        enabled=True,
-    ),
-    "num_auto_claims": RawFieldSpec(
-        name="num_auto_claims",
-        lead_types=frozenset({"auto"}),
-        source=DataSourceSpec(table="lead_pings", column="num_auto_claims"),
-        validation=ValidationSpec(
-            kind="numeric",
-            flag_missing=False,
-            min_value=0,
-            max_value=20,
-        ),
-        pii=False,
-        enabled=True,
-    ),
-    "num_auto_accidents": RawFieldSpec(
-        name="num_auto_accidents",
-        lead_types=frozenset({"auto"}),
-        source=DataSourceSpec(table="lead_pings", column="num_auto_accidents"),
-        validation=ValidationSpec(
-            kind="numeric",
-            flag_missing=True,
-            min_value=0,
-            max_value=20,
-        ),
-        pii=False,
-        enabled=True,
-    ),
-    "num_home_claims": RawFieldSpec(
-        name="num_home_claims",
-        lead_types=frozenset({"home"}),
-        source=DataSourceSpec(table="lead_pings", column="num_home_claims"),
-        validation=ValidationSpec(
-            kind="numeric",
-            flag_missing=True,
-            min_value=0,
-            max_value=20,
-        ),
-        pii=False,
-        enabled=True,
-    ),
-    "home_property_type": RawFieldSpec(
-        name="home_property_type",
-        lead_types=frozenset({"home"}),
-        source=DataSourceSpec(table="lead_pings", column="home_property_type"),
-        validation=ValidationSpec(kind="categorical", flag_missing=True),
         pii=False,
         enabled=True,
     ),
@@ -564,9 +465,8 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="num_employees"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="categorical",
             flag_missing=False,
-            min_value=0,
         ),
         pii=False,
         enabled=True,
@@ -624,6 +524,114 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
             flag_missing=False,
             min_value=0,
         ),
+        pii=False,
+        enabled=True,
+    ),
+    # -----------------------------------------------------------------------
+    # Auto-only fields
+    # -----------------------------------------------------------------------
+    "num_drivers": RawFieldSpec(
+        name="num_drivers",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_drivers"),
+        validation=ValidationSpec(
+            kind="numeric",
+            flag_missing=True,
+            min_value=0,
+            max_value=10,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_vehicles": RawFieldSpec(
+        name="num_vehicles",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_vehicles"),
+        validation=ValidationSpec(
+            kind="numeric",
+            flag_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "dui": RawFieldSpec(
+        name="dui",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="dui"),
+        validation=ValidationSpec(kind="binary", flag_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "sr22_required": RawFieldSpec(
+        name="sr22_required",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="sr22_required"),
+        validation=ValidationSpec(kind="binary", flag_missing=True),
+        pii=False,
+        enabled=True,
+    ),
+    "num_auto_violations": RawFieldSpec(
+        name="num_auto_violations",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_auto_violations"),
+        validation=ValidationSpec(
+            kind="numeric",
+            flag_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_auto_claims": RawFieldSpec(
+        name="num_auto_claims",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_auto_claims"),
+        validation=ValidationSpec(
+            kind="numeric",
+            flag_missing=False,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "num_auto_accidents": RawFieldSpec(
+        name="num_auto_accidents",
+        lead_types=frozenset({"auto"}),
+        source=DataSourceSpec(table="lead_pings", column="num_auto_accidents"),
+        validation=ValidationSpec(
+            kind="numeric",
+            flag_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    # -----------------------------------------------------------------------
+    # Home-only fields
+    # -----------------------------------------------------------------------
+    "num_home_claims": RawFieldSpec(
+        name="num_home_claims",
+        lead_types=frozenset({"home"}),
+        source=DataSourceSpec(table="lead_pings", column="num_home_claims"),
+        validation=ValidationSpec(
+            kind="numeric",
+            flag_missing=True,
+            min_value=0,
+            max_value=20,
+        ),
+        pii=False,
+        enabled=True,
+    ),
+    "home_property_type": RawFieldSpec(
+        name="home_property_type",
+        lead_types=frozenset({"home"}),
+        source=DataSourceSpec(table="lead_pings", column="home_property_type"),
+        validation=ValidationSpec(kind="categorical", flag_missing=True),
         pii=False,
         enabled=True,
     ),
