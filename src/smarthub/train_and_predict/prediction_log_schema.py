@@ -642,6 +642,67 @@ class PredictionLogStore:
             rows = conn.execute(query).all()
         return [_decode_row(r._mapping) for r in rows]
 
+    # Hard ceiling on the dashboard time window: never scan more than 7 days
+    # of prediction-log history in one read (kept small so the UI stays fast
+    # even once the table holds millions of rows).
+    MAX_WINDOW_MINUTES = 7 * 24 * 60
+
+    def filtered(
+        self,
+        *,
+        minutes: int | None = None,
+        lead_type_id: int | None = None,
+        status: str | None = None,
+        campaign_id: int | None = None,
+        lead_ping_id: int | None = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Return prediction-log rows matching the given filters, newest first.
+
+        Inputs
+        ------
+        minutes : int | None
+            Only rows logged within the last ``minutes`` (by ``created_at``).
+            Clamped to at most :data:`MAX_WINDOW_MINUTES` (7 days); ``None``
+            applies no time bound.
+        lead_type_id : int | None
+            Restrict to this lead type when given.
+        status : str | None
+            Restrict to ``'success'`` or ``'error'`` when given.
+        campaign_id : int | None
+            Restrict to this campaign when given.
+        lead_ping_id : int | None
+            Restrict to this lead ping id when given.
+        limit : int
+            Maximum number of rows to return, most recent first.
+
+        Returns
+        -------
+        list[dict]
+            Matching rows, JSON columns decoded, newest first.
+        """
+        from datetime import timedelta
+
+        query = select(prediction_log_table)
+        if minutes is not None:
+            capped = min(int(minutes), self.MAX_WINDOW_MINUTES)
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+                minutes=capped
+            )
+            query = query.where(prediction_log_table.c.created_at >= cutoff)
+        if lead_type_id is not None:
+            query = query.where(prediction_log_table.c.lead_type_id == lead_type_id)
+        if status is not None:
+            query = query.where(prediction_log_table.c.status == status)
+        if campaign_id is not None:
+            query = query.where(prediction_log_table.c.campaign_id == campaign_id)
+        if lead_ping_id is not None:
+            query = query.where(prediction_log_table.c.lead_ping_id == lead_ping_id)
+        query = query.order_by(prediction_log_table.c.created_at.desc()).limit(limit)
+        with self.engine.begin() as conn:
+            rows = conn.execute(query).all()
+        return [_decode_row(r._mapping) for r in rows]
+
     def window_rows(self, minutes: int = 15, limit: int = 50000) -> list[dict]:
         """Rows logged within the last ``minutes`` (newest first).
 
