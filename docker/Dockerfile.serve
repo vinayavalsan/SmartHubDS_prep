@@ -1,0 +1,54 @@
+# Serving image: the FastAPI bid-recommendation API (smarthub/server/predict.py).
+# Only reachable inside the Docker network -- see docker-compose.prefect.yml,
+# where this container gets no host `ports:` mapping; `nginx` is the only
+# service exposed to the host, reverse-proxying to this one.
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    SMARTHUB_ROOT=/app \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install dependencies first for better layer caching. `ml` covers
+# fastapi/uvicorn/pydantic alongside the model libraries predict.py needs
+# (sklearn/lightgbm/joblib/mlflow). `explain` adds shap -- needed because
+# this same container serves /explain_bid (explicit SHAP explanations) AND,
+# since 2026-07-23, /recommend_bid's background SHAP enrichment
+# (predict.py's _log_shap_background) -- both call into
+# train_and_predict/explain.py, which raises ModuleNotFoundError without
+# shap installed (caught + logged as a warning by the caller in both cases,
+# so this was a silent gap, not a crash -- see docs/CHANGELOG.md). No
+# orchestration (Prefect) or validation (pandera) extras -- serving doesn't
+# touch either.
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml requirements.txt ./
+COPY src ./src
+COPY config ./config
+RUN pip install --upgrade pip && pip install -e ".[ml,explain]"
+
+COPY README.md ./
+
+EXPOSE 8000
+
+# Container-level healthcheck: hits the app's own /health route. Compose's
+# `nginx` service also depends on this container being up, but doesn't gate
+# on this healthcheck today -- see docker-compose.prefect.yml.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=3)" || exit 1
+
+# SERVE_WORKERS controls uvicorn's process count -- shell form (not exec form)
+# so ${SERVE_WORKERS:-4} actually expands; override per-deployment via the
+# environment: block in docker-compose.*.yml. Each worker is a separate
+# process with its own in-memory model cache (see predict.py's _MODEL_CACHE)
+# -- fine to duplicate since models are small, read-only, and re-populated by
+# each worker's own startup eager-load; there's no shared state to coordinate.
+# All workers bind the same port (SO_REUSEPORT-style preforking), so nginx's
+# single `server serve:8000` upstream entry doesn't need to change.
+CMD ["sh", "-c", "uvicorn smarthub.server.app:app --host 0.0.0.0 --port 8000 --workers ${SERVE_WORKERS:-4}"]

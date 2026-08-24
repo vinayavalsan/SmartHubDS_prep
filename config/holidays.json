@@ -1,0 +1,13 @@
+{
+  "_comment": "SmartFinancial company paid holidays (source: 2026 Company Paid Holidays). Weekends (Sat/Sun) are handled in code and must NOT be listed here. Add future years / update as the observed calendar changes.",
+  "holidays": [
+    {"date": "2026-01-01", "label": "New Year's Day"},
+    {"date": "2026-05-25", "label": "Memorial Day"},
+    {"date": "2026-07-03", "label": "Independence Day"},
+    {"date": "2026-09-07", "label": "Labor Day"},
+    {"date": "2026-11-26", "label": "Thanksgiving Day"},
+    {"date": "2026-11-27", "label": "Day after Thanksgiving"},
+    {"date": "2026-12-25", "label": "Christmas Day"},
+    {"date": "2027-01-01", "label": "New Year's Day"}
+  ]
+}

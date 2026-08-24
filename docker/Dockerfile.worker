@@ -1,0 +1,22 @@
+# Worker image: Prefect base + the smarthub package + entrypoint.
+FROM prefecthq/prefect:3-latest
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    SMARTHUB_ROOT=/app \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install the package (incl. orchestration extra) first for layer caching.
+COPY pyproject.toml requirements.txt ./
+COPY src ./src
+COPY config ./config
+RUN pip install -e ".[orchestration,ml,validation]"
+
+# Deployment config + startup entrypoint.
+COPY prefect.yaml ./
+COPY docker ./docker
+RUN chmod +x docker/worker-entrypoint.sh
+
+CMD ["./docker/worker-entrypoint.sh"]

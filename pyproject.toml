@@ -11,24 +11,72 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
     "pyarrow>=14.0",
-    "streamlit>=1.30",
+    # Upper bound: 1.53 switched to an experimental Starlette/ASGI server whose
+    # gzip middleware breaks against current Starlette (GZipResponder missing
+    # `thread_minimum_size`). Stay on the stable Tornado-based server (<1.53).
+    "streamlit>=1.36,<1.53",
     "plotly>=5.18",
     "python-dotenv>=1.0",
     "sshtunnel>=0.4",
+    "paramiko>=3,<4",
     "redshift-connector>=2.0",
     "SQLAlchemy>=2.0",
     "sqlalchemy-redshift>=0.8.14",
     "duckdb>=0.10",
+    "psycopg2-binary>=2.9",
+    "PyYAML>=6.0",
+    "us>=3.2",
+    "optuna>=4.0",
+    "matplotlib>=3.7",
+    "scikit-learn>=1.3",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "flake8>=7.0"]
+# Code quality: black + isort (formatting/import order, enforced by
+# pre-commit and CI — see .pre-commit-config.yaml and [tool.black]/
+# [tool.isort] below) and pre-commit itself (`pre-commit install`).
+dev = ["pytest>=8.0", "flake8>=7.0", "black>=24.0", "isort>=5.13", "pre-commit>=3.6"]
+orchestration = ["prefect>=3.0"]
+# Data validation (D1) — pandera schema/range/domain checks on the pull.
+validation = ["pandera>=0.20"]
+# Model training (STEP 3, train_and_predict) + serving (smarthub.server).
+ml = [
+    "lightgbm>=4.0",
+    "xgboost>=2.0",
+    "mlflow>=2.10",
+    "joblib>=1.3",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.0",
+    "requests>=2.31",
+    "boto3>=1.34",   # production model storage on S3 / S3-compatible (MinIO)
+]
+# Offline "why did Anton bid $X" explanations (SHAP + a local LLM via Ollama —
+# see train_and_predict/explain.py). Also requires the `ml` extra (lightgbm,
+# scikit-learn) to explain a trained model, plus a running local Ollama server
+# (not a Python dependency: https://ollama.com).
+explain = ["shap>=0.44"]
 
 [project.scripts]
-smarthub-pull = "smarthub.data_pull:main"
+smarthub-pull = "smarthub.data_pull.pull:main"
+smarthub-build-features = "smarthub.feature_engineering.build:main"
+smarthub-train = "smarthub.train_and_predict.train:main"
+smarthub-hyperparameter-search = "smarthub.train_and_predict.hyperparameter_search:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+# "black" profile sorts/groups imports the way Black expects (trailing comma,
+# one import per line when wrapped, matching line length) so the two never
+# fight over the same lines. See .pre-commit-config.yaml: isort always runs
+# BEFORE black, so black gets the final say on formatting.
+profile = "black"
+line_length = 88

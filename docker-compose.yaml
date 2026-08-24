@@ -1,0 +1,444 @@
+# SmartHub / Anton -- single consolidated stack file.
+#
+# Everything is in here, so no `-f` juggling:
+#     docker compose up -d --build          # build from source + start
+#     docker compose up -d                   # start (reuse existing images)
+#     docker compose down                    # stop (keeps volumes/data)
+#
+# Per-deployment values come from .env (never edit this file for those):
+#     PREFECT_UI_API_URL=http://<public-ip>:4200/api   # browser-facing Prefect API
+#     SERVE_WORKERS=6                                   # uvicorn workers on `serve`
+#     SSH_TUNNEL=false                                  # direct Redshift (same-VPC EC2)
+#     ...plus the S3/MinIO + Slack + model vars referenced below.
+#
+# Consolidates what used to be docker-compose.prefect.yml + docker-compose.local.yml
+# + the uiurl/tune/mlflow overrides. The images build from source (build: blocks
+# below); Watchtower stays gated behind the `prod` profile so a local build is
+# never clobbered by a Hub pull.
+#
+# Fixes baked in (see inline notes): Postgres max_connections=300, prefect-server
+# SQLAlchemy pool caps + HTTP /api/health healthcheck, browser-facing UI API URL,
+# serve worker count + single-threaded math, shap/slo healthcheck disable, and
+# MLflow host-header allow-list.
+services:
+  postgres:
+    container_name: prefect-postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: prefect
+      POSTGRES_PASSWORD: prefect
+      POSTGRES_DB: prefect
+    # One shared Postgres (prefect-server async pool + mlflow + serve + shap-worker
+    # + slo-alerts + dashboard + prediction-log). Stock max_connections=100 gets
+    # exhausted -> `asyncpg TooManyConnectionsError` -> prefect-server unhealthy ->
+    # worker never starts. Raise the ceiling (~300 idle conns << 1 GB here).
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prefect"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  prefect-server:
+    container_name: prefect-server
+    image: prefecthq/prefect:3-latest
+    restart: unless-stopped
+    # asyncpg is the Postgres driver Prefect needs; install then start.
+    command: >
+      bash -c "pip install --no-cache-dir asyncpg >/dev/null 2>&1 &&
+               prefect server start --host 0.0.0.0"
+    environment:
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:prefect@postgres:5432/prefect
+      # Bound the server's SQLAlchemy pool so it can't monopolise the shared
+      # Postgres connection budget (see the postgres note above).
+      PREFECT_SERVER_DATABASE_SQLALCHEMY_POOL_SIZE: "10"
+      PREFECT_SERVER_DATABASE_SQLALCHEMY_MAX_OVERFLOW: "20"
+      # The UI runs in the browser, so its API URL must be the address the browser
+      # can reach -- not localhost/0.0.0.0 (which resolves to the user's own
+      # machine and yields "Can't connect to Server API at 127.0.0.1:4200"). Set
+      # PREFECT_UI_API_URL=http://<public-ip>:4200/api in .env per deployment.
+      PREFECT_UI_API_URL: ${PREFECT_UI_API_URL:-http://localhost:4200/api}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4200:4200"
+    healthcheck:
+      # Hit the running server's own /api/health over HTTP. The stock check
+      # (`prefect work-pool ls`) ran the CLI with no PREFECT_API_URL and spun up a
+      # throwaway temp server each probe, timing out -- server fine, check wrong.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:4200/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker:
+    container_name: prefect-worker
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    # Feature builds load a windowed slice of lead_pings into pandas; give the
+    # worker headroom (a too-low cap shows up as flow runs SIGKILL'd / exit -9).
+    mem_limit: 4g
+    mem_reservation: 2g
+    # Cap CPU so a training run can never starve the live bid API. Training is
+    # CPU-bound (LightGBM); leaving ~4 cores for serving keeps the API responsive
+    # even mid-training. Tune WORKER_CPUS in .env if the mix changes.
+    cpus: ${WORKER_CPUS:-4}
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_WORK_POOL: smarthub-pool
+      PREFECT_WORK_QUEUES: "default features training"
+      SMARTHUB_ROOT: /app
+      # Thread caps for training math libs. Without these, LightGBM/BLAS spawn one
+      # OpenMP thread per host core and, on a shared box, busy-wait (spin) at 100%
+      # -- the "all cores pegged, training stuck" symptom. Keep in step with `cpus`
+      # above and lightgbm.n_jobs in config/training.yaml.
+      OMP_NUM_THREADS: ${WORKER_OMP_THREADS:-4}
+      OPENBLAS_NUM_THREADS: ${WORKER_OMP_THREADS:-4}
+      MKL_NUM_THREADS: ${WORKER_OMP_THREADS:-4}
+      OMP_WAIT_POLICY: PASSIVE
+      # Structured JSON logs (see core/logging_utils.py); the collector merges by container.
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
+      SMARTHUB_SERVICE: worker
+      # Redshift access: tunnel via SSH bastion by default. Set SSH_TUNNEL=false in
+      # .env when the host reaches Redshift directly (same-VPC EC2) -- then no key
+      # is mounted or required.
+      SSH_TUNNEL: ${SSH_TUNNEL:-true}
+      SSH_PRIVATE_KEY_PATH: /keys/id_ed25519
+      # MLflow backend store -> shared Postgres `mlflow` database. Created lazily
+      # on the first training run (mlflow_utils._ensure_database_exists). The UI
+      # below tolerates its absence until then.
+      SMARTHUB_MLFLOW_TRACKING_URI: postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
+      SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
+      SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
+      SMARTHUB_S3_BUCKET: ${SMARTHUB_S3_BUCKET:-smarthub-models}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - ./data:/app/data
+      # Rich JSON logs (SMARTHUB_LOG_JSON_DIR) land here on the host; docker logs
+      # stays human-readable text. Read-write (the app appends + rotates).
+      - ./logs:/app/logs
+      # Mount config read-only so training-param edits (lightgbm.n_jobs, calibration.cv)
+      # take effect on `docker compose up -d worker` without an image rebuild.
+      - ./config:/app/config:ro
+      # SSH key mounted read-only; defaults to /dev/null so compose still starts
+      # with SSH_TUNNEL=false (key never read on the direct-connect path).
+      - ${SSH_PRIVATE_KEY_PATH:-/dev/null}:/keys/id_ed25519:ro
+
+  # S3-compatible object storage for PRODUCTION model artifacts. Console at
+  # http://localhost:9001 (minioadmin/minioadmin -- change for real deployments).
+  minio:
+    container_name: smarthub-minio
+    image: minio/minio:latest
+    restart: unless-stopped
+    # Local-only object store. Enabled solely via the "minio" profile, so
+    # `docker compose up -d` (AWS/prod) does NOT start it. Bring it up for local
+    # dev with: docker compose --profile minio up -d
+    profiles: ["minio"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"                 # S3 API   (keep closed to the internet)
+      - "9001:9001"                 # console  (restrict to your IP)
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # One-shot: create the production models bucket, then exit.
+  minio-init:
+    container_name: smarthub-minio-init
+    image: minio/mc:latest
+    profiles: ["minio"]          # local-only; see the minio service above
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
+      mc mb -p local/${SMARTHUB_S3_BUCKET:-smarthub-models} &&
+      echo 'bucket ready' && exit 0"
+
+  # One-shot: create the shared `mlflow` database if it doesn't exist, then exit.
+  # Without this, a fresh Postgres volume has no `mlflow` DB, so mlflow-ui crash-
+  # loops on "database mlflow does not exist" and hammers Postgres with reconnects
+  # until a training run happens to create it. This makes it deterministic.
+  # Idempotent -- a re-run is a no-op once the DB exists.
+  mlflow-init:
+    container_name: smarthub-mlflow-init
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      psql postgresql://prefect:prefect@postgres:5432/prefect -tc \"SELECT 1 FROM pg_database WHERE datname='mlflow'\" | grep -q 1 ||
+      psql postgresql://prefect:prefect@postgres:5432/prefect -c 'CREATE DATABASE mlflow';
+      echo 'mlflow db ready' && exit 0"
+    restart: "no"
+
+  # MLflow tracking UI. Backend = shared Postgres `mlflow` database; artifacts in
+  # the mlruns tree under ./data. Reuses the worker image (bundles mlflow +
+  # psycopg2). Host port 5001 (macOS AirPlay squats on 5000).
+  mlflow-ui:
+    container_name: smarthub-mlflow-ui
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
+    # --allowed-hosts / --cors-allowed-origins: MLflow 3.x's security middleware
+    # validates the Host header (localhost-only by default) and rejects access via
+    # a public IP with "Invalid Host header - possible DNS rebinding attack". The
+    # port is already IP-restricted at the security group, so allow any host here;
+    # tighten via MLFLOW_ALLOWED_HOSTS / MLFLOW_CORS_ORIGINS in .env if desired.
+    command: >
+      mlflow ui
+      --backend-store-uri postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
+      --default-artifact-root file:///app/data/mlruns
+      --host 0.0.0.0 --port 5000
+      --allowed-hosts ${MLFLOW_ALLOWED_HOSTS:-*}
+      --cors-allowed-origins ${MLFLOW_CORS_ORIGINS:-*}
+    environment:
+      SMARTHUB_ROOT: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow-init:
+        condition: service_completed_successfully
+    ports:
+      - "5001:5000"                 # http://<host>:5001  (MLflow UI, restrict to your IP)
+    volumes:
+      - ./data:/app/data
+
+  dashboard:
+    container_name: smarthub-dashboard
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:dashboard-${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    mem_limit: ${DASHBOARD_MEM:-2g}
+    # Streamlit's `run` exits cleanly (ExitCode 0) in a detached container with no
+    # TTY; a pseudo-TTY keeps it alive.
+    tty: true
+    stdin_open: true
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      STORAGE_BACKEND: parquet
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
+      SMARTHUB_SERVICE: dashboard
+      SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      # Hardcoded (not ${...}) so a stray export can't repoint the prediction log
+      # at a per-container sqlite file -- the stack always shares this Postgres.
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+    command:
+      - streamlit
+      - run
+      - src/smarthub/monitoring/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --server.fileWatcherType=none
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8500:8501"                 # http://<host>:8500  (restrict to your IP)
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+  # Local LLM for /explain_bid's narrative. No `ports:` -- internal only
+  # (serve reaches it at ollama:11434). ollama-data persists pulled models.
+  ollama:
+    container_name: smarthub-ollama
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+
+  # One-shot: pull the /explain_bid model at startup so it's present before the
+  # first call. Idempotent (no-op once cached in ollama-data).
+  ollama-init:
+    container_name: smarthub-ollama-init
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      SMARTHUB_LLM_MODEL: ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "ollama-init: waiting for Ollama to be reachable...";
+        until curl -sf http://ollama:11434/api/tags >/dev/null 2>&1; do sleep 2; done;
+        echo "ollama-init: pulling ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct} (this can take a few minutes)...";
+        curl -fsS -X POST http://ollama:11434/api/pull -d "{\"name\":\"${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}\",\"stream\":false}" \
+          && echo "ollama-init: model ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct} is ready." \
+          || { echo "ollama-init: pull FAILED for ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}"; exit 1; };
+    restart: "no"
+
+  # Bid-recommendation API (FastAPI). No `ports:` -- reachable ONLY on the Docker
+  # network (serve:8000); nginx is the sole host-exposed entrypoint.
+  serve:
+    container_name: smarthub-serve
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.serve
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      ollama:
+        condition: service_started
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      # uvicorn worker-process count (Dockerfile.serve CMD reads this; default 4).
+      # Raise for throughput; each worker is a separate process with its own
+      # in-memory model cache. On an 8-vCPU shared box, 6 is a good ceiling.
+      SERVE_WORKERS: ${SERVE_WORKERS:-4}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
+      SMARTHUB_SERVICE: serve
+      # Pin math libs to one thread each so worker count is the only parallelism
+      # knob -- prevents BLAS/OpenMP oversubscription (N workers x N threads
+      # thrashing the cores), which makes throughput WORSE, not better.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      # SHAP enrichment: `offload` keeps the ~1.5s SHAP work off the bid path
+      # (good TAT); the shap-worker backfills it.
+      SMARTHUB_SHAP_MODE: ${SMARTHUB_SHAP_MODE:-offload}
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_OLLAMA_HOST: http://ollama:11434
+      SMARTHUB_LLM_MODEL: ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}
+      SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
+      SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
+      SMARTHUB_S3_BUCKET: ${SMARTHUB_S3_BUCKET:-smarthub-models}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+  # Offloaded SHAP enrichment worker: drains prediction-log rows with empty SHAP
+  # and backfills the factor breakdown, so the ~1.5s/prediction work runs HERE,
+  # not on the serve workers. Scale with `--scale shap-worker=N` (rows claimed
+  # FOR UPDATE SKIP LOCKED). Reuses the serve image.
+  shap-worker:
+    container_name: smarthub-shap-worker
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    cpus: ${SHAP_WORKER_CPUS:-1.5}
+    mem_limit: ${SHAP_WORKER_MEM:-2g}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_SHAP_WORKER_POLL_SECS: ${SMARTHUB_SHAP_WORKER_POLL_SECS:-1.0}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
+      SMARTHUB_SERVICE: shap-worker
+      SMARTHUB_SHAP_WORKER_BATCH: ${SMARTHUB_SHAP_WORKER_BATCH:-50}
+      SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
+      SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
+      SMARTHUB_S3_BUCKET: ${SMARTHUB_S3_BUCKET:-smarthub-models}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: ["python", "-m", "smarthub.server.shap_worker"]
+    # Runs the drainer loop, NOT the uvicorn API, so the serve image's baked-in
+    # HTTP healthcheck (curl :8000/health) would always fail. The slim image has
+    # no pgrep/ps, so disable the inherited check -- restart:unless-stopped
+    # recovers a crashed loop.
+    healthcheck:
+      disable: true
+
+  # Lightweight SLO alerter: every minute computes the bid API SLIs (TAT p99,
+  # error rate, SHAP backlog, freshness) from the prediction log and posts a Slack
+  # alert on breach. No-op (logs only) if SLACK_WEBHOOK_URL is unset.
+  slo-alerts:
+    container_name: smarthub-slo-alerts
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_SLO_WINDOW_MINUTES: ${SMARTHUB_SLO_WINDOW_MINUTES:-15}
+      SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
+      SMARTHUB_SERVICE: slo-alerts
+    command: ["python", "-m", "smarthub.monitoring.slo_alerts", "--loop", "--interval", "60"]
+    volumes:
+      - ./logs:/app/logs
+    # Same as shap-worker: alerter loop, not the HTTP API -> disable the inherited
+    # healthcheck (no pgrep/ps in the slim image; restart recovers a crash).
+    healthcheck:
+      disable: true
+
+  # Reverse proxy in front of `serve` -- the only host-exposed path to the bid
+  # API. Plain HTTP for now (TLS goes in docker/nginx/nginx.conf later).
+  nginx:
+    container_name: smarthub-nginx
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - serve
+    ports:
+      - "8000:80"                   # http://<host>:8000  (bid API, via proxy)
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+  # CD auto-deploy (prod profile ONLY). Polls Docker Hub and recreates labelled
+  # containers on a new push. Gated behind `--profile prod` so it never clobbers a
+  # local source build.
+  watchtower:
+    container_name: smarthub-watchtower
+    image: containrrr/watchtower
+    restart: unless-stopped
+    profiles: ["prod"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --label-enable --cleanup --poll-interval ${WATCHTOWER_POLL_INTERVAL:-300}
+
+volumes:
+  postgres-data:
+  ollama-data:
+  minio-data:

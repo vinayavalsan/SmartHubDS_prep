@@ -1,0 +1,71 @@
+# Local git hooks.
+#
+# One-time setup (installs BOTH the pre-commit and pre-push git hooks from
+# this single file):
+#   pip install -e ".[dev]"
+#   pre-commit install --hook-type pre-commit --hook-type pre-push
+#
+# Run everything on demand:
+#   pre-commit run --all-files                         # isort + black + flake8
+#   pre-commit run --all-files --hook-stage pre-push    # pytest
+default_install_hooks: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        stages: [pre-commit]
+      - id: end-of-file-fixer
+        stages: [pre-commit]
+      - id: check-yaml
+        stages: [pre-commit]
+      - id: check-toml
+        stages: [pre-commit]
+      - id: check-merge-conflict
+        stages: [pre-commit]
+      - id: check-added-large-files
+        args: ["--maxkb=10240"]
+        stages: [pre-commit]
+
+  # Import sorting -- MUST run before black (isort's "black" profile makes
+  # its output already black-compatible, so the two never fight over a
+  # line; see [tool.isort] in pyproject.toml).
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        stages: [pre-commit]
+
+  # Formatting -- runs after isort, before flake8 (so flake8 only ever sees
+  # already-formatted code). Config: [tool.black] in pyproject.toml
+  # (line-length = 88, matching .flake8's max-line-length).
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        stages: [pre-commit]
+
+  # Linting -- last, since it doesn't autofix; only genuine issues should
+  # remain once isort/black have already normalized style.
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+        # Uses the repo's .flake8 config (max-line-length = 88, and the
+        # E203/W503 ignores that keep flake8 from fighting black's style).
+        stages: [pre-commit]
+
+  # Full test suite -- pre-push only (not pre-commit): slower than the
+  # formatting/lint checks above, so it runs once per push rather than on
+  # every commit. Local hook (not a separate repo) so it always runs with
+  # the project's own installed dependencies via the current environment.
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

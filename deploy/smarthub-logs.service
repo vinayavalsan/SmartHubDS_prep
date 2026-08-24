@@ -1,0 +1,18 @@
+[Unit]
+Description=SmartHub docker-compose log collector (date-stamped, 30-day retention)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+# Run from the compose project dir so `docker compose` finds the file + .env.
+# Adjust this path if the repo lives elsewhere on the host.
+WorkingDirectory=/home/ubuntu/smarthub-anton/staging/SmartHubDS_prep
+ExecStart=/usr/bin/python3 tools/log_collector.py --logdir logs --retain-days 30
+Restart=always
+RestartSec=5
+# docker CLI needs root (or a user in the docker group).
+User=root
+
+[Install]
+WantedBy=multi-user.target

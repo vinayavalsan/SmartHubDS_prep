@@ -1,0 +1,389 @@
+"""Centralised logging configuration.
+
+Two independent sinks:
+
+  * **Console (stdout)** -- what ``docker logs`` shows. Human-readable text by
+    default (``ts | LEVEL | project call path | message``); set ``LOG_FORMAT=json``
+    to emit JSON on stdout too.
+  * **JSON file** -- when ``SMARTHUB_LOG_JSON_DIR`` is set, the rich JSON schema
+    below is ALSO written to ``<dir>/<service>.jsonl``, rotated at midnight with
+    ``SMARTHUB_LOG_JSON_RETAIN_DAYS`` (default 30) days of history. This is what
+    keeps ``docker logs`` readable while the persisted file stays machine-parseable
+    (grep/jq, log stores, the error-triage tool).
+
+JSON schema (per line)::
+
+    ts          RFC3339 UTC with milliseconds
+    level       INFO / WARNING / ERROR / ...
+    service     value of SMARTHUB_SERVICE (serve / worker / shap-worker / ...)
+    logger      logger name (usually __name__)
+    msg         human-readable message
+    <context>   any key bound via bind_context()/request_context() or passed as
+                logging `extra=` (e.g. request_id, event, lead_type, latency_ms)
+    error       ONLY on exceptions: {type, msg, fingerprint, stack}
+
+``error.fingerprint`` is a short stable hash of the exception type + call frames
+(file:func:line), so identical failures group together. The full traceback rides
+in ``error.stack`` as one field, so nothing multi-line leaks across log lines.
+
+Public API is unchanged for callers: ``get_logger(__name__)`` and
+``configure_logging()``. The rest is additive: ``bind_context``,
+``request_context``, ``new_request_id``, ``log_event``.
+"""
+
+from __future__ import annotations
+
+import contextvars
+import datetime as _dt
+import hashlib
+import json
+import logging
+import os
+import sys
+import traceback
+import uuid
+from contextlib import contextmanager
+
+_CONFIGURED = False
+_SERVICE: str | None = None
+
+# Human-readable text format (kept from the shared logging setup).
+_TEXT_FORMAT = "%(asctime)s | %(levelname)-5s | " "%(call_path)s | %(message)s"
+_TEXT_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+# Per-request / per-flow fields merged into every JSON log line on this
+# thread/task (see bind_context / request_context).
+_CONTEXT: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "log_context", default={}
+)
+
+# Standard LogRecord attributes -- anything NOT here that lands on a record
+# (i.e. passed via logging `extra=`) is treated as structured context.
+_RESERVED = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "taskName",
+    "message",
+    "asctime",
+    "call_path",
+}
+
+
+_CALL_PATH_MAX_FRAMES = 2
+
+# Third-party libraries that are useful on WARNING/ERROR but too noisy at INFO.
+_QUIET_THIRD_PARTY_LOGGERS = (
+    "paramiko",
+    "alembic",
+)
+
+
+def _project_call_path(record: logging.LogRecord) -> str:
+    """Return a short SmartHub call path for a log record.
+
+    SmartHub logs show at most the direct project caller followed by the
+    emitting function. Third-party logs keep their normal single
+    ``file:function:line`` location.
+
+    Inputs
+    ------
+    record : logging.LogRecord
+        Record being formatted.
+
+    Returns
+    -------
+    str
+        Compact log location or two-frame SmartHub call path.
+    """
+    emitted = f"{record.filename}:{record.funcName}:{record.lineno}"
+    record_path = os.path.abspath(record.pathname).replace("\\", "/")
+
+    # Do not build call chains for third-party / stdlib records.
+    if "/smarthub/" not in record_path:
+        return emitted
+
+    project_frames: list[str] = []
+    frame = sys._getframe()
+
+    while frame is not None:
+        filename = os.path.abspath(frame.f_code.co_filename)
+        normalized = filename.replace("\\", "/")
+
+        function_name = frame.f_code.co_name
+        if (
+            "/smarthub/" in normalized
+            and os.path.basename(filename) != "logging_utils.py"
+            and not function_name.startswith("_")
+        ):
+            entry = f"{os.path.basename(filename)}:" f"{function_name}:{frame.f_lineno}"
+            if not project_frames or project_frames[-1] != entry:
+                project_frames.append(entry)
+
+        frame = frame.f_back
+
+    project_frames.reverse()
+
+    # Locate the emitting function in the captured project stack and include
+    # only its direct SmartHub caller, if one exists.
+    # Private emitters are intentionally hidden from normal console paths.
+    # Show the closest public SmartHub frame instead; exception tracebacks still
+    # retain the complete private/helper stack.
+    if record.funcName.startswith("_"):
+        return project_frames[-1] if project_frames else emitted
+
+    emitted_prefix = f"{record.filename}:{record.funcName}:"
+    emitter_index = None
+    for index, entry in enumerate(project_frames):
+        if entry.startswith(emitted_prefix):
+            emitter_index = index
+
+    if emitter_index is None:
+        return emitted
+
+    chain: list[str] = []
+    if emitter_index > 0:
+        chain.append(project_frames[emitter_index - 1])
+    chain.append(emitted)
+
+    return " -> ".join(chain[-_CALL_PATH_MAX_FRAMES:])
+
+
+class CallPathFilter(logging.Filter):
+    """Attach a compact SmartHub call chain to each log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.call_path = _project_call_path(record)
+        return True
+
+
+def _service_name() -> str:
+    return _SERVICE or os.getenv("SMARTHUB_SERVICE", "app")
+
+
+def _error_block(exc_info) -> dict:
+    """Build the structured error record (type/msg/fingerprint/stack)."""
+    etype, evalue, tb = exc_info
+    frames = traceback.extract_tb(tb)
+    signature = f"{getattr(etype, '__name__', 'Error')}|" + "|".join(
+        f"{os.path.basename(fr.filename)}:{fr.name}:{fr.lineno}" for fr in frames
+    )
+    fingerprint = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
+    stack = "".join(traceback.format_exception(etype, evalue, tb))
+    return {
+        "type": getattr(etype, "__name__", "Error"),
+        "msg": str(evalue),
+        "fingerprint": fingerprint,
+        "stack": stack,
+    }
+
+
+class JsonFormatter(logging.Formatter):
+    """Render a LogRecord as a single JSON line matching the schema above."""
+
+    def format(self, record: logging.LogRecord) -> str:  # noqa: A003
+        ts = (
+            _dt.datetime.fromtimestamp(record.created, _dt.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S."
+            )
+            + f"{int(record.msecs):03d}Z"
+        )
+
+        payload: dict = {
+            "ts": ts,
+            "level": record.levelname,
+            "service": _service_name(),
+            "logger": record.name,
+            "call_path": getattr(
+                record,
+                "call_path",
+                f"{record.filename}:{record.funcName}:{record.lineno}",
+            ),
+            "msg": record.getMessage(),
+        }
+
+        for key, val in _CONTEXT.get().items():
+            payload.setdefault(key, val)
+        for key, val in record.__dict__.items():
+            if key not in _RESERVED and not key.startswith("_"):
+                payload[key] = val
+
+        if record.exc_info:
+            payload["error"] = _error_block(record.exc_info)
+
+        return json.dumps(payload, default=str, ensure_ascii=False)
+
+
+def configure_logging(
+    level: str | None = None, *, fmt: str | None = None, service: str | None = None
+) -> None:
+    """Configure root logging once, idempotently. Subsequent calls are no-ops.
+
+    Inputs
+    ------
+    level : str | None
+        Log level name; falls back to the ``LOG_LEVEL`` env var, then ``INFO``.
+    fmt : str | None
+        ``"json"`` or ``"text"``; falls back to the ``LOG_FORMAT`` env var, then
+        ``"text"``.
+    service : str | None
+        Service name for the ``service`` field in JSON logs; falls back to the
+        ``SMARTHUB_SERVICE`` env var, then ``"app"``.
+    """
+    global _CONFIGURED, _SERVICE
+    if service:
+        _SERVICE = service
+    if _CONFIGURED:
+        return
+
+    resolved = (level or os.getenv("LOG_LEVEL") or "INFO").upper()
+    # Console format: text by default (readable `docker logs`); LOG_FORMAT=json
+    # forces JSON on stdout too.
+    chosen_fmt = (fmt or os.getenv("LOG_FORMAT") or "text").lower()
+
+    handlers: list[logging.Handler] = []
+
+    # 1) Console (stdout) -> what `docker logs` shows.
+    stream = logging.StreamHandler()
+    stream.addFilter(CallPathFilter())
+    if chosen_fmt == "json":
+        stream.setFormatter(JsonFormatter())
+    else:
+        stream.setFormatter(logging.Formatter(fmt=_TEXT_FORMAT, datefmt=_TEXT_DATEFMT))
+    handlers.append(stream)
+
+    # 2) Optional structured sink: when SMARTHUB_LOG_JSON_DIR is set, ALSO write
+    # the rich JSON schema to <dir>/<service>.jsonl, rotated daily with N-day
+    # retention. This keeps `docker logs` human-readable (text on stdout) while
+    # the persisted file stays machine-parseable JSON -- independent of the
+    # console format above.
+    json_dir = os.getenv("SMARTHUB_LOG_JSON_DIR")
+    if json_dir:
+        from logging.handlers import TimedRotatingFileHandler
+
+        try:
+            os.makedirs(json_dir, exist_ok=True)
+            retain = int(os.getenv("SMARTHUB_LOG_JSON_RETAIN_DAYS", "30"))
+            file_handler = TimedRotatingFileHandler(
+                os.path.join(json_dir, f"{_service_name()}.jsonl"),
+                when="midnight",
+                backupCount=retain,
+                utc=True,
+                encoding="utf-8",
+            )
+            file_handler.addFilter(CallPathFilter())
+            file_handler.setFormatter(JsonFormatter())
+            handlers.append(file_handler)
+        except OSError:
+            # Never let a logging-sink problem take down the service.
+            pass
+
+    root = logging.getLogger()
+    root.handlers = handlers  # own the output so the format is consistent
+    root.setLevel(getattr(logging, resolved, logging.INFO))
+
+    # Keep dependency INFO/DEBUG chatter out of SmartHub logs while preserving
+    # third-party warnings and errors that may be operationally important.
+    for logger_name in _QUIET_THIRD_PARTY_LOGGERS:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+    _CONFIGURED = True
+
+
+def get_logger(name: str) -> logging.Logger:
+    """Return a logger for ``name``, ensuring logging is configured.
+
+    Inputs
+    ------
+    name : str
+        Logger name, typically ``__name__``.
+
+    Returns
+    -------
+    logging.Logger
+        The named logger.
+    """
+    configure_logging()
+    return logging.getLogger(name)
+
+
+# --------------------------------------------------------------------------- #
+# structured-context helpers (additive; safe to ignore for plain logging)      #
+# --------------------------------------------------------------------------- #
+def new_request_id() -> str:
+    """Short correlation id for a single request / flow run."""
+    return uuid.uuid4().hex[:12]
+
+
+def bind_context(**fields) -> contextvars.Token:
+    """Merge ``fields`` into the log context for this thread/task.
+
+    Every subsequent JSON log line picks them up automatically (e.g. a
+    ``request_id`` set once at the top of a request appears on all its logs).
+    Returns a token; pass it to :func:`reset_context`, or use the
+    :func:`request_context` manager which handles that for you.
+    """
+    merged = dict(_CONTEXT.get())
+    merged.update({k: v for k, v in fields.items() if v is not None})
+    return _CONTEXT.set(merged)
+
+
+def reset_context(token: contextvars.Token) -> None:
+    """Undo a previous :func:`bind_context`."""
+    _CONTEXT.reset(token)
+
+
+def clear_context() -> None:
+    """Drop all bound context fields."""
+    _CONTEXT.set({})
+
+
+@contextmanager
+def request_context(**fields):
+    """Bind ``fields`` for the duration of the block, then restore.
+
+    Example::
+
+        with request_context(request_id=new_request_id(), lead_type=6):
+            logger.info("recommending bid", extra={"event": "bid_start"})
+    """
+    token = bind_context(**fields)
+    try:
+        yield
+    finally:
+        reset_context(token)
+
+
+def log_event(
+    logger: logging.Logger,
+    event: str,
+    msg: str,
+    *,
+    level: int = logging.INFO,
+    **context,
+) -> None:
+    """Emit a log line carrying a machine ``event`` key plus context fields.
+
+    Thin sugar over ``logger.log(level, msg, extra={"event": event, **context})``::
+
+        log_event(log, "bid_recommended", "recommended bid 0.75",
+                  bid=0.75, latency_ms=31)
+    """
+    logger.log(level, msg, extra={"event": event, **context})

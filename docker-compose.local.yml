@@ -1,0 +1,27 @@
+# Local-build override for docker-compose.prefect.yml.
+#
+# Adds `build:` to the worker + dashboard so they are built FROM SOURCE instead
+# of pulled from Docker Hub. `docker compose ... up --build` tags the built
+# images with the same names as the base file, so nothing is pulled.
+#
+# Used automatically by install.sh when SMARTHUB_ENV=local. Manual:
+#   docker compose -f docker-compose.prefect.yml -f docker-compose.local.yml \
+#       up -d --build
+#
+# Note: bring the stack up WITHOUT `--profile prod` in local mode, so Watchtower
+# does not run (it would pull the Hub image and clobber your local build).
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+
+  serve:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.serve

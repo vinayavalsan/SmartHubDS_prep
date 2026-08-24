@@ -40,6 +40,7 @@ venv.bak/
 leads.parquet
 *.duckdb
 *.duckdb.wal
+data/training/
 
 # Streamlit
 .streamlit/
@@ -47,3 +48,39 @@ leads.parquet
 
 # pytest
 .pytest_cache/
+
+
+# Local Excel files
+*.xlsx
+
+# Model artifacts
+data/models/**/*.json
+data/models/**/*.pkl
+
+# Local Excel files
+*.xlsx
+
+# Auto model registry & weights
+data/models/auto/*.json
+data/models/auto/*.pkl
+data/leads
+mlruns
+scripts
+
+# Ignore all data
+data/**
+
+# Keep the folder itself (optional)
+!data/.gitkeep
+# Ignore everything in docs
+docs/*
+
+# Keep these two files tracked
+!docs/API.pdf
+!docs/TECH_DOCUMENTATION.pdf
+
+# macOS
+.DS_Store
+
+# isort atomic-write temp files
+*.isorted

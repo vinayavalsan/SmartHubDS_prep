@@ -1,0 +1,107 @@
+# SmartHub task configuration (Tier-2 file config).
+#
+# Non-secret, non-business *task* knobs, split by pipeline stage. This is the
+# file to edit for pipeline behaviour.
+#
+# Config tiers (see docs/CONTEXT.md / README):
+#   - Secrets & DB connection   -> .env                (never here)
+#   - Business settings (UI)     -> Postgres config store, edited in the
+#                                   Streamlit Config page: target_cm,
+#                                   bid_floor, bid_max_cap, min_source_quality
+#   - Task configs (this file)   -> per-stage sections below
+#
+# Missing keys/sections fall back to code defaults, so this file is optional.
+# Read in code via smarthub.core.task_config (get / get_int / get_float /
+# get_bool). Override the path with $SMARTHUB_TASK_CONFIG.
+
+data_pull:
+  overlap_hours: 1
+  default_lookback_hours: 168
+  with_expected_revenue: true
+  selected_only: true
+
+validation:
+  # Data validation runs on each pull (warn + report only — never drops/fixes
+  # rows or blocks the pull). A column whose null/blank rate is at or above this
+  # threshold is called out as "high-missing" in the report/notification.
+  high_missing_threshold: 0.5
+
+feature_engineering:
+  # Rolling training window (days) the feature build reads; 0 = all data.
+  training_window_days: 21
+  # Campaign IDs to keep when building the training table. EMPTY = all campaigns
+  # (recommended default). Set specific IDs only to scope training, e.g. [3, 6].
+  # Applies to every lead type, so leave empty unless you know each lead type has
+  # both wins and losses within the chosen campaigns.
+  training_campaign_ids: []
+  # Observed holidays for is_workday live in config/holidays.json (weekends are
+  # handled in code). Override the file path with SMARTHUB_HOLIDAYS.
+
+prediction:
+  bid_step: 0.25
+  # Cold-start / exploration bidding policy (smarthub/server/predict.py:
+  # decide_bid -- see docs/CHANGELOG.md 2026-07-22 "Cold-start/exploration
+  # bidding policy implemented"). Kiran's ask: "recent" must be an
+  # explicit config value, and
+  # cold-start/exploration behaviour must be a defined, auditable rule, not
+  # emergent or random (docs/CONTEXT.md §7).
+  #
+  # Fraction of a bid's optimum to probe above/below on a scheduled explore
+  # slot (hour-of-week bucketed — see exploration_slot()). Also sets schedule
+  # density: N = round(1/this), so 0.10 = 1-in-10 hour-of-week buckets explore.
+  exploration_variance_pct: 0.00
+  # How many days old a currently-serving model's training data can be before
+  # it's flagged as stale in /recommend_bid and /explain_bid responses
+  # (decision_reason, model_data_age_days). Informational only — the explicit
+  # "recent" definition Kiran asked for, surfaced for retraining-cadence calls.
+  recency_window_days: 30
+  # Bid for a lead type with NO model ever trained/promoted yet (true cold
+  # start). Fraction of the way from min_bid to the CM-respecting ceiling,
+  # snapped to bid_step. Bootstraps itself out of existence: the first real
+  # model promotes unconditionally (registry.decide_promotion).
+  cold_start_fallback_bid_pct: 0.50
+  # Pin serving to one specific local model version (e.g. v3_2026-07-09T...)
+  # instead of whatever is currently serving. "none" (default) = serve that.
+  active_model_version: "none"
+  # How /recommend_bid attaches SHAP factors to a prediction's log row
+  # (config.shap_enrichment_mode). $SMARTHUB_SHAP_MODE overrides this.
+  #   inprocess (default): serve computes SHAP in a background task after the
+  #     response -- correct, but the ~1.5s CPU work contends with later
+  #     requests on the same worker (the 1s-TAT throughput bottleneck).
+  #   offload: serve logs the prediction with SHAP empty; a separate
+  #     `shap-worker` process (smarthub.server.shap_worker) backfills it, so
+  #     serving CPU stays free. Requires the shap-worker to be running.
+  #   off: no SHAP enrichment (control mode for benchmarking the bid path).
+  # Default is `offload`: SHAP is computed by the separate shap-worker so the
+  # bid path stays fast (good TAT). Requires the shap-worker to be running to
+  # backfill explanations; bids are unaffected either way.
+  shap_enrichment_mode: offload
+
+explain:
+  # Offline/on-demand "why did Anton bid $X" explanations (SHAP factor
+  # breakdown + a local LLM via Ollama — see train_and_predict/explain.py).
+  # Used by POST /explain_bid (always) and, since 2026-07-23, by
+  # /recommend_bid's background SHAP enrichment (top_factors/base_win_rate
+  # only — no LLM call there, see docs/CHANGELOG.md). Requires:
+  # pip install '.[explain,ml]'.
+  llm_model: qwen2.5:1.5b-instruct
+  # ollama_host below is for non-Docker/local-dev use (a natively-running
+  # Ollama on this machine). $SMARTHUB_OLLAMA_HOST overrides this when set —
+  # docker-compose.prefect.yml sets it to http://ollama:11434 for the `serve`
+  # container, since a Docker-internal service must be reached by its
+  # service name, not localhost. `serve` also auto-pulls this model into
+  # that `ollama` service at startup if it isn't already present, in a
+  # background thread that never blocks startup or live requests (see
+  # explain.ensure_model_pulled_async).
+  ollama_host: http://localhost:11434
+  top_n_factors: 5
+  timeout_seconds: 30
+
+# SLO thresholds for the Health page (monitoring/health_app) and the Slack
+# alerter (monitoring/slo_alerts). Breaching any one is an alert. Computed from
+# the prediction log over a recent window -- no extra infra.
+slo:
+  tat_p99_seconds: 0.8        # p99 turnaround must stay under the 1s TAT
+  error_rate_pct: 1.0         # % of requests that errored
+  shap_backlog: 1000          # rows awaiting SHAP enrichment (shap-worker lag)
+  no_requests_minutes: 10     # no successful request this long => possible outage
