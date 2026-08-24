@@ -90,7 +90,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
     # Feature builds load a windowed slice of lead_pings into pandas; give the
     # worker headroom (a too-low cap shows up as flow runs SIGKILL'd / exit -9).
-    mem_limit: 4g
+    mem_limit: ${WORKER_MEM:-8g}
     mem_reservation: 2g
     # Cap CPU so a training run can never starve the live bid API. Training is
     # CPU-bound (LightGBM); leaving ~4 cores for serving keeps the API responsive

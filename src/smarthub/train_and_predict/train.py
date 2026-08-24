@@ -1,12 +1,20 @@
 """Training workflow for Anton's win-probability model.
 
 This module trains, evaluates, versions, and optionally registers models.
+
+The end-to-end run is expressed as ordered *stages* that share a single
+:class:`TrainingContext`. ``run_training`` executes them sequentially (used by
+the CLI), while ``train_and_predict.flow`` wraps each stage as its own Prefect
+task for per-step observability and isolated retries. Keeping the logic here —
+not in the Prefect entrypoint — preserves the canonical ``smarthub`` module path
+for pickled model objects (see the note in ``flow.py``).
 """
 
 from __future__ import annotations
 
 import argparse
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -169,47 +177,119 @@ def _monotonicity_metrics_for_mlflow(
     return result
 
 
-def run_training(
-    lead_type_id: int,
-    version: str | None = None,
-    register_mlflow: bool = True,
-) -> dict[str, Any]:
-    """Train, evaluate, version, and optionally register one model.
+@dataclass
+class TrainingContext:
+    """Mutable state shared across the ordered training stages.
 
-    Inputs
-    ------
-    lead_type_id : int
-        SmartHub lead type identifier.
-    version : str | None
-        Optional training-table or model version identifier.
-    register_mlflow : bool
-        Whether to log and register the run in MLflow.
+    A single instance flows through :func:`stage_prepare_data` ...
+    :func:`stage_mlflow`; each stage reads what earlier stages produced and
+    writes its own outputs back. This is passed by reference between Prefect
+    tasks (results are never persisted), so large objects such as the training
+    frame and the fitted model are kept in memory rather than serialized.
+    """
 
-    Returns
-    -------
-    dict[str, Any]
-        Training outputs, metrics, lineage, and promotion information.
+    # --- inputs ---
+    lead_type_id: int
+    version: str | None = None
+    register_mlflow: bool = True
+
+    # --- resolved config ---
+    training_config: Any = None
+    lead_type_name: str | None = None
+
+    # --- stage: prepare data ---
+    frame: Any = None
+    numeric: Any = None
+    categorical: Any = None
+    prep_summary: Any = None
+    feature_cols: Any = None
+
+    # --- stage: split + diagnostics ---
+    split_settings: Any = None
+    train_df: Any = None
+    test_df: Any = None
+    X_train: Any = None
+    y_train: Any = None
+    X_test: Any = None
+    y_test: Any = None
+    feature_summary_df: Any = None
+    feature_counts_df: Any = None
+    feature_split_diagnostics: Any = None
+    zero_variance_features: Any = None
+
+    # --- stage: fit ---
+    model_type: Any = None
+    model_params: Any = None
+    calibration_enabled: Any = None
+    model: Any = None
+
+    # --- stage: evaluate + optimizer ---
+    pred: Any = None
+    pred_class: Any = None
+    model_metrics: Any = None
+    evaluation_df: Any = None
+    optimizer_config: Any = None
+    target_cm: Any = None
+    min_bid: Any = None
+    bid_step: Any = None
+    optimizer_chunk_size: Any = None
+    monotonicity_config: Any = None
+    optimizer_eval_df: Any = None
+    optimizer_summary_dict: Any = None
+    monotonicity_summary_dict: Any = None
+    optimizer_mlflow_metrics: Any = None
+
+    # --- stage: save reports ---
+    report_dir: Any = None
+    lineage: Any = None
+    test_set_id: Any = None
+
+    # --- stage: promotion decision ---
+    promotion_mode: Any = None
+    decision: Any = None
+    eligibility_status: Any = None
+    promotion_status: Any = None
+    promotion_reason: Any = None
+    promotion_comparison: Any = None
+
+    # --- stage: save version + promote ---
+    manifest: Any = None
+    model_path: Any = None
+    comparison_temp_dir: Any = None
+    comparison_artifacts: Any = None
+    promoted: bool = False
+
+
+def stage_prepare_data(ctx: TrainingContext) -> TrainingContext:
+    """Load config and the training table; validate it is trainable.
+
+    Populates ``training_config``, ``lead_type_name``, ``frame``, ``numeric``,
+    ``categorical``, ``prep_summary`` and ``feature_cols`` on ``ctx``.
 
     Raises
     ------
     ValueError
-        If the prepared data cannot support model training.
+        If there are too few training rows to proceed.
     """
-    training_config = config.load_training_config(lead_type_id)
-    lead_type_name = resolve_lead_type_name(lead_type_id)
-    np.random.seed(training_config.random_seed)
+    ctx.training_config = config.load_training_config(ctx.lead_type_id)
+    ctx.lead_type_name = resolve_lead_type_name(ctx.lead_type_id)
+    np.random.seed(ctx.training_config.random_seed)
 
     logger.info(
         "Loading training table for lead_type=%s (%s)",
-        lead_type_name,
-        lead_type_id,
+        ctx.lead_type_name,
+        ctx.lead_type_id,
     )
     frame, numeric, categorical, prep_summary = preprocessing.prepare_training_data(
-        lead_type_id,
-        lead_type_name,
-        version,
+        ctx.lead_type_id,
+        ctx.lead_type_name,
+        ctx.version,
     )
-    feature_cols = numeric + categorical
+    ctx.frame = frame
+    ctx.numeric = numeric
+    ctx.categorical = categorical
+    ctx.prep_summary = prep_summary
+    ctx.feature_cols = numeric + categorical
 
     logger.info("Dataset Prepared")
     logger.info(
@@ -237,10 +317,27 @@ def run_training(
     if prep_summary["training_rows"] < 50:
         raise ValueError(
             f"Only {prep_summary['training_rows']} training rows for "
-            f"{lead_type_name}; need more data before training."
+            f"{ctx.lead_type_name}; need more data before training."
         )
 
-    preprocessing.assert_trainable(frame, lead_type_name)
+    preprocessing.assert_trainable(frame, ctx.lead_type_name)
+    return ctx
+
+
+def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
+    """Split into train/test and compute feature-coverage diagnostics.
+
+    Populates the split partitions, feature-summary artifacts, coverage
+    diagnostics and the zero-variance feature list on ``ctx``. Emits a warning
+    notification if any binary feature loses variance in the training split.
+    """
+    training_config = ctx.training_config
+    frame = ctx.frame
+    numeric = ctx.numeric
+    categorical = ctx.categorical
+    feature_cols = ctx.feature_cols
+    lead_type_name = ctx.lead_type_name
+    lead_type_id = ctx.lead_type_id
 
     split_settings = training_config.split
     train_df, test_df = split_training_data(
@@ -259,6 +356,9 @@ def run_training(
         lead_type_name,
         "Test partition",
     )
+    ctx.split_settings = split_settings
+    ctx.train_df = train_df
+    ctx.test_df = test_df
 
     logger.info("Feature columns: %s", feature_cols)
 
@@ -280,11 +380,17 @@ def run_training(
         feature_counts_df=feature_counts_df,
         target_col=config.TARGET_COL,
     )
+    ctx.feature_summary_df = feature_summary_df
+    ctx.feature_counts_df = feature_counts_df
 
     X_train = train_df[feature_cols]
     y_train = train_df[config.TARGET_COL]
     X_test = test_df[feature_cols]
     y_test = test_df[config.TARGET_COL]
+    ctx.X_train = X_train
+    ctx.y_train = y_train
+    ctx.X_test = X_test
+    ctx.y_test = y_test
 
     logger.info("Train/Test Split")
     logger.info(
@@ -361,7 +467,7 @@ def run_training(
         ].round(2)
         logger.info("\n%s", display_coverage_df.to_string(index=False))
 
-    feature_split_diagnostics = differing_coverage_df.to_dict(orient="records")
+    ctx.feature_split_diagnostics = differing_coverage_df.to_dict(orient="records")
 
     binary_variance_loss = []
     for row in feature_coverage_diagnostics:
@@ -386,15 +492,24 @@ def run_training(
             },
         )
 
-    zero_variance_features = [
+    ctx.zero_variance_features = [
         row["feature"]
         for row in feature_coverage_diagnostics
         if row["train_unique"] <= 1
     ]
+    return ctx
+
+
+def stage_fit_model(ctx: TrainingContext) -> TrainingContext:
+    """Build and fit the model on the training partition."""
+    training_config = ctx.training_config
 
     model_type = training_config.model_type
     model_params = training_config.model_parameters
     calibration_enabled = training_config.calibration_enabled
+    ctx.model_type = model_type
+    ctx.model_params = model_params
+    ctx.calibration_enabled = calibration_enabled
 
     logger.info("Training Model")
     logger.info("  Model type                            : %s", model_type)
@@ -405,14 +520,27 @@ def run_training(
 
     model = models.build_model(
         model_type,
-        numeric,
-        categorical,
+        ctx.numeric,
+        ctx.categorical,
         model_params,
         calibration_enabled=calibration_enabled,
         calibration_method=training_config.calibration_method,
         calibration_cv=training_config.calibration_cv,
     )
-    model.fit(X_train, y_train)
+    model.fit(ctx.X_train, ctx.y_train)
+    ctx.model = model
+    return ctx
+
+
+def stage_evaluate(ctx: TrainingContext) -> TrainingContext:
+    """Evaluate the fitted model and run the offline bid optimizer."""
+    training_config = ctx.training_config
+    model = ctx.model
+    X_test = ctx.X_test
+    y_test = ctx.y_test
+    test_df = ctx.test_df
+    feature_cols = ctx.feature_cols
+    frame = ctx.frame
 
     logger.info("Evaluating Model")
     pred, pred_class, model_metrics = metrics.evaluate_model(
@@ -420,10 +548,13 @@ def run_training(
         X_test,
         y_test,
     )
+    ctx.pred = pred
+    ctx.pred_class = pred_class
 
     evaluation_df = test_df.copy()
     evaluation_df["predicted_win_probability"] = pred
     evaluation_df["predicted_class"] = pred_class
+    ctx.evaluation_df = evaluation_df
 
     optimizer_config = training_config.optimizer
     target_cm = optimizer_config.target_cm
@@ -431,6 +562,12 @@ def run_training(
     bid_step = optimizer_config.bid_step
     optimizer_chunk_size = optimizer_config.chunk_size
     monotonicity_config = training_config.promotion_monotonicity
+    ctx.optimizer_config = optimizer_config
+    ctx.target_cm = target_cm
+    ctx.min_bid = min_bid
+    ctx.bid_step = bid_step
+    ctx.optimizer_chunk_size = optimizer_chunk_size
+    ctx.monotonicity_config = monotonicity_config
 
     optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
         test_eval_df=test_df,
@@ -458,36 +595,54 @@ def run_training(
         optimizer_eval_df = None
         optimizer_summary = None
         monotonicity_summary_dict = {}
+    ctx.optimizer_eval_df = optimizer_eval_df
+    ctx.model_metrics = model_metrics
+    ctx.monotonicity_summary_dict = monotonicity_summary_dict
 
     optimizer_summary_dict = (
         optimizer_summary.to_dict() if optimizer_summary is not None else {}
     )
+    ctx.optimizer_summary_dict = optimizer_summary_dict
     optimizer_mlflow_metrics = _optimizer_metrics_for_mlflow(optimizer_summary_dict)
     optimizer_mlflow_metrics.update(
         _monotonicity_metrics_for_mlflow(monotonicity_summary_dict)
     )
+    ctx.optimizer_mlflow_metrics = optimizer_mlflow_metrics
 
     metrics.log_model_evaluation(
         model_metrics=model_metrics,
         rows_trained=len(frame),
-        train_rows=len(X_train),
+        train_rows=len(ctx.X_train),
         test_rows=len(X_test),
     )
+    return ctx
+
+
+def stage_save_reports(ctx: TrainingContext) -> TrainingContext:
+    """Persist report files and build the run lineage."""
+    training_config = ctx.training_config
+    lead_type_name = ctx.lead_type_name
+    lead_type_id = ctx.lead_type_id
+    model_metrics = ctx.model_metrics
+    prep_summary = ctx.prep_summary
+    optimizer_eval_df = ctx.optimizer_eval_df
+    split_settings = ctx.split_settings
 
     logger.info("Saving Reports")
     report_dir = training_config.report_dir(lead_type_name)
     Path(report_dir).mkdir(parents=True, exist_ok=True)
+    ctx.report_dir = report_dir
 
     training_artifacts.save_feature_summary_files(
         report_dir,
-        feature_summary_df,
-        feature_counts_df,
+        ctx.feature_summary_df,
+        ctx.feature_counts_df,
     )
     training_artifacts.save_performance_plots(
         report_dir=report_dir,
-        y_test=y_test,
-        pred=pred,
-        pred_class=pred_class,
+        y_test=ctx.y_test,
+        pred=ctx.pred,
+        pred_class=ctx.pred_class,
         roc_auc=model_metrics.roc_auc,
         pr_auc=model_metrics.pr_auc,
         accuracy=model_metrics.accuracy,
@@ -499,22 +654,22 @@ def run_training(
     )
 
     lineage = {
-        "model_type": model_type,
-        "calibrated": bool(calibration_enabled),
+        "model_type": ctx.model_type,
+        "calibrated": bool(ctx.calibration_enabled),
         "split_strategy": split_settings["strategy"],
         "split_test_size": split_settings["test_size"],
         "training_table_version": prep_summary["training_table_version"],
         "data_min_created_at": prep_summary["data_min_created_at"],
         "data_max_created_at": prep_summary["data_max_created_at"],
         "source_row_count": prep_summary["source_row_count"],
-        "zero_variance_features": list(zero_variance_features),
-        "feature_split_diagnostics": feature_split_diagnostics,
+        "zero_variance_features": list(ctx.zero_variance_features),
+        "feature_split_diagnostics": ctx.feature_split_diagnostics,
     }
 
     logger.info(
         "Lineage: model=%s trained on table version %s "
         "(data %s → %s, %s source rows)",
-        model_type,
+        ctx.model_type,
         lineage["training_table_version"],
         lineage["data_min_created_at"],
         lineage["data_max_created_at"],
@@ -522,22 +677,24 @@ def run_training(
     )
 
     test_set_id = training_artifacts.build_test_set_id(
-        test_df,
+        ctx.test_df,
         training_table_version=prep_summary["training_table_version"],
         split_settings=split_settings,
     )
     lineage["test_set_id"] = test_set_id
+    ctx.lineage = lineage
+    ctx.test_set_id = test_set_id
 
     evaluation_summary = {
         "lead_type_id": lead_type_id,
         "lead_type_name": lead_type_name,
-        "rows_trained": int(len(frame)),
-        "train_rows": int(len(X_train)),
-        "test_rows": int(len(X_test)),
+        "rows_trained": int(len(ctx.frame)),
+        "train_rows": int(len(ctx.X_train)),
+        "test_rows": int(len(ctx.X_test)),
         **lineage,
         **model_metrics.to_dict(),
-        "bid_monotonicity": monotonicity_summary_dict,
-        "bid_optimizer": optimizer_summary_dict,
+        "bid_monotonicity": ctx.monotonicity_summary_dict,
+        "bid_optimizer": ctx.optimizer_summary_dict,
     }
 
     training_artifacts.save_evaluation_summary(
@@ -549,8 +706,22 @@ def run_training(
         report_dir,
         optimizer_eval_df,
     )
+    return ctx
+
+
+def stage_promotion_decision(ctx: TrainingContext) -> TrainingContext:
+    """Decide whether the challenger is eligible for promotion."""
+    training_config = ctx.training_config
+    lead_type_name = ctx.lead_type_name
+    model_metrics = ctx.model_metrics
+    optimizer_summary_dict = ctx.optimizer_summary_dict
+    monotonicity_summary_dict = ctx.monotonicity_summary_dict
+    monotonicity_config = ctx.monotonicity_config
+    test_df = ctx.test_df
+    y_test = ctx.y_test
 
     promotion_mode = training_config.promotion_mode
+    ctx.promotion_mode = promotion_mode
     if promotion_mode == "disabled":
         decision = None
         eligibility_status = "not_evaluated"
@@ -590,10 +761,10 @@ def run_training(
                     lead_type_name,
                     test_df,
                     y_test,
-                    target_cm,
-                    min_bid,
-                    bid_step,
-                    optimizer_chunk_size,
+                    ctx.target_cm,
+                    ctx.min_bid,
+                    ctx.bid_step,
+                    ctx.optimizer_chunk_size,
                     monotonicity_config,
                 )
             )
@@ -705,6 +876,40 @@ def run_training(
         )
         logger.info("  Reason                                : %s", decision.reason)
 
+    ctx.decision = decision
+    ctx.eligibility_status = eligibility_status
+    ctx.promotion_status = promotion_status
+    ctx.promotion_reason = promotion_reason
+    ctx.promotion_comparison = promotion_comparison
+    return ctx
+
+
+def stage_save_and_promote(ctx: TrainingContext) -> TrainingContext:
+    """Persist the versioned model and, if eligible, promote it.
+
+    Save-version and promote are intentionally in one stage: passing promotion
+    eligibility is not the same as serving, and splitting them across retryable
+    tasks risks a "saved but half-promoted" state. The atomic
+    publish->flip->mark handling in ``registry.promote`` is preserved.
+    """
+    training_config = ctx.training_config
+    lead_type_id = ctx.lead_type_id
+    lead_type_name = ctx.lead_type_name
+    model = ctx.model
+    feature_cols = ctx.feature_cols
+    model_metrics = ctx.model_metrics
+    optimizer_summary_dict = ctx.optimizer_summary_dict
+    lineage = ctx.lineage
+    model_params = ctx.model_params
+    promotion_mode = ctx.promotion_mode
+    decision = ctx.decision
+    optimizer_eval_df = ctx.optimizer_eval_df
+    prep_summary = ctx.prep_summary
+    test_set_id = ctx.test_set_id
+    split_settings = ctx.split_settings
+    monotonicity_config = ctx.monotonicity_config
+    monotonicity_summary_dict = ctx.monotonicity_summary_dict
+
     manifest = registry.save_version(
         model,
         lead_type_name,
@@ -715,13 +920,14 @@ def run_training(
         model_params=model_params,
         training_config=training_config.as_dict(),
         promotion_mode=promotion_mode,
-        eligibility_status=eligibility_status,
-        promotion_status=promotion_status,
-        promotion_decision_reason=promotion_reason,
-        promotion_comparison=promotion_comparison,
+        eligibility_status=ctx.eligibility_status,
+        promotion_status=ctx.promotion_status,
+        promotion_decision_reason=ctx.promotion_reason,
+        promotion_comparison=ctx.promotion_comparison,
     )
 
     model_path = manifest["model_path"]
+    ctx.model_path = model_path
 
     artifact_metadata = {
         "training_run_id": manifest["training_run_id"],
@@ -731,19 +937,19 @@ def run_training(
         "training_table_version": prep_summary["training_table_version"],
         "split_settings": split_settings,
         "random_seed": training_config.random_seed,
-        "model_type": model_type,
+        "model_type": ctx.model_type,
         "model_parameters": model_params,
         "calibration": {
-            "enabled": calibration_enabled,
+            "enabled": ctx.calibration_enabled,
             "method": training_config.calibration_method,
             "cv": training_config.calibration_cv,
         },
         "feature_cols": list(feature_cols),
-        "zero_variance_features": list(zero_variance_features),
-        "feature_split_diagnostics": feature_split_diagnostics,
-        "train_rows": int(len(X_train)),
-        "test_rows": int(len(X_test)),
-        "optimizer": optimizer_config.as_dict(),
+        "zero_variance_features": list(ctx.zero_variance_features),
+        "feature_split_diagnostics": ctx.feature_split_diagnostics,
+        "train_rows": int(len(ctx.X_train)),
+        "test_rows": int(len(ctx.X_test)),
+        "optimizer": ctx.optimizer_config.as_dict(),
         "observed_production_policy": {
             key: value
             for key, value in optimizer_summary_dict.items()
@@ -763,7 +969,7 @@ def run_training(
     comparison_temp_dir = None
     comparison_artifacts = {}
     if training_config.comparison_artifacts:
-        if not register_mlflow:
+        if not ctx.register_mlflow:
             logger.warning(
                 "Model-comparison artifacts were requested, but MLflow logging "
                 "is disabled. The comparison artifacts will not be retained."
@@ -779,10 +985,12 @@ def run_training(
             )
             comparison_artifacts = training_artifacts.save_comparison_artifacts(
                 output_dir=comparison_temp_dir.name,
-                evaluation_df=evaluation_df,
+                evaluation_df=ctx.evaluation_df,
                 optimizer_df=optimizer_eval_df,
                 metadata=artifact_metadata,
             )
+    ctx.comparison_temp_dir = comparison_temp_dir
+    ctx.comparison_artifacts = comparison_artifacts
 
     logger.info(
         "Saved training run %s → %s",
@@ -824,7 +1032,7 @@ def run_training(
             raise
         promoted = True
         manifest = registry.load_manifest(lead_type_name, manifest["training_run_id"])
-        promotion_status = "promoted"
+        ctx.promotion_status = "promoted"
         logger.info(
             "Automatically promoted %s to currently-serving for '%s'.",
             manifest["production_model_version"],
@@ -835,7 +1043,7 @@ def run_training(
             "Training run %s was saved with status %s. "
             "Currently-serving model remains unchanged.",
             manifest["training_run_id"],
-            promotion_status,
+            ctx.promotion_status,
         )
     elif promotion_mode == "disabled":
         logger.info(
@@ -850,120 +1058,203 @@ def run_training(
             manifest["training_run_id"],
         )
 
-    if register_mlflow:
-        try:
-            from . import mlflow_utils
+    ctx.manifest = manifest
+    ctx.promoted = promoted
+    return ctx
 
-            experiment_name = (
-                f"{training_config.mlflow_experiment_name}_{lead_type_name}"
+
+def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
+    """Log (and optionally register/promote) the run in MLflow.
+
+    Best-effort: any MLflow error is logged and swallowed so it never fails the
+    training run. Skipped entirely when ``register_mlflow`` is False.
+    """
+    training_config = ctx.training_config
+    lead_type_name = ctx.lead_type_name
+    model = ctx.model
+    model_params = ctx.model_params
+    feature_cols = ctx.feature_cols
+    model_metrics = ctx.model_metrics
+    report_dir = ctx.report_dir
+    lineage = ctx.lineage
+    promotion_mode = ctx.promotion_mode
+    promotion_reason = ctx.promotion_reason
+    comparison_artifacts = ctx.comparison_artifacts
+    comparison_temp_dir = ctx.comparison_temp_dir
+    manifest = ctx.manifest
+    promoted = ctx.promoted
+
+    try:
+        from . import mlflow_utils
+
+        experiment_name = f"{training_config.mlflow_experiment_name}_{lead_type_name}"
+
+        mlflow_metadata = mlflow_utils.log_training_run(
+            model=model,
+            model_params=model_params,
+            feature_cols=feature_cols,
+            metrics=model_metrics.to_dict(),
+            optimizer_metrics=ctx.optimizer_mlflow_metrics,
+            report_dir=report_dir,
+            comparison_artifact_dir=comparison_artifacts.get("artifact_dir"),
+            tracking_db_path=training_config.mlflow_tracking_db_path,
+            artifact_root=training_config.mlflow_artifact_root,
+            experiment_name=experiment_name,
+            run_name=manifest["training_run_id"],
+            training_config_path=Path(
+                training_config.raw["resolved"]["config_path"]
+            ),
+            extra_params={
+                "lead_type_name": lead_type_name,
+                "training_run_id": manifest["training_run_id"],
+                "promotion_mode": promotion_mode,
+                **lineage,
+            },
+            extra_tags={
+                "eligibility_status": ctx.eligibility_status,
+                "promotion_status": ctx.promotion_status,
+                "promoted": promoted,
+                "production_model_version": manifest.get("production_model_version"),
+                "model_version": manifest.get("production_model_version"),
+                "promotion_reason": promotion_reason,
+            },
+        )
+        manifest = registry.update_manifest(
+            lead_type_name,
+            manifest["training_run_id"],
+            **mlflow_metadata,
+        )
+        if comparison_artifacts:
+            manifest = registry.update_manifest(
+                lead_type_name,
+                manifest["training_run_id"],
+                comparison_artifact_path="comparison",
             )
-
-            mlflow_metadata = mlflow_utils.log_training_run(
-                model=model,
-                model_params=model_params,
-                feature_cols=feature_cols,
-                metrics=model_metrics.to_dict(),
-                optimizer_metrics=optimizer_mlflow_metrics,
-                report_dir=report_dir,
-                comparison_artifact_dir=comparison_artifacts.get("artifact_dir"),
+        if promoted:
+            promotion_mlflow_metadata = mlflow_utils.promote_training_run(
+                training_run_id=manifest["training_run_id"],
+                lead_type_name=lead_type_name,
+                production_model_version=manifest["production_model_version"],
+                reason=promotion_reason,
                 tracking_db_path=training_config.mlflow_tracking_db_path,
                 artifact_root=training_config.mlflow_artifact_root,
                 experiment_name=experiment_name,
-                run_name=manifest["training_run_id"],
-                training_config_path=Path(
-                    training_config.raw["resolved"]["config_path"]
+                registered_model_name=(
+                    training_config.mlflow_registered_model_name
                 ),
-                extra_params={
-                    "lead_type_name": lead_type_name,
-                    "training_run_id": manifest["training_run_id"],
-                    "promotion_mode": promotion_mode,
-                    **lineage,
-                },
-                extra_tags={
-                    "eligibility_status": eligibility_status,
-                    "promotion_status": promotion_status,
-                    "promoted": promoted,
-                    "production_model_version": manifest.get(
-                        "production_model_version"
-                    ),
-                    "model_version": manifest.get("production_model_version"),
-                    "promotion_reason": promotion_reason,
-                },
+                mlflow_run_id=manifest.get("mlflow_run_id"),
             )
             manifest = registry.update_manifest(
                 lead_type_name,
                 manifest["training_run_id"],
-                **mlflow_metadata,
+                **promotion_mlflow_metadata,
             )
-            if comparison_artifacts:
-                manifest = registry.update_manifest(
-                    lead_type_name,
-                    manifest["training_run_id"],
-                    comparison_artifact_path="comparison",
-                )
-            if promoted:
-                promotion_mlflow_metadata = mlflow_utils.promote_training_run(
-                    training_run_id=manifest["training_run_id"],
-                    lead_type_name=lead_type_name,
-                    production_model_version=manifest["production_model_version"],
-                    reason=promotion_reason,
-                    tracking_db_path=training_config.mlflow_tracking_db_path,
-                    artifact_root=training_config.mlflow_artifact_root,
-                    experiment_name=experiment_name,
-                    registered_model_name=(
-                        training_config.mlflow_registered_model_name
-                    ),
-                    mlflow_run_id=manifest.get("mlflow_run_id"),
-                )
-                manifest = registry.update_manifest(
-                    lead_type_name,
-                    manifest["training_run_id"],
-                    **promotion_mlflow_metadata,
-                )
-            logger.info(
-                "Logged run '%s' to MLflow experiment '%s'",
-                manifest["training_run_id"],
-                experiment_name,
-            )
-            logger.info(
-                "Logged run to MLflow experiment '%s'",
-                training_config.mlflow_experiment_name,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("MLflow logging skipped: %s", exc)
-        finally:
-            if comparison_temp_dir is not None:
-                comparison_temp_dir.cleanup()
+        logger.info(
+            "Logged run '%s' to MLflow experiment '%s'",
+            manifest["training_run_id"],
+            experiment_name,
+        )
+        logger.info(
+            "Logged run to MLflow experiment '%s'",
+            training_config.mlflow_experiment_name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MLflow logging skipped: %s", exc)
+    finally:
+        if comparison_temp_dir is not None:
+            comparison_temp_dir.cleanup()
 
+    ctx.manifest = manifest
+    return ctx
+
+
+def build_result(ctx: TrainingContext) -> dict[str, Any]:
+    """Assemble the training-run result dictionary from the context."""
+    manifest = ctx.manifest
+    eligibility_status = ctx.eligibility_status
     return {
-        "lead_type_id": lead_type_id,
-        "lead_type_name": lead_type_name,
-        "model_path": model_path,
+        "lead_type_id": ctx.lead_type_id,
+        "lead_type_name": ctx.lead_type_name,
+        "model_path": ctx.model_path,
         "training_run_id": manifest["training_run_id"],
         "model_version": manifest.get("production_model_version"),
         "production_model_version": manifest.get("production_model_version"),
-        "promotion_mode": promotion_mode,
+        "promotion_mode": ctx.promotion_mode,
         "eligibility_status": eligibility_status,
-        "promotion_status": promotion_status,
+        "promotion_status": ctx.promotion_status,
         "promotion_eligible": (
             True
             if eligibility_status == "eligible"
             else False if eligibility_status == "not_eligible" else None
         ),
-        "promoted": promoted,
-        "promotion_reason": promotion_reason,
-        "promotion_comparison": promotion_comparison,
-        "report_dir": report_dir,
-        "metrics": model_metrics.to_dict(),
-        "optimizer_summary": optimizer_summary_dict,
-        "monotonicity_summary": monotonicity_summary_dict,
-        "prep_summary": prep_summary,
-        "lineage": lineage,
-        "feature_cols": list(feature_cols),
-        "split_settings": split_settings,
-        "test_set_id": test_set_id,
+        "promoted": ctx.promoted,
+        "promotion_reason": ctx.promotion_reason,
+        "promotion_comparison": ctx.promotion_comparison,
+        "report_dir": ctx.report_dir,
+        "metrics": ctx.model_metrics.to_dict(),
+        "optimizer_summary": ctx.optimizer_summary_dict,
+        "monotonicity_summary": ctx.monotonicity_summary_dict,
+        "prep_summary": ctx.prep_summary,
+        "lineage": ctx.lineage,
+        "feature_cols": list(ctx.feature_cols),
+        "split_settings": ctx.split_settings,
+        "test_set_id": ctx.test_set_id,
         "comparison_artifact_path": manifest.get("comparison_artifact_path"),
     }
+
+
+# Ordered training stages. ``run_training`` (CLI) walks these in-process; the
+# Prefect flow wraps each as its own task. Keep this list and the flow in sync.
+TRAINING_STAGES = (
+    stage_prepare_data,
+    stage_split_and_diagnostics,
+    stage_fit_model,
+    stage_evaluate,
+    stage_save_reports,
+    stage_promotion_decision,
+    stage_save_and_promote,
+)
+
+
+def run_training(
+    lead_type_id: int,
+    version: str | None = None,
+    register_mlflow: bool = True,
+) -> dict[str, Any]:
+    """Train, evaluate, version, and optionally register one model.
+
+    Runs the ordered training stages sequentially in-process and returns the
+    assembled result. The Prefect flow runs the same stages as separate tasks.
+
+    Inputs
+    ------
+    lead_type_id : int
+        SmartHub lead type identifier.
+    version : str | None
+        Optional training-table or model version identifier.
+    register_mlflow : bool
+        Whether to log and register the run in MLflow.
+
+    Returns
+    -------
+    dict[str, Any]
+        Training outputs, metrics, lineage, and promotion information.
+
+    Raises
+    ------
+    ValueError
+        If the prepared data cannot support model training.
+    """
+    ctx = TrainingContext(
+        lead_type_id=lead_type_id,
+        version=version,
+        register_mlflow=register_mlflow,
+    )
+    for stage in TRAINING_STAGES:
+        stage(ctx)
+    if register_mlflow:
+        stage_mlflow(ctx)
+    return build_result(ctx)
 
 
 def _evaluate_currently_serving_model(
