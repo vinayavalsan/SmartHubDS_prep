@@ -56,29 +56,61 @@ def _feature_breakdown(lead_type_id, feature_cols):
     }
 
 
-@task(name="train-anton-model")
-def _train_task(lead_type_id, version, register_mlflow):
-    """Run model training and offline optimizer evaluation for one lead type.
+# Each training stage is exposed as its own Prefect task for per-step
+# observability and isolated retries. The shared TrainingContext is passed by
+# reference between tasks; results are never persisted (persist_result=False),
+# so the large in-memory objects it carries (the training frame, the fitted
+# model) are handed off directly rather than serialized to result storage.
+# The two registry-mutating stages (save-version, promote) are deliberately a
+# single task so a mid-way retry cannot leave a "saved but half-promoted" state.
 
-    Inputs
-    ------
-    lead_type_id : int
-        SmartHub lead type identifier.
-    version : str | None
-        Optional training-table or model version identifier.
-    register_mlflow : bool
-        Whether to log and register the run in MLflow.
 
-    Returns
-    -------
-    dict
-        Training workflow result.
-    """
-    return train.run_training(
-        lead_type_id=lead_type_id,
-        version=version,
-        register_mlflow=register_mlflow,
-    )
+@task(name="prepare-data", persist_result=False)
+def _prepare_data_task(ctx):
+    """Load config and the training table; validate it is trainable."""
+    return train.stage_prepare_data(ctx)
+
+
+@task(name="split-and-diagnostics", persist_result=False)
+def _split_and_diagnostics_task(ctx):
+    """Split into train/test and compute feature-coverage diagnostics."""
+    return train.stage_split_and_diagnostics(ctx)
+
+
+@task(name="train-fit", persist_result=False)
+def _fit_model_task(ctx):
+    """Build and fit the model on the training partition."""
+    return train.stage_fit_model(ctx)
+
+
+@task(name="evaluate", persist_result=False)
+def _evaluate_task(ctx):
+    """Evaluate the fitted model and run the offline bid optimizer."""
+    return train.stage_evaluate(ctx)
+
+
+@task(name="save-reports", persist_result=False)
+def _save_reports_task(ctx):
+    """Persist report files and build the run lineage."""
+    return train.stage_save_reports(ctx)
+
+
+@task(name="promotion-decision", persist_result=False)
+def _promotion_decision_task(ctx):
+    """Decide whether the challenger is eligible for promotion."""
+    return train.stage_promotion_decision(ctx)
+
+
+@task(name="save-version-and-promote", persist_result=False)
+def _save_and_promote_task(ctx):
+    """Persist the versioned model and, if eligible, promote it."""
+    return train.stage_save_and_promote(ctx)
+
+
+@task(name="mlflow-log", persist_result=False)
+def _mlflow_task(ctx):
+    """Log (and optionally register/promote) the run in MLflow."""
+    return train.stage_mlflow(ctx)
 
 
 @flow(
@@ -117,7 +149,21 @@ def train_flow(
         register_mlflow,
     )
 
-    result = _train_task(lead_type_id, version, register_mlflow)
+    ctx = train.TrainingContext(
+        lead_type_id=lead_type_id,
+        version=version,
+        register_mlflow=register_mlflow,
+    )
+    ctx = _prepare_data_task(ctx)
+    ctx = _split_and_diagnostics_task(ctx)
+    ctx = _fit_model_task(ctx)
+    ctx = _evaluate_task(ctx)
+    ctx = _save_reports_task(ctx)
+    ctx = _promotion_decision_task(ctx)
+    ctx = _save_and_promote_task(ctx)
+    if register_mlflow:
+        ctx = _mlflow_task(ctx)
+    result = train.build_result(ctx)
 
     m = result["metrics"]
     opt = result["optimizer_summary"] or {}
