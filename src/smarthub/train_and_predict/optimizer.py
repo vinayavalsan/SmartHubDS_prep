@@ -391,7 +391,41 @@ def score_recommended_bids(
 
     optimizer_df = pd.concat(result_chunks, axis=0)
     result = pd.concat([eval_df, optimizer_df], axis=1)
-    result = result.dropna(subset=["recommended_bid"]).copy()
+
+    no_recommendation_mask = result["recommended_bid"].isna()
+    no_recommendation_rows = int(no_recommendation_mask.sum())
+    if no_recommendation_rows:
+        no_recommendation = result.loc[no_recommendation_mask]
+        no_candidate_rows = int(
+            (no_recommendation["n_candidate_bids"].fillna(0) == 0).sum()
+        )
+        max_bid_below_min_rows = int(
+            (
+                no_recommendation["max_bid"].notna()
+                & (no_recommendation["max_bid"] < min_bid)
+            ).sum()
+        )
+
+        logger.info("Bid Optimization Row Filtering")
+        logger.info("  Input rows                           : %s", f"{n_rows:,}")
+        logger.info(
+            "  No recommended bid                  : %s",
+            f"{no_recommendation_rows:,}",
+        )
+        logger.info(
+            "    No candidate bids                 : %s",
+            f"{no_candidate_rows:,}",
+        )
+        logger.info(
+            "    Max allowable bid < minimum bid   : %s",
+            f"{max_bid_below_min_rows:,}",
+        )
+        logger.info(
+            "  Rows returned                       : %s",
+            f"{n_rows - no_recommendation_rows:,}",
+        )
+
+    result = result.loc[~no_recommendation_mask].copy()
     if result.empty:
         return None
     result.attrs["monotonicity_diagnostics"] = monotonicity

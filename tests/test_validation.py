@@ -76,13 +76,16 @@ def test_cross_field_current_carrier_when_not_insured():
     assert rep.cross_field["current_carrier_when_not_insured"] == 1
 
 
-def test_cross_field_won_true_without_bid():
-    """Cross-field check flags won='true' rows with no bid."""
+def test_cross_field_won_true_without_bid_is_excluded_as_auction_ineligible():
+    """Won rows with no positive bid are excluded before cross-field checks."""
     raw = _raw()
     raw.loc[raw["id"] == 1, "won"] = "true"
     raw.loc[raw["id"] == 1, "bid"] = 0.0
+
     rep = validate_leads(raw)
-    assert rep.cross_field["won_true_without_bid"] >= 1
+
+    assert rep.auction_excluded_rows >= 1
+    assert "won_true_without_bid" not in rep.cross_field
 
 
 def test_missing_catalogue_and_high_missing():

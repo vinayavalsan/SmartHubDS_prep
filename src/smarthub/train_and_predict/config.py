@@ -1388,9 +1388,7 @@ def load_hyperparameter_search_config(
 
     resolved_raw = copy.deepcopy(hpo_root)
     resolved_raw["lead_type_id"] = int(lead_type_id)
-    resolved_raw["models"] = {
-        selected_model_type: copy.deepcopy(root["models"][selected_model_type])
-    }
+    resolved_raw["models"] = copy.deepcopy(model_configs)
     resolved_raw["resolved"] = {
         "config_path": str(resolved_path),
         "selected_model": selected_model_type,
