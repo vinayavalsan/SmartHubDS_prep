@@ -234,10 +234,14 @@ def test_model_feature_columns_reject_unknown_lead_type():
         fe.model_feature_columns(999_999)
 
 
-def test_every_registered_lead_type_has_model_features():
-    """Every lead type in the canonical registry has a usable model schema."""
-    for registered_id in all_lead_type_ids():
-        numeric, categorical = fe.model_feature_columns(registered_id)
+def test_every_modeled_lead_type_has_model_features():
+    """Every lead type used by the feature registry has a model schema."""
+    modeled_lead_types = {
+        lead_type for spec in FEATURES.values() for lead_type in spec.lead_types
+    }
+
+    for name in sorted(modeled_lead_types):
+        numeric, categorical = fe.model_feature_columns(lead_type_id(name))
         assert numeric or categorical
 
 

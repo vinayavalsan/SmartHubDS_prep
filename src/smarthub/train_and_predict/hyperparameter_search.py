@@ -1271,7 +1271,7 @@ def run_hyperparameter_search(
     )
     if settings["optimizer_enabled"]:
         logger.info(
-            "Selected optimizer expected profit: %.6f",
+            "Selected optimizer probability-weighted expected profit: %.6f",
             selected["optimizer_metrics"]["total_expected_profit"],
         )
     else:

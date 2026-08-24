@@ -637,7 +637,8 @@ def decide_promotion(
 ) -> PromotionDecision:
     """Compare challenger and serving performance and decide promotion.
 
-    Every challenger must pass absolute log-loss and expected-profit gates.
+    Every challenger must pass absolute log-loss and probability-weighted
+    expected-profit gates.
     When a serving model exists, the challenger must also satisfy the relative
     profit and log-loss requirements.
     """
@@ -669,13 +670,14 @@ def decide_promotion(
     if challenger_profit is None:
         return PromotionDecision(
             False,
-            "Challenger expected profit is unavailable.",
+            "Challenger probability-weighted expected profit is unavailable.",
             comparison,
         )
     if challenger_profit < min_expected_profit:
         return PromotionDecision(
             False,
-            f"Challenger expected profit ({challenger_profit:.2f}) is below "
+            "Challenger probability-weighted expected profit "
+            f"({challenger_profit:.2f}) is below "
             f"the required minimum ({min_expected_profit:.2f}).",
             comparison,
         )
@@ -684,7 +686,7 @@ def decide_promotion(
         return PromotionDecision(
             True,
             f"First model passed all absolute promotion thresholds: log loss "
-            f"{challenger_log_loss:.4f} and expected profit "
+            f"{challenger_log_loss:.4f} and probability-weighted expected profit "
             f"{challenger_profit:.2f}.",
             comparison,
         )
@@ -710,13 +712,15 @@ def decide_promotion(
     if serving_profit is None:
         return PromotionDecision(
             False,
-            "Currently-serving model expected profit is unavailable.",
+            "Currently-serving model probability-weighted expected profit "
+            "is unavailable.",
             comparison,
         )
     if serving_profit <= 0:
         return PromotionDecision(
             False,
-            f"Currently-serving expected profit ({serving_profit:.2f}) must be "
+            "Currently-serving probability-weighted expected profit "
+            f"({serving_profit:.2f}) must be "
             "greater than zero for a valid relative profit comparison.",
             comparison,
         )
@@ -734,7 +738,8 @@ def decide_promotion(
     if profit_ratio < min_profit_ratio:
         return PromotionDecision(
             False,
-            f"Challenger expected profit ({challenger_profit:.2f}) is below "
+            "Challenger probability-weighted expected profit "
+            f"({challenger_profit:.2f}) is below "
             f"{min_profit_ratio:.0%} of the currently-serving model's "
             f"({serving_profit:.2f}) on the same held-out rows.",
             comparison,
@@ -743,7 +748,7 @@ def decide_promotion(
     if absolute_profit_loss > max_absolute_profit_loss_tolerance:
         return PromotionDecision(
             False,
-            f"Challenger expected profit is lower by "
+            f"Challenger probability-weighted expected profit is lower by "
             f"{absolute_profit_loss:.2f}, exceeding the allowed "
             "absolute profit-loss tolerance "
             f"of {max_absolute_profit_loss_tolerance:.2f} on the same held-out rows.",

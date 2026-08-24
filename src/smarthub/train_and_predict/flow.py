@@ -190,6 +190,11 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
         status_label = "⏸ ELIGIBLE — promotion execution skipped"
     else:
         status_label = "⏸ NOT ELIGIBLE — currently-serving model unchanged"
+    observed_policy_revenue = _f(opt.get("observed_policy_total_expected_revenue"))
+    observed_policy_profit = _f(opt.get("observed_policy_total_expected_profit"))
+    observed_policy_cm = _f(
+        opt.get("observed_policy_expected_cm"),
+    )
     total_profit = (
         f"{_f(opt.get('current_bid_total_expected_profit'))} → "
         f"{_f(opt.get('recommended_bid_total_expected_profit'))}"
@@ -205,6 +210,11 @@ def _report(lead_type_name, lead_type_id, result, m, opt) -> None:
     )
     bid_change = (
         f"{_f(opt.get('avg_bid_change'))} / " f"{_f(opt.get('median_bid_change'))}"
+    )
+    probability_weighted_profit_lift = _f(opt.get("expected_profit_lift_total"))
+    probability_weighted_profit_lift_pct = _f(
+        opt.get("expected_profit_lift_pct"),
+        "{:.2%}",
     )
     md = f"""# Train model — {lead_type_name}
 
@@ -241,13 +251,24 @@ from registry) |
 | Brier score | {_f(m.get('brier_score'))} |
 | Calibration error | {_f(m.get('calibration_error'))} |
 
+## Observed production policy (held-out optimizer rows)
+| metric | value |
+| --- | --- |
+| rows evaluated | {opt.get('optimizer_rows', '—')} |
+| wins | {opt.get('observed_policy_wins', '—')} |
+| observed win rate | {_f(opt.get('observed_policy_win_rate'), '{:.2%}')} |
+| expected revenue on observed wins | {observed_policy_revenue} |
+| bid cost on observed wins | {_f(opt.get('observed_policy_total_bid_cost'))} |
+| observed profit on historical wins | {observed_policy_profit} |
+| expected CM on observed wins | {observed_policy_cm} |
+
 ## Offline bid optimizer (predicted, not measured)
 | metric | value |
 | --- | --- |
 | rows evaluated | {opt.get('optimizer_rows', '—')} |
-| expected-profit lift | {_f(opt.get('expected_profit_lift_total'))} |
-| expected-profit lift % | {_f(opt.get('expected_profit_lift_pct'), '{:.2%}')} |
-| total expected profit: current → recommended | {total_profit} |
+| probability-weighted expected-profit lift | {probability_weighted_profit_lift} |
+| probability-weighted expected-profit lift % | {probability_weighted_profit_lift_pct} |
+| total probability-weighted expected profit: current → recommended | {total_profit} |
 | avg predicted win rate: current → recommended | {avg_win_rate} |
 | avg / median bid change | {bid_change} |
 | bid up / down / same | {bid_direction} |
@@ -351,14 +372,37 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
             },
         ),
         (
+            "Observed production policy (held-out)",
+            {
+                "Rows": opt.get("optimizer_rows", "—"),
+                "Wins": opt.get("observed_policy_wins", "—"),
+                "Win rate": _f(
+                    opt.get("observed_policy_win_rate"),
+                    "{:.2%}",
+                ),
+                "Expected revenue": _f(
+                    opt.get("observed_policy_total_expected_revenue")
+                ),
+                "Bid cost": _f(opt.get("observed_policy_total_bid_cost")),
+                "Observed profit on historical wins": _f(
+                    opt.get("observed_policy_total_expected_profit")
+                ),
+                "Expected CM": _f(
+                    opt.get("observed_policy_expected_cm"),
+                ),
+            },
+        ),
+        (
             "Bid optimizer (predicted)",
             {
-                "Profit lift": _f(opt.get("expected_profit_lift_total")),
-                "Profit lift %": _f(
+                "Probability-weighted expected-profit lift": _f(
+                    opt.get("expected_profit_lift_total")
+                ),
+                "Probability-weighted expected-profit lift %": _f(
                     opt.get("expected_profit_lift_pct"),
                     "{:.2%}",
                 ),
-                "Expected profit": (
+                "Probability-weighted expected profit": (
                     f"{_f(opt.get('current_bid_total_expected_profit'))} → "
                     f"{_f(opt.get('recommended_bid_total_expected_profit'))}"
                 ),

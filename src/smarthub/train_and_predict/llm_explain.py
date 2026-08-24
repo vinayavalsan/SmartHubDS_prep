@@ -87,7 +87,7 @@ def format_llm_prompt(facts: dict) -> str:
         f"Recommended bid: ${facts['recommended_bid']:.2f}",
         f"Predicted win rate at this bid: {facts['predicted_win_rate']:.0%} "
         f"(vs. average {facts['base_win_rate']:.0%})",
-        f"Expected profit: ${facts['expected_profit']:.2f}",
+        f"Probability-weighted expected profit: ${facts['expected_profit']:.2f}",
     ]
     if facts.get("decision_note"):
         lines += ["", f"Note: {facts['decision_note']}"]

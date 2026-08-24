@@ -23,10 +23,13 @@ sample_consumer = {
     "min_bid": 0.00,
     "bid_step": 0.25,
     # Required model/context fields
-    "campaign_id": 12345,
     "lead_type_id": 6,
-    "created_hour": 14,
-    "created_dayofweek": 2,
+    "account_id": 67890,
+    "lead_ping_id": 987654321,
+    "campaign_id": 12,
+    "source_type_id": 1950,
+    "traffic_tier": "1-1456261",
+    "created_at": "2026-08-20T21:00:00Z",
     # Consumer / lead attributes
     "state": "TX",
     "insured": "true",

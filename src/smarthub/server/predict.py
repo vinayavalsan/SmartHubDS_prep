@@ -21,6 +21,7 @@ from smarthub import __version__ as _PACKAGE_VERSION
 from smarthub.core.lead_types import all_lead_type_ids
 from smarthub.core.lead_types import lead_type_id as get_lead_type_id
 from smarthub.core.lead_types import lead_type_name as get_lead_type_name
+from smarthub.feature_engineering.feature_registry import FEATURES
 from smarthub.train_and_predict import config, optimizer, preprocessing, registry
 
 logger = logging.getLogger(__name__)
@@ -619,7 +620,7 @@ def bid_curve_around(
 
 try:
     from fastapi import BackgroundTasks, FastAPI, HTTPException
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, model_validator
 
     _FASTAPI_AVAILABLE = True
 except ImportError:  # pragma: no cover - API dependencies are optional
@@ -629,25 +630,24 @@ except ImportError:  # pragma: no cover - API dependencies are optional
 if _FASTAPI_AVAILABLE:
 
     class BidRequest(BaseModel):
-        """Validate optimizer controls and lead features for one API request."""
+        """Validate universal and lead-type-specific prediction inputs."""
 
+        # Business/optimizer input required for every prediction.
         expected_revenue: float = Field(..., gt=0)
         target_cm: float = Field(0.25, ge=0, lt=1)
         min_bid: float = Field(0.25, ge=0)
         bid_step: float = Field(0.25, gt=0)
 
+        # Universal SmartHub request context. These must be present for every
+        # lead type. lead_ping_id is traceability-only and is never a model
+        # feature, but a missing correlation key still blocks prediction.
+        lead_type_id: int
+        account_id: int
+        lead_ping_id: int
         campaign_id: int
-        account_id: int | None = None
-        source_type_id: int | None = None
-        # Optional: threads through to the prediction log (§8 of
-        # docs/PREDICTION_LOG_SCHEMA.md) so a prediction can be joined back
-        # to a specific lead later -- e.g. against `public.lead_pings.won`
-        # for realized win-rate calibration. Never used in the bid decision
-        # itself, purely a correlation key for logging.
-        lead_ping_id: int | None = None
-        lead_type_id: int = get_lead_type_id("auto")
-        created_hour: int = Field(..., ge=0, le=23)
-        created_dayofweek: int = Field(..., ge=0, le=6)
+        source_type_id: int
+        traffic_tier: str
+        created_at: datetime
 
         # Response control (NOT a feature -- never affects the bid). When true,
         # the response also returns the full decision payload the prediction log
@@ -657,6 +657,9 @@ if _FASTAPI_AVAILABLE:
         # fetch it later by prediction_id. See docs/PREDICTION_LOG_SCHEMA.md.
         verbose: bool = False
 
+        # Raw lead inputs. They stay optional at the Pydantic field level because
+        # applicability and mandatory status depend on lead_type_id. The registry
+        # validator below enforces the correct required subset for each lead type.
         state: str | None = None
         insured: str | None = None
         home_owner: str | None = None
@@ -665,13 +668,50 @@ if _FASTAPI_AVAILABLE:
         military_affiliation: str | None = None
         gender: str | None = None
         marital_status: str | None = None
+        current_carrier: str | None = None
+        home_property_type: str | None = None
 
         num_vehicles: float | None = None
         num_drivers: float | None = None
         num_auto_violations: float | None = None
         num_auto_accidents: float | None = None
+        num_home_claims: float | None = None
         continuous_coverage_months: float | None = None
         age: float | None = None
+
+        @model_validator(mode="after")
+        def validate_lead_type_inputs(self):
+            """Require registry-mandatory raw inputs for this lead type.
+
+            Derived features are never required from the caller. Their declared
+            ``api_input`` is validated instead, so time features continue to come
+            from ``created_at`` and features such as ``multi_vehicle`` continue
+            to come from their raw source fields. ``bid`` is excluded because the
+            optimizer supplies candidate bids internally.
+            """
+            lead_type_name = get_lead_type_name(self.lead_type_id)
+            missing = []
+
+            for spec in FEATURES.values():
+                if lead_type_name not in spec.lead_types or not spec.mandatory:
+                    continue
+
+                api_input = spec.api_input or spec.name
+                if api_input == "bid":
+                    continue
+
+                value = getattr(self, api_input, None)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    missing.append(api_input)
+
+            if missing:
+                required = ", ".join(sorted(set(missing)))
+                raise ValueError(
+                    f"Missing required input(s) for lead_type_id="
+                    f"{self.lead_type_id} ({lead_type_name}): {required}."
+                )
+
+            return self
 
     class ExplainRequest(BaseModel):
         """Explain an already-logged prediction, by id (production mode).
@@ -1106,8 +1146,7 @@ if _FASTAPI_AVAILABLE:
         dict
             Recommended bid, `decision_path`/`decision_reason`, supporting
             metrics, `prediction_id` -- a receipt for this prediction's log
-            row -- and `lead_ping_id`, echoed back exactly as sent (`None`
-            if the caller didn't supply one).
+            row -- and required `lead_ping_id`, echoed back exactly as sent.
 
         Notes
         -----
@@ -1150,8 +1189,8 @@ if _FASTAPI_AVAILABLE:
                 target_cm=request.target_cm,
                 min_bid=request.min_bid,
                 bid_step=request.bid_step,
-                created_dayofweek=request.created_dayofweek,
-                created_hour=request.created_hour,
+                created_dayofweek=int(row["created_dayofweek"]),
+                created_hour=int(row["created_hour"]),
                 include_candidates=True,
             )
         except Exception as exc:

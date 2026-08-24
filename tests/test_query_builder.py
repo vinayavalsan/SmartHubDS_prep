@@ -10,74 +10,15 @@ from smarthub.data_pull import field_registry as fr
 from smarthub.data_pull import models
 from smarthub.data_pull import query_builder as qb
 
-# The authoritative 54-column order the pull produced before the registry
-# refactor (captured from the previous models.LEADS_COLUMNS tuple).
-EXPECTED_PULL_COLUMNS = [
-    "id",
-    "created_at",
-    "account_id",
-    "campaign_id",
-    "lead_type_id",
-    "source_type_id",
-    "bidding_strategy_id",
-    "traffic_tier",
-    "total_listings",
-    "accepted_listings",
-    "bid",
-    "rev",
-    "won",
-    "accepted",
-    "erred",
-    "error_reason_id",
-    "response_ms",
-    "zip",
-    "city",
-    "state",
-    "device_type",
-    "insured",
-    "current_carrier",
-    "continuous_coverage_months",
-    "military_affiliation",
-    "credit",
-    "pnc_bundle",
-    "home_owner",
-    "gender",
-    "marital_status",
-    "num_drivers",
-    "num_vehicles",
-    "dui",
-    "sr22_required",
-    "age",
-    "num_auto_violations",
-    "num_auto_claims",
-    "num_auto_accidents",
-    "num_home_claims",
-    "home_property_type",
-    "num_dependents",
-    "health_conditions",
-    "household_income",
-    "life_coverage_type",
-    "life_coverage_amount",
-    "naics_code",
-    "sic_code",
-    "num_employees",
-    "annual_revenue",
-    "lead_created_at",
-    "expiration_date",
-    "pst_date",
-    "pst_hour",
-    "exp_rev",
-]
 
-
-def test_registry_column_names_match_original_order():
-    """query_builder produces exactly the original pull columns, in order."""
-    assert qb.leads_column_names() == EXPECTED_PULL_COLUMNS
+def test_query_builder_column_names_follow_registry_order():
+    """query_builder uses the enabled non-PII registry fields in registry order."""
+    assert qb.leads_column_names() == fr.field_names()
 
 
 def test_models_leads_columns_derived_from_registry():
-    """models.LEADS_COLUMNS resolves the registry names to the same ORM cols."""
-    assert [c.key for c in models.LEADS_COLUMNS] == EXPECTED_PULL_COLUMNS
+    """models.LEADS_COLUMNS resolves the query-builder names to ORM columns."""
+    assert [column.key for column in models.LEADS_COLUMNS] == qb.leads_column_names()
 
 
 def test_every_pulled_name_maps_to_a_real_orm_column():

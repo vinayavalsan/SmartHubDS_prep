@@ -43,6 +43,12 @@ class OptimizerSummary:
 
     optimizer_rows: int
     target_cm: float
+    observed_policy_wins: int
+    observed_policy_win_rate: float
+    observed_policy_total_expected_revenue: float
+    observed_policy_total_bid_cost: float
+    observed_policy_total_expected_profit: float
+    observed_policy_expected_cm: float
     current_bid_total_expected_profit: float
     recommended_bid_total_expected_profit: float
     expected_profit_lift_total: float
@@ -114,7 +120,7 @@ def _prepare_frame(test_eval_df: pd.DataFrame) -> pd.DataFrame | None:
 
 
 def _score_current_bids(eval_df, model, feature_cols):
-    """Score historical bids and calculate expected profit.
+    """Score historical bids and calculate probability-weighted expected profit.
 
     Inputs
     ------
@@ -141,7 +147,7 @@ def _score_current_bids(eval_df, model, feature_cols):
 
 
 def _add_diagnostics(eval_df):
-    """Add the row-level diagnostics needed by the retained summary metrics.
+    """Add row-level observed-policy and optimizer diagnostics.
 
     Inputs
     ------
@@ -154,6 +160,17 @@ def _add_diagnostics(eval_df):
         Evaluation rows with retained optimizer diagnostics.
     """
     result = eval_df.copy()
+    observed_win = pd.to_numeric(
+        result[config.TARGET_COL],
+        errors="coerce",
+    ).fillna(0.0)
+    result["observed_policy_expected_revenue"] = (
+        observed_win * result[config.REVENUE_COL]
+    )
+    result["observed_policy_bid_cost"] = observed_win * result["bid"]
+    result["observed_policy_expected_profit"] = (
+        result["observed_policy_expected_revenue"] - result["observed_policy_bid_cost"]
+    )
     result["expected_profit_lift"] = (
         result["recommended_bid_expected_profit"]
         - result["current_bid_expected_profit"]
@@ -185,6 +202,14 @@ def summarize_results(eval_df, target_cm):
     lift_total = recommended_total - current_total
     n_rows = len(eval_df)
 
+    observed_wins = int(
+        pd.to_numeric(eval_df[config.TARGET_COL], errors="coerce").fillna(0).sum()
+    )
+    observed_revenue = float(eval_df["observed_policy_expected_revenue"].sum())
+    observed_bid_cost = float(eval_df["observed_policy_bid_cost"].sum())
+    observed_profit = float(eval_df["observed_policy_expected_profit"].sum())
+    observed_cm = _safe_divide(observed_profit, observed_revenue)
+
     increased = int((eval_df["bid_change"] > 0).sum())
     decreased = int((eval_df["bid_change"] < 0).sum())
     unchanged = int((eval_df["bid_change"] == 0).sum())
@@ -192,6 +217,12 @@ def summarize_results(eval_df, target_cm):
     return OptimizerSummary(
         optimizer_rows=n_rows,
         target_cm=float(target_cm),
+        observed_policy_wins=observed_wins,
+        observed_policy_win_rate=float(observed_wins / n_rows),
+        observed_policy_total_expected_revenue=observed_revenue,
+        observed_policy_total_bid_cost=observed_bid_cost,
+        observed_policy_total_expected_profit=observed_profit,
+        observed_policy_expected_cm=float(observed_cm),
         current_bid_total_expected_profit=current_total,
         recommended_bid_total_expected_profit=recommended_total,
         expected_profit_lift_total=lift_total,
@@ -230,16 +261,37 @@ def log_summary(summary: OptimizerSummary):
     logger.info(
         "  Rows evaluated                     : %s", f"{summary.optimizer_rows:,}"
     )
+    logger.info("  Target CM                          : %.4f", summary.target_cm)
+    logger.info("Observed Production Policy (held-out rows)")
     logger.info(
-        "  Target CM                          : %.2f%%", summary.target_cm * 100
+        "  Wins / win rate                    : %s / %.4f",
+        f"{summary.observed_policy_wins:,}",
+        summary.observed_policy_win_rate,
     )
     logger.info(
-        "  Expected profit, current/recommended: %.4f / %.4f",
+        "  Expected revenue on observed wins  : %.4f",
+        summary.observed_policy_total_expected_revenue,
+    )
+    logger.info(
+        "  Bid cost on observed wins          : %.4f",
+        summary.observed_policy_total_bid_cost,
+    )
+    logger.info(
+        "  Observed profit on historical wins : %.4f",
+        summary.observed_policy_total_expected_profit,
+    )
+    logger.info(
+        "  Expected CM on observed wins       : %.4f",
+        summary.observed_policy_expected_cm,
+    )
+    logger.info("Bid Optimizer Counterfactual (model-predicted probabilities)")
+    logger.info(
+        "  Probability-weighted expected profit, current/recommended: %.4f / %.4f",
         summary.current_bid_total_expected_profit,
         summary.recommended_bid_total_expected_profit,
     )
     logger.info(
-        "  Expected profit lift               : %.4f (%s)",
+        "  Probability-weighted expected profit lift: %.4f (%s)",
         summary.expected_profit_lift_total,
         _format_percent(summary.expected_profit_lift_pct),
     )
