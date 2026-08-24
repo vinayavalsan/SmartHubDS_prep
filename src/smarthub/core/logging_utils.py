@@ -93,6 +93,8 @@ _CALL_PATH_MAX_FRAMES = 2
 _QUIET_THIRD_PARTY_LOGGERS = (
     "paramiko",
     "alembic",
+    "httpx",
+    "httpcore",
 )
 
 
