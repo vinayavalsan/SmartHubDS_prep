@@ -1101,9 +1101,7 @@ def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
             artifact_root=training_config.mlflow_artifact_root,
             experiment_name=experiment_name,
             run_name=manifest["training_run_id"],
-            training_config_path=Path(
-                training_config.raw["resolved"]["config_path"]
-            ),
+            training_config_path=Path(training_config.raw["resolved"]["config_path"]),
             extra_params={
                 "lead_type_name": lead_type_name,
                 "training_run_id": manifest["training_run_id"],
@@ -1139,9 +1137,7 @@ def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
                 tracking_db_path=training_config.mlflow_tracking_db_path,
                 artifact_root=training_config.mlflow_artifact_root,
                 experiment_name=experiment_name,
-                registered_model_name=(
-                    training_config.mlflow_registered_model_name
-                ),
+                registered_model_name=(training_config.mlflow_registered_model_name),
                 mlflow_run_id=manifest.get("mlflow_run_id"),
             )
             manifest = registry.update_manifest(

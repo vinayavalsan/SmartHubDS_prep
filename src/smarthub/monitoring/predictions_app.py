@@ -54,9 +54,7 @@ def _shap_summary(explanation) -> tuple[str, str]:
     """
     if not isinstance(explanation, dict):
         return "pending", ""
-    factors = explanation.get("top_factors") or explanation.get(
-        "feature_contributions"
-    )
+    factors = explanation.get("top_factors") or explanation.get("feature_contributions")
     if not factors:
         # SHAP ran but produced nothing usable (e.g. unsupported model type).
         return "n/a", ""
@@ -233,9 +231,7 @@ def render_inference_log(as_section: bool = False, kp: str = "il"):
         return
 
     if df.empty:
-        st.info(
-            f"No predictions match these filters in the {window_label.lower()}."
-        )
+        st.info(f"No predictions match these filters in the {window_label.lower()}.")
         return
 
     st.caption(f"Showing {len(df):,} row(s) from the {window_label.lower()}.")
@@ -350,9 +346,7 @@ def _render_shap_detail(df: pd.DataFrame, kp: str) -> None:
                 fdf["direction"] = fdf["shap"].apply(
                     lambda v: "increased" if (v or 0) >= 0 else "decreased"
                 )
-                fdf = fdf.reindex(
-                    fdf["shap"].abs().sort_values(ascending=False).index
-                )
+                fdf = fdf.reindex(fdf["shap"].abs().sort_values(ascending=False).index)
             show = [c for c in ("feature", "value", "shap", "direction") if c in fdf]
             st.dataframe(
                 fdf[show],

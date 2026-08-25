@@ -831,6 +831,150 @@ def _save_bid_change_vs_win_probability_change(
     return path
 
 
+def _save_bid_distribution_by_outcome(report_dir, optimizer_eval_df):
+    """Compare existing and recommended bid distributions by historical outcome.
+
+    Historical wins and losses are shown in separate panels. Each histogram is
+    normalized within its own outcome group so the y-axis represents the
+    fraction of leads in that group. Both panels use identical bid bins and
+    x-axis limits for direct comparison.
+
+    Inputs
+    ------
+    report_dir : str | pathlib.Path
+        Directory for report artifacts.
+    optimizer_eval_df : pandas.DataFrame
+        Row-level optimizer evaluation results.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Saved plot path, or ``None`` when required columns are unavailable.
+    """
+    required = {"bid", "recommended_bid"}
+    if not required.issubset(optimizer_eval_df.columns):
+        return None
+
+    target_col = None
+    for candidate in ("won_flag", "won"):
+        if candidate in optimizer_eval_df.columns:
+            target_col = candidate
+            break
+    if target_col is None:
+        return None
+
+    frame = pd.DataFrame(
+        {
+            "existing_bid": pd.to_numeric(
+                optimizer_eval_df["bid"],
+                errors="coerce",
+            ),
+            "recommended_bid": pd.to_numeric(
+                optimizer_eval_df["recommended_bid"],
+                errors="coerce",
+            ),
+            "observed_outcome": pd.to_numeric(
+                optimizer_eval_df[target_col],
+                errors="coerce",
+            ),
+        }
+    ).dropna()
+
+    frame = frame[frame["observed_outcome"].isin([0, 1])].copy()
+    if frame.empty:
+        return None
+
+    all_bids = pd.concat(
+        [frame["existing_bid"], frame["recommended_bid"]],
+        ignore_index=True,
+    )
+    bid_min = float(all_bids.min())
+    bid_max = float(all_bids.max())
+    if bid_min == bid_max:
+        bid_min -= 0.5
+        bid_max += 0.5
+
+    bins = np.linspace(bid_min, bid_max, 41)
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(14, 6),
+        sharex=True,
+        sharey=True,
+    )
+
+    panels = (
+        (axes[0], 1, "Historical Bid Won"),
+        (axes[1], 0, "Historical Bid Lost"),
+    )
+
+    for ax, outcome, title in panels:
+        subset = frame[frame["observed_outcome"] == outcome]
+        if subset.empty:
+            ax.set_title(f"{title} (n=0)")
+            ax.set_xlabel("Bid")
+            continue
+
+        existing = subset["existing_bid"].to_numpy(dtype=float)
+        recommended = subset["recommended_bid"].to_numpy(dtype=float)
+
+        existing_weights = np.full(
+            len(existing),
+            1.0 / len(existing),
+            dtype=float,
+        )
+        recommended_weights = np.full(
+            len(recommended),
+            1.0 / len(recommended),
+            dtype=float,
+        )
+
+        ax.hist(
+            existing,
+            bins=bins,
+            weights=existing_weights,
+            alpha=0.55,
+            label="Existing bid",
+        )
+        ax.hist(
+            recommended,
+            bins=bins,
+            weights=recommended_weights,
+            alpha=0.55,
+            label="ML recommended bid",
+        )
+
+        existing_median = float(np.median(existing))
+        recommended_median = float(np.median(recommended))
+        ax.axvline(
+            existing_median,
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Existing median = ${existing_median:.2f}",
+        )
+        ax.axvline(
+            recommended_median,
+            linestyle=":",
+            linewidth=1.5,
+            label=f"ML median = ${recommended_median:.2f}",
+        )
+
+        ax.set_title(f"{title} (n={len(subset):,})")
+        ax.set_xlabel("Bid")
+        ax.set_xlim(bid_min, bid_max)
+        ax.legend()
+
+    axes[0].set_ylabel("Fraction of leads within historical outcome")
+    fig.suptitle("Existing vs ML Recommended Bid Distribution by Historical Outcome")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+    path = Path(report_dir) / "bid_distribution_by_outcome.png"
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
 def _save_optimizer_plots(report_dir, optimizer_eval_df):
     """Write the retained optimizer diagnostic plots.
 
@@ -884,6 +1028,7 @@ def _save_optimizer_plots(report_dir, optimizer_eval_df):
         _save_policy_win_rate_comparison,
         _save_expected_profit_by_max_win_probability,
         _save_bid_change_vs_win_probability_change,
+        _save_bid_distribution_by_outcome,
     ):
         path = plot_builder(report_dir, optimizer_eval_df)
         if path is not None:
@@ -1140,6 +1285,167 @@ def save_performance_plots(
         _save_optimizer_plots(report_dir, optimizer_eval_df)
 
 
+def build_optimizer_scenario_summary(optimizer_eval_df):
+    """Summarize historical outcome versus ML bid-direction scenarios.
+
+    The four directional scenarios quantify whether ML recommends a higher or
+    lower bid for historically won and lost leads. Rows whose recommended bid
+    is unchanged are reported separately so they are not forced into a
+    directional scenario.
+
+    Inputs
+    ------
+    optimizer_eval_df : pandas.DataFrame
+        Row-level optimizer evaluation results.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Scenario-level counts, shares, and bid / predicted-win-rate changes.
+    """
+    required = {
+        "bid",
+        "recommended_bid",
+        "current_bid_predicted_win_rate",
+        "recommended_bid_predicted_win_rate",
+    }
+    if not required.issubset(optimizer_eval_df.columns):
+        return pd.DataFrame()
+
+    target_col = None
+    for candidate in ("won_flag", "won"):
+        if candidate in optimizer_eval_df.columns:
+            target_col = candidate
+            break
+    if target_col is None:
+        return pd.DataFrame()
+
+    raw_outcome = optimizer_eval_df[target_col]
+    numeric_outcome = pd.to_numeric(raw_outcome, errors="coerce")
+    if numeric_outcome.isna().any():
+        normalized = raw_outcome.astype("string").str.strip().str.lower()
+        mapped = normalized.map({"true": 1.0, "false": 0.0})
+        numeric_outcome = numeric_outcome.fillna(mapped)
+
+    frame = pd.DataFrame(
+        {
+            "observed_outcome": numeric_outcome,
+            "bid_change": (
+                pd.to_numeric(optimizer_eval_df["recommended_bid"], errors="coerce")
+                - pd.to_numeric(optimizer_eval_df["bid"], errors="coerce")
+            ),
+            "win_probability_change": (
+                pd.to_numeric(
+                    optimizer_eval_df["recommended_bid_predicted_win_rate"],
+                    errors="coerce",
+                )
+                - pd.to_numeric(
+                    optimizer_eval_df["current_bid_predicted_win_rate"],
+                    errors="coerce",
+                )
+            ),
+        }
+    ).dropna()
+    frame = frame[frame["observed_outcome"].isin([0, 1])].copy()
+    if frame.empty:
+        return pd.DataFrame()
+
+    total_rows = len(frame)
+    won_rows = int((frame["observed_outcome"] == 1).sum())
+    lost_rows = int((frame["observed_outcome"] == 0).sum())
+    tolerance = 1e-12
+
+    scenario_specs = [
+        (
+            "Won - ML bid higher",
+            (frame["observed_outcome"] == 1) & (frame["bid_change"] > tolerance),
+            won_rows,
+        ),
+        (
+            "Won - ML bid lower",
+            (frame["observed_outcome"] == 1) & (frame["bid_change"] < -tolerance),
+            won_rows,
+        ),
+        (
+            "Lost - ML bid higher",
+            (frame["observed_outcome"] == 0) & (frame["bid_change"] > tolerance),
+            lost_rows,
+        ),
+        (
+            "Lost - ML bid lower",
+            (frame["observed_outcome"] == 0) & (frame["bid_change"] < -tolerance),
+            lost_rows,
+        ),
+        (
+            "Bid unchanged",
+            frame["bid_change"].abs() <= tolerance,
+            total_rows,
+        ),
+    ]
+
+    rows = []
+    for scenario, mask, outcome_rows in scenario_specs:
+        subset = frame.loc[mask]
+        count = len(subset)
+        rows.append(
+            {
+                "scenario": scenario,
+                "lead_count": int(count),
+                "pct_of_all_optimizer_rows": float(count / total_rows * 100.0),
+                "pct_within_outcome_group": (
+                    float(count / outcome_rows * 100.0) if outcome_rows else 0.0
+                ),
+                "avg_bid_change": (
+                    float(subset["bid_change"].mean()) if count else float("nan")
+                ),
+                "median_bid_change": (
+                    float(subset["bid_change"].median()) if count else float("nan")
+                ),
+                "avg_predicted_win_probability_change": (
+                    float(subset["win_probability_change"].mean())
+                    if count
+                    else float("nan")
+                ),
+                "median_predicted_win_probability_change": (
+                    float(subset["win_probability_change"].median())
+                    if count
+                    else float("nan")
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def log_optimizer_scenario_summary(summary_df):
+    """Log the historical-outcome / ML-bid scenario summary."""
+    if summary_df is None or summary_df.empty:
+        return
+
+    logger.info("Historical Outcome vs ML Bid Recommendation")
+    for row in summary_df.itertuples(index=False):
+        logger.info("  %s", row.scenario)
+        logger.info(
+            "    Leads / share of all               : %s / %.2f%%",
+            f"{int(row.lead_count):,}",
+            float(row.pct_of_all_optimizer_rows),
+        )
+        logger.info(
+            "    Share within outcome group         : %.2f%%",
+            float(row.pct_within_outcome_group),
+        )
+        logger.info(
+            "    Avg / median bid change             : %+.4f / %+.4f",
+            float(row.avg_bid_change),
+            float(row.median_bid_change),
+        )
+        logger.info(
+            "    Avg / median predicted win-rate chg : %+.4f / %+.4f",
+            float(row.avg_predicted_win_probability_change),
+            float(row.median_predicted_win_probability_change),
+        )
+
+
 def save_evaluation_summary(
     report_dir,
     evaluation_summary,
@@ -1159,14 +1465,27 @@ def save_evaluation_summary(
     report_dir = Path(report_dir)
     report_dir.mkdir(exist_ok=True)
 
-    summary_json_path = report_dir / "model_evaluation_summary.json"
-    summary_json_path.write_text(json.dumps(evaluation_summary, indent=2))
+    summary_payload = dict(evaluation_summary)
 
     if optimizer_eval_df is not None:
         optimizer_eval_df.to_csv(
             report_dir / "bid_optimizer_test_rows.csv",
             index=False,
         )
+
+        scenario_summary = build_optimizer_scenario_summary(optimizer_eval_df)
+        if not scenario_summary.empty:
+            scenario_summary.to_csv(
+                report_dir / "optimizer_scenario_summary.csv",
+                index=False,
+            )
+            summary_payload["optimizer_scenarios"] = scenario_summary.where(
+                pd.notna(scenario_summary), None
+            ).to_dict(orient="records")
+            log_optimizer_scenario_summary(scenario_summary)
+
+    summary_json_path = report_dir / "model_evaluation_summary.json"
+    summary_json_path.write_text(json.dumps(summary_payload, indent=2))
 
     return summary_json_path
 
@@ -1206,6 +1525,8 @@ def log_saved_report_files(report_dir, optimizer_eval_df=None):
                 "policy_win_rate_comparison.png",
                 "expected_profit_by_max_win_probability.png",
                 "bid_change_vs_win_probability_change.png",
+                "bid_distribution_by_outcome.png",
+                "optimizer_scenario_summary.csv",
                 "bid_optimizer_test_rows.csv",
             ]
         )

@@ -49,8 +49,14 @@ class OptimizerSummary:
     observed_policy_total_bid_cost: float
     observed_policy_total_expected_profit: float
     observed_policy_expected_cm: float
+    current_bid_total_expected_revenue: float
+    current_bid_total_expected_bid_cost: float
     current_bid_total_expected_profit: float
+    current_bid_expected_cm: float
+    recommended_bid_total_expected_revenue: float
+    recommended_bid_total_expected_bid_cost: float
     recommended_bid_total_expected_profit: float
+    recommended_bid_expected_cm: float
     expected_profit_lift_total: float
     expected_profit_lift_pct: float
     avg_current_bid_predicted_win_rate: float
@@ -114,8 +120,31 @@ def _prepare_frame(test_eval_df: pd.DataFrame) -> pd.DataFrame | None:
             config.REVENUE_COL,
         )
         return None
-    result = test_eval_df.dropna(subset=[config.REVENUE_COL, "bid"]).copy()
-    result = result[result[config.REVENUE_COL] > 0].copy()
+    input_rows = len(test_eval_df)
+
+    missing_required_mask = test_eval_df[[config.REVENUE_COL, "bid"]].isna().any(axis=1)
+    missing_required_rows = int(missing_required_mask.sum())
+
+    result = test_eval_df.loc[~missing_required_mask].copy()
+
+    nonpositive_revenue_mask = result[config.REVENUE_COL] <= 0
+    nonpositive_revenue_rows = int(nonpositive_revenue_mask.sum())
+    result = result.loc[~nonpositive_revenue_mask].copy()
+
+    dropped_rows = missing_required_rows + nonpositive_revenue_rows
+    if dropped_rows:
+        logger.info("Bid Optimizer Evaluation Row Filtering")
+        logger.info("  Input rows                           : %s", f"{input_rows:,}")
+        logger.info(
+            "  Missing expected revenue or bid      : %s",
+            f"{missing_required_rows:,}",
+        )
+        logger.info(
+            "  Non-positive expected revenue        : %s",
+            f"{nonpositive_revenue_rows:,}",
+        )
+        logger.info("  Rows retained                        : %s", f"{len(result):,}")
+
     return None if result.empty else result
 
 
@@ -197,8 +226,28 @@ def summarize_results(eval_df, target_cm):
     OptimizerSummary
         Aggregate optimizer summary.
     """
+    current_revenue = float(
+        (eval_df["current_bid_predicted_win_rate"] * eval_df[config.REVENUE_COL]).sum()
+    )
+    current_bid_cost = float(
+        (eval_df["current_bid_predicted_win_rate"] * eval_df["bid"]).sum()
+    )
     current_total = float(eval_df["current_bid_expected_profit"].sum())
+    current_cm = _safe_divide(current_total, current_revenue)
+
+    recommended_revenue = float(
+        (
+            eval_df["recommended_bid_predicted_win_rate"] * eval_df[config.REVENUE_COL]
+        ).sum()
+    )
+    recommended_bid_cost = float(
+        (
+            eval_df["recommended_bid_predicted_win_rate"] * eval_df["recommended_bid"]
+        ).sum()
+    )
     recommended_total = float(eval_df["recommended_bid_expected_profit"].sum())
+    recommended_cm = _safe_divide(recommended_total, recommended_revenue)
+
     lift_total = recommended_total - current_total
     n_rows = len(eval_df)
 
@@ -223,8 +272,14 @@ def summarize_results(eval_df, target_cm):
         observed_policy_total_bid_cost=observed_bid_cost,
         observed_policy_total_expected_profit=observed_profit,
         observed_policy_expected_cm=float(observed_cm),
+        current_bid_total_expected_revenue=current_revenue,
+        current_bid_total_expected_bid_cost=current_bid_cost,
         current_bid_total_expected_profit=current_total,
+        current_bid_expected_cm=float(current_cm),
+        recommended_bid_total_expected_revenue=recommended_revenue,
+        recommended_bid_total_expected_bid_cost=recommended_bid_cost,
         recommended_bid_total_expected_profit=recommended_total,
+        recommended_bid_expected_cm=float(recommended_cm),
         expected_profit_lift_total=lift_total,
         expected_profit_lift_pct=_safe_divide(lift_total, current_total),
         avg_current_bid_predicted_win_rate=float(
@@ -285,10 +340,39 @@ def log_summary(summary: OptimizerSummary):
         summary.observed_policy_expected_cm,
     )
     logger.info("Bid Optimizer Counterfactual (model-predicted probabilities)")
+    logger.info("  ML @ existing bids")
     logger.info(
-        "  Probability-weighted expected profit, current/recommended: %.4f / %.4f",
+        "    Probability-weighted expected revenue : %.4f",
+        summary.current_bid_total_expected_revenue,
+    )
+    logger.info(
+        "    Probability-weighted expected bid cost: %.4f",
+        summary.current_bid_total_expected_bid_cost,
+    )
+    logger.info(
+        "    Probability-weighted expected profit  : %.4f",
         summary.current_bid_total_expected_profit,
+    )
+    logger.info(
+        "    Aggregate expected CM                 : %.4f",
+        summary.current_bid_expected_cm,
+    )
+    logger.info("  ML @ recommended bids")
+    logger.info(
+        "    Probability-weighted expected revenue : %.4f",
+        summary.recommended_bid_total_expected_revenue,
+    )
+    logger.info(
+        "    Probability-weighted expected bid cost: %.4f",
+        summary.recommended_bid_total_expected_bid_cost,
+    )
+    logger.info(
+        "    Probability-weighted expected profit  : %.4f",
         summary.recommended_bid_total_expected_profit,
+    )
+    logger.info(
+        "    Aggregate expected CM                 : %.4f",
+        summary.recommended_bid_expected_cm,
     )
     logger.info(
         "  Probability-weighted expected profit lift: %.4f (%s)",
@@ -310,10 +394,6 @@ def log_summary(summary: OptimizerSummary):
         "  Avg / median bid change            : %.4f / %.4f",
         summary.avg_bid_change,
         summary.median_bid_change,
-    )
-    logger.info(
-        "  Avg recommended CM if won           : %.4f",
-        summary.avg_recommended_bid_cm_if_won,
     )
 
 

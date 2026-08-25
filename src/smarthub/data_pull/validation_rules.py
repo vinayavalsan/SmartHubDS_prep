@@ -252,7 +252,18 @@ def auction_cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
     if "bid" in df.columns and "won" in df.columns:
         won_true = auction.won_true_mask(df)
         placed_bid = auction.placed_bid_mask(df)
-        out["won_true_without_bid"] = int((won_true & ~placed_bid).sum())
+        won_true_without_bid = won_true & ~placed_bid
+
+        bid = pd.to_numeric(df["bid"], errors="coerce")
+        out["won_true_with_missing_bid"] = int(
+            (won_true_without_bid & bid.isna()).sum()
+        )
+        out["won_true_with_zero_bid"] = int(
+            (won_true_without_bid & bid.notna() & bid.eq(0)).sum()
+        )
+        out["won_true_with_negative_bid"] = int(
+            (won_true_without_bid & bid.notna() & bid.lt(0)).sum()
+        )
     return out
 
 
