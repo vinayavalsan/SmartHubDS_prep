@@ -25,7 +25,6 @@ from smarthub.core.lead_types import lead_type_name as registered_lead_type_name
 from smarthub.feature_engineering import build
 from smarthub.feature_engineering.build import _DAY_DEFS, _pct
 
-
 # Each build stage is its own Prefect task for per-step observability (so it is
 # clear exactly which step fails, e.g. an OOM in load-raw vs. build-table). The
 # shared BuildContext is passed by reference; results are never persisted
