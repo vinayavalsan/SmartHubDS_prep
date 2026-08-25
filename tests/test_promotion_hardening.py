@@ -149,18 +149,19 @@ def test_version_not_reused_across_stores(tmp_path, monkeypatch):
     store = FilesystemModelStore(tmp_path / "prod")
     monkeypatch.setattr(registry, "_production_store", lambda lead_type_name: store)
 
-    # Pretend auto_v5 was already assigned elsewhere (only a production marker).
-    assert store.claim("auto/versions/auto_v5.json") is True
+    # Pretend auto_v1.0.5 was already assigned elsewhere (only a production
+    # marker); the next assignment must bump the patch off the highest seen.
+    assert store.claim("auto/versions/auto_v1.0.5.json") is True
 
-    assert registry._next_production_model_version("auto") == "auto_v6"
-    # The claim above reserved v6; the next assignment must not reuse it.
-    assert registry._next_production_model_version("auto") == "auto_v7"
+    assert registry._next_production_model_version("auto") == "auto_v1.0.6"
+    # The claim above reserved v1.0.6; the next assignment must not reuse it.
+    assert registry._next_production_model_version("auto") == "auto_v1.0.7"
 
 
 def test_claim_is_atomic_exclusive(tmp_path):
     store = FilesystemModelStore(tmp_path / "prod")
-    assert store.claim("auto/versions/auto_v1.json") is True
-    assert store.claim("auto/versions/auto_v1.json") is False
+    assert store.claim("auto/versions/auto_v1.0.0.json") is True
+    assert store.claim("auto/versions/auto_v1.0.0.json") is False
 
 
 def test_local_only_promotion_still_works(monkeypatch):
@@ -171,4 +172,4 @@ def test_local_only_promotion_still_works(monkeypatch):
     assert registry.currently_serving_version("auto") == v
     lm = registry.load_manifest("auto", v)
     assert lm["promoted"] is True
-    assert lm["production_model_version"] == "auto_v1"
+    assert lm["production_model_version"] == "auto_v1.0.0"
