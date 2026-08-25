@@ -80,7 +80,7 @@ def test_promote_publishes_only_promoted_model_to_production(tmp_path, monkeypat
     assert prod.exists(f"auto/{version}.json")
     pointer = registry.production_serving_pointer("auto")
     assert pointer["training_run_id"] == version
-    assert pointer["production_model_version"] == "auto_v1"
+    assert pointer["production_model_version"] == "auto_v1.0.0"
 
 
 def test_load_serving_model_prefers_production(tmp_path, monkeypatch):
@@ -143,11 +143,11 @@ def test_production_version_numbering_is_per_lead_type():
     pointer_home1 = registry.promote("home", home1["version"])
     pointer_auto2 = registry.promote("auto", auto2["version"])
 
-    assert pointer_auto1["production_model_version"] == "auto_v1"
-    assert pointer_home1["production_model_version"] == "home_v1"
-    assert pointer_auto2["production_model_version"] == "auto_v2"
-    assert registry.list_production_versions("auto") == ["auto_v1", "auto_v2"]
-    assert registry.list_production_versions("home") == ["home_v1"]
+    assert pointer_auto1["production_model_version"] == "auto_v1.0.0"
+    assert pointer_home1["production_model_version"] == "home_v1.0.0"
+    assert pointer_auto2["production_model_version"] == "auto_v1.0.1"
+    assert registry.list_production_versions("auto") == ["auto_v1.0.0", "auto_v1.0.1"]
+    assert registry.list_production_versions("home") == ["home_v1.0.0"]
 
 
 def test_nothing_currently_serving_before_any_promotion():

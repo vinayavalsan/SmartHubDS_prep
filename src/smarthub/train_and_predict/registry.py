@@ -2,8 +2,10 @@
 
 Training runs and production model versions are separate concepts:
 - every saved candidate receives a unique ``training_run_id``;
-- only promoted models receive a sequential production version such as
-  ``auto_v1``.
+- only promoted models receive a semantic production version such as
+  ``auto_v1.0.0`` (``<lead>_v<major>.<minor>.<patch>``). The first promotion
+  for a lead type is ``_v1.0.0``; each subsequent promotion bumps the patch
+  (``1.0.1``, ``1.0.2``, ...). Minor/major bumps are a manual decision.
 """
 
 from __future__ import annotations
@@ -22,7 +24,9 @@ from smarthub.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 MODEL_DIR_ROOT = paths.data_dir() / "models"
-_PRODUCTION_VERSION_RE = re.compile(r"^(?P<lead>[a-z0-9_]+)_v(?P<number>\d+)$")
+_PRODUCTION_VERSION_RE = re.compile(
+    r"^(?P<lead>[a-z0-9_]+)_v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$"
+)
 
 
 class RegistryError(RuntimeError):
@@ -160,19 +164,35 @@ def list_production_versions(lead_type_name: str) -> list[str]:
             continue
         if value:
             versions.append(value)
-    return sorted(set(versions), key=_production_version_number)
+    return sorted(set(versions), key=_production_version_key)
 
 
-def _production_version_number(version: str) -> int:
-    match = _PRODUCTION_VERSION_RE.match(version)
-    return int(match.group("number")) if match else 0
+# A production version that fails to parse sorts before any real version.
+_ZERO_VERSION_KEY = (0, 0, 0)
 
 
-def _assigned_version_numbers(lead_type_name: str) -> set[int]:
-    """Every production version number already assigned, gathered from BOTH the
-    local manifests and (when configured) production storage — so a version
-    assigned on another box or a prior promotion can never be reused."""
-    numbers: set[int] = set()
+def _production_version_key(version: str) -> tuple[int, int, int]:
+    """Sortable ``(major, minor, patch)`` for a production version.
+
+    Returns ``(0, 0, 0)`` for anything that isn't a ``<lead>_vX.Y.Z`` string,
+    so unparseable/legacy values sort before every real semantic version.
+    """
+    match = _PRODUCTION_VERSION_RE.match(version or "")
+    if not match:
+        return _ZERO_VERSION_KEY
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+    )
+
+
+def _assigned_versions(lead_type_name: str) -> set[tuple[int, int, int]]:
+    """Every production version already assigned, as ``(major, minor, patch)``
+    keys, gathered from BOTH the local manifests and (when configured)
+    production storage — so a version assigned on another box or a prior
+    promotion can never be reused."""
+    keys: set[tuple[int, int, int]] = set()
     folder = model_dir(lead_type_name)
     if folder.exists():
         for path in folder.glob("run_*.json"):
@@ -181,7 +201,7 @@ def _assigned_version_numbers(lead_type_name: str) -> set[int]:
             except (OSError, json.JSONDecodeError):
                 continue
             if value:
-                numbers.add(_production_version_number(value))
+                keys.add(_production_version_key(value))
 
     store = _production_store(
         lead_type_name
@@ -192,7 +212,13 @@ def _assigned_version_numbers(lead_type_name: str) -> set[int]:
         for key in store.list(f"{lead}/versions/"):
             match = _PRODUCTION_VERSION_RE.match(Path(key).stem)
             if match:
-                numbers.add(int(match.group("number")))
+                keys.add(
+                    (
+                        int(match.group("major")),
+                        int(match.group("minor")),
+                        int(match.group("patch")),
+                    )
+                )
         # Promoted manifests also reserve their assigned version numbers.
         for key in store.list(f"{lead}/"):
             name = Path(key).name
@@ -204,29 +230,37 @@ def _assigned_version_numbers(lead_type_name: str) -> set[int]:
                 except json.JSONDecodeError:
                     continue
                 if value:
-                    numbers.add(_production_version_number(value))
+                    keys.add(_production_version_key(value))
 
-    numbers.discard(0)
-    return numbers
+    keys.discard(_ZERO_VERSION_KEY)
+    return keys
 
 
 def _next_production_model_version(lead_type_name: str) -> str:
-    """Reserve and return the next free ``<lead>_vN`` via an **atomic claim**.
+    """Reserve and return the next free ``<lead>_v<major>.<minor>.<patch>`` via
+    an **atomic claim**.
 
-    Starts from ``max(assigned) + 1`` and creates a marker with a create-if-
-    absent op; on conflict (another promotion grabbed it, or it predates the
-    marker scheme) it bumps and retries. This guarantees two concurrent
-    promotions can never be assigned the same production version.
+    The first version for a lead type is ``_v1.0.0``. Otherwise it takes the
+    highest assigned version and bumps the **patch** (``1.0.0`` -> ``1.0.1``),
+    then creates a marker with a create-if-absent op; on conflict (another
+    promotion grabbed it, or a legacy value) it bumps the patch again and
+    retries. This guarantees two concurrent promotions can never be assigned the
+    same production version. Minor/major bumps remain a manual decision.
     """
     lead_slug = _lead_type_slug(lead_type_name)
     lead_path = lead_type_name.strip().lower()
     store = _production_store(lead_type_name) or _local_store()
-    number = max(_assigned_version_numbers(lead_type_name), default=0) + 1
+    assigned = _assigned_versions(lead_type_name)
+    if not assigned:
+        major, minor, patch = 1, 0, 0
+    else:
+        major, minor, patch = max(assigned)
+        patch += 1
     for _ in range(10_000):
-        candidate = f"{lead_slug}_v{number}"
+        candidate = f"{lead_slug}_v{major}.{minor}.{patch}"
         if store.claim(f"{lead_path}/versions/{candidate}.json"):
             return candidate
-        number += 1
+        patch += 1
     raise RegistryError(
         f"Could not assign a production version for '{lead_type_name}'."
     )
@@ -592,7 +626,7 @@ def rollback(
         if manifest.get("production_model_version"):
             promoted.append(
                 (
-                    _production_version_number(manifest["production_model_version"]),
+                    _production_version_key(manifest["production_model_version"]),
                     run_id,
                 )
             )
