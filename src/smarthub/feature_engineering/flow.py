@@ -23,33 +23,44 @@ from smarthub.core.lead_types import lead_type_name as registered_lead_type_name
 # under a ``flow.*`` namespace (see train_and_predict/flow.py for the failure
 # mode this prevents). Import by canonical path instead.
 from smarthub.feature_engineering import build
-from smarthub.feature_engineering.build import _DAY_DEFS, _pct, run_build_features
+from smarthub.feature_engineering.build import _DAY_DEFS, _pct
+
+# Each build stage is its own Prefect task for per-step observability (so it is
+# clear exactly which step fails, e.g. an OOM in load-raw vs. build-table). The
+# shared BuildContext is passed by reference; results are never persisted
+# (persist_result=False), so the raw frame and training table are handed off in
+# memory rather than serialized. There is no registry/serving mutation here, so
+# no stages need to be fused for atomicity.
 
 
-@task(name="build-training-table")
-def _build_task(lead_type_id, lead_type_name, window_days):
-    """Run the Prefect-free build core inside a tracked Prefect task.
+@task(name="preflight-config", persist_result=False)
+def _preflight_config_task(ctx):
+    """Resolve the lead-type name, rolling window, and campaign scope."""
+    return build.stage_preflight_config(ctx)
 
-    Inputs
-    ------
-    lead_type_id : int
-        Lead type id to build.
-    lead_type_name : str
-        Optional lead type name; ``None`` derives it from ``lead_type_id``.
-    window_days : int | None
-        Rolling training window in days; config default when ``None``.
 
-    Returns
-    -------
-    dict
-        The build result from ``run_build_features``.
-    """
-    return run_build_features(
-        lead_type_id=lead_type_id,
-        lead_type_name=lead_type_name,
-        window_days=window_days,
-        log=get_run_logger(),
-    )
+@task(name="load-raw", persist_result=False)
+def _load_raw_task(ctx):
+    """Load the raw leads store (windowed or full), column-projected."""
+    return build.stage_load_raw(ctx)
+
+
+@task(name="build-training-table", persist_result=False)
+def _build_table_task(ctx):
+    """Run the filter + feature-engineering chain into the training table."""
+    return build.stage_build_table(ctx)
+
+
+@task(name="compute-metadata", persist_result=False)
+def _compute_metadata_task(ctx):
+    """Compute the lineage manifest + build-quality stats."""
+    return build.stage_compute_metadata(ctx)
+
+
+@task(name="save-table", persist_result=False)
+def _save_table_task(ctx):
+    """Write the versioned training table and record version/path/shape."""
+    return build.stage_save_table(ctx)
 
 
 @flow(name="smarthub-build-features", on_failure=[notifications.flow_failure_hook])
@@ -83,11 +94,22 @@ def build_features_flow(
     """
     resolved_lead_type_name = lead_type_name or registered_lead_type_name(lead_type_id)
 
+    ctx = build.BuildContext(
+        lead_type_id=lead_type_id,
+        lead_type_name=resolved_lead_type_name,
+        window_days=window_days,
+        log=get_run_logger(),
+    )
     try:
-        result = _build_task(lead_type_id, resolved_lead_type_name, window_days)
+        ctx = _preflight_config_task(ctx)
+        ctx = _load_raw_task(ctx)
+        ctx = _build_table_task(ctx)
+        ctx = _compute_metadata_task(ctx)
+        ctx = _save_table_task(ctx)
     except storage.StorageError:
         _blocked_artifact()
         raise
+    result = build.build_result(ctx)
 
     metadata = result["metadata"]
     version = result["version"]

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
@@ -228,6 +230,128 @@ def build_metadata(
     }
 
 
+@dataclass
+class BuildContext:
+    """Mutable state shared across the ordered build-features stages.
+
+    A single instance flows through :func:`stage_preflight_config` ...
+    :func:`stage_save_table`; each stage reads what earlier stages produced and
+    writes its own outputs back. Passed by reference between Prefect tasks
+    (results are never persisted), so the large raw frame and training table are
+    kept in memory rather than serialized.
+    """
+
+    # --- inputs ---
+    lead_type_id: int = 6
+    lead_type_name: str | None = None
+    window_days: int | None = None
+    log: Any = None
+
+    # --- resolved config (stage: preflight) ---
+    name: str | None = None
+    window: int | None = None
+    campaign_ids: Any = None
+
+    # --- stage outputs ---
+    raw: Any = None
+    raw_rows: int | None = None
+    table: Any = None
+    metadata: Any = None
+    version: str | None = None
+    path: str | None = None
+    rows: int | None = None
+    columns: int | None = None
+
+
+def stage_preflight_config(ctx: BuildContext) -> BuildContext:
+    """Resolve the lead-type name, rolling window, and campaign scope."""
+    ctx.log = ctx.log or logger
+    ctx.name = ctx.lead_type_name or _lead_type_name(ctx.lead_type_id)
+    ctx.window = (
+        ctx.window_days if ctx.window_days is not None else training_window_days()
+    )
+    ctx.campaign_ids = training_campaign_ids()
+    return ctx
+
+
+def stage_load_raw(ctx: BuildContext) -> BuildContext:
+    """Load the raw leads store (windowed or full), column-projected.
+
+    Raises
+    ------
+    storage.StorageError
+        If STEP 1 (data-pull) has not produced any data.
+    """
+    ctx.raw = _load_raw(ctx.window, ctx.log)
+    ctx.raw_rows = int(len(ctx.raw))
+    return ctx
+
+
+def stage_build_table(ctx: BuildContext) -> BuildContext:
+    """Run the filter + feature-engineering chain into the training table."""
+    ctx.table = build_training_table(
+        ctx.raw,
+        lead_type_id=ctx.lead_type_id,
+        campaign_ids=ctx.campaign_ids,
+    )
+    return ctx
+
+
+def stage_compute_metadata(ctx: BuildContext) -> BuildContext:
+    """Compute the lineage manifest + build-quality stats for the table."""
+    ctx.metadata = build_metadata(
+        ctx.table,
+        ctx.lead_type_id,
+        ctx.window,
+        raw_rows=ctx.raw_rows,
+    )
+    return ctx
+
+
+def stage_save_table(ctx: BuildContext) -> BuildContext:
+    """Write the versioned training table and record version/path/shape."""
+    ctx.path = str(io.save_training_table(ctx.table, ctx.name, metadata=ctx.metadata))
+    ctx.version = ctx.path.rsplit("/", 1)[-1].removesuffix(".parquet")
+    ctx.rows = int(len(ctx.table))
+    ctx.columns = int(ctx.table.shape[1])
+    ctx.log.info(
+        "[%s] training table %s: %s rows, %s cols -> %s",
+        ctx.name,
+        ctx.version,
+        len(ctx.table),
+        ctx.table.shape[1],
+        ctx.path,
+    )
+    return ctx
+
+
+# Ordered build-features stages. ``run_build_features`` (CLI) walks these
+# in-process; the Prefect flow wraps each as its own task. Keep this list and
+# the flow in sync.
+BUILD_STAGES = (
+    stage_preflight_config,
+    stage_load_raw,
+    stage_build_table,
+    stage_compute_metadata,
+    stage_save_table,
+)
+
+
+def build_result(ctx: BuildContext) -> dict:
+    """Assemble the build-features result dictionary from the context."""
+    return {
+        "lead_type_name": ctx.name,
+        "lead_type_id": ctx.lead_type_id,
+        "window": ctx.window,
+        "version": ctx.version,
+        "path": ctx.path,
+        "table": ctx.table,
+        "metadata": ctx.metadata,
+        "rows": ctx.rows,
+        "columns": ctx.columns,
+    }
+
+
 def run_build_features(
     lead_type_id: int = 6,
     lead_type_name: str | None = None,
@@ -235,6 +359,9 @@ def run_build_features(
     log: logging.Logger | None = None,
 ) -> dict:
     """Build and save the training table for one lead type. Prefect-free.
+
+    Runs the ordered build stages sequentially in-process and returns the
+    assembled result. The Prefect flow runs the same stages as separate tasks.
 
     Inputs
     ------
@@ -259,37 +386,15 @@ def run_build_features(
     storage.StorageError
         If STEP 1 (data-pull) has not produced any data.
     """
-    log = log or logger
-    name = lead_type_name or _lead_type_name(lead_type_id)
-    window = window_days if window_days is not None else training_window_days()
-
-    raw = _load_raw(window, log)
-    raw_rows = int(len(raw))
-    table = build_training_table(
-        raw, lead_type_id=lead_type_id, campaign_ids=training_campaign_ids()
+    ctx = BuildContext(
+        lead_type_id=lead_type_id,
+        lead_type_name=lead_type_name,
+        window_days=window_days,
+        log=log or logger,
     )
-    metadata = build_metadata(table, lead_type_id, window, raw_rows=raw_rows)
-    path = str(io.save_training_table(table, name, metadata=metadata))
-    version = path.rsplit("/", 1)[-1].removesuffix(".parquet")
-    log.info(
-        "[%s] training table %s: %s rows, %s cols -> %s",
-        name,
-        version,
-        len(table),
-        table.shape[1],
-        path,
-    )
-    return {
-        "lead_type_name": name,
-        "lead_type_id": lead_type_id,
-        "window": window,
-        "version": version,
-        "path": path,
-        "table": table,
-        "metadata": metadata,
-        "rows": int(len(table)),
-        "columns": int(table.shape[1]),
-    }
+    for stage in BUILD_STAGES:
+        stage(ctx)
+    return build_result(ctx)
 
 
 def main(argv=None):
