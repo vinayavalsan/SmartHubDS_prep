@@ -638,16 +638,20 @@ if _FASTAPI_AVAILABLE:
         min_bid: float = Field(0.25, ge=0)
         bid_step: float = Field(0.25, gt=0)
 
-        # Universal SmartHub request context. These must be present for every
-        # lead type. lead_ping_id is traceability-only and is never a model
-        # feature, but a missing correlation key still blocks prediction.
+        # Universal SmartHub request context required for every lead type.
         lead_type_id: int
-        account_id: int
-        lead_ping_id: int
         campaign_id: int
         source_type_id: int
         traffic_tier: str
         created_at: datetime
+
+        # Logging-only identifiers (per DS sync 2026-08-25): account_id and
+        # lead_ping_id are never predictive features and are used only for
+        # log/join purposes, so they stay OPTIONAL — a missing one must not block
+        # a bid. account_id is a grouping parent of campaign_id (the campaign
+        # carries the predictive signal), so it adds no model value on its own.
+        account_id: int | None = None
+        lead_ping_id: int | None = None
 
         # Response control (NOT a feature -- never affects the bid). When true,
         # the response also returns the full decision payload the prediction log
