@@ -8,10 +8,6 @@ training:
       random:
         test_size: 0.2
         stratify: true
-    calibration:
-      enabled: false
-      method: sigmoid
-      cv: 3
     optimizer:
       target_cm: 0.25
       minimum_bid: 0.25
@@ -55,6 +51,10 @@ training:
     6:
       name: auto
       model_type: lightgbm
+      calibration:
+        enabled: false
+        method: sigmoid
+        cv: 3
       models:
         lightgbm:
           verbosity: -1
@@ -72,17 +72,21 @@ training:
     1:
       name: home
       model_type: lightgbm
+      calibration:
+        enabled: false
+        method: sigmoid
+        cv: 3
       models:
         lightgbm:
-          verbosity: -1
-          n_jobs: 1
-          subsample_freq: 1
-          n_estimators: 700
-          num_leaves: 50
-          max_depth: 8
-          learning_rate: 0.03756926249576086
-          min_child_samples: 36
-          subsample: 0.9878338511058234
-          colsample_bytree: 0.9100531293444458
-          reg_alpha: 3.7713131110779936
-          reg_lambda: 3.4131967734309536
+            verbosity: -1
+            n_jobs: 1
+            subsample_freq: 1
+            n_estimators: 700
+            num_leaves: 76
+            max_depth: 6
+            learning_rate: 0.0234428383660204
+            min_child_samples: 91
+            subsample: 0.917904486530996
+            colsample_bytree: 0.7020003339613894
+            reg_alpha: 1.0603052101535392e-06
+            reg_lambda: 0.006167571016172181

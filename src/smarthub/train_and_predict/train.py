@@ -28,6 +28,7 @@ from smarthub.core.logging_utils import get_logger
 
 from . import (
     config,
+    feature_diagnostics,
     metrics,
     models,
     optimizer_evaluation,
@@ -215,6 +216,7 @@ class TrainingContext:
     feature_summary_df: Any = None
     feature_counts_df: Any = None
     feature_split_diagnostics: Any = None
+    full_zero_variance_features: Any = None
     zero_variance_features: Any = None
 
     # --- stage: fit ---
@@ -339,6 +341,17 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     lead_type_name = ctx.lead_type_name
     lead_type_id = ctx.lead_type_id
 
+    full_zero_variance_features = feature_diagnostics.find_zero_variance_features(
+        frame,
+        numeric,
+        categorical,
+    )
+    ctx.full_zero_variance_features = full_zero_variance_features
+    feature_diagnostics.log_zero_variance_features(
+        full_zero_variance_features,
+        "Full Dataset",
+    )
+
     split_settings = training_config.split
     train_df, test_df = split_training_data(
         frame=frame,
@@ -363,7 +376,7 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     logger.info("Feature columns: %s", feature_cols)
 
     feature_summary_df, feature_counts_df = (
-        training_artifacts.build_training_data_summary(
+        feature_diagnostics.build_training_data_summary(
             df=frame,
             continuous_features=[
                 column for column in numeric if column in ("bid", "age")
@@ -374,7 +387,7 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
             categorical_features=categorical,
         )
     )
-    training_artifacts.log_training_data_summary(
+    feature_diagnostics.log_training_data_summary(
         df=frame,
         feature_summary_df=feature_summary_df,
         feature_counts_df=feature_counts_df,
@@ -430,51 +443,28 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     ):
         logger.info("    %-10s : %s", day, f"{count:,}")
 
-    diagnostic_features = preprocessing.coverage_features(
+    diagnostic_features = feature_diagnostics.coverage_features(
         frame,
         numeric,
         categorical,
     )
-    feature_coverage_diagnostics = preprocessing.feature_coverage_rows(
+    feature_coverage_diagnostics = feature_diagnostics.feature_coverage_rows(
         train_df=train_df,
         eval_df=test_df,
         features=diagnostic_features,
         partition="test",
     )
-    coverage_df = pd.DataFrame(feature_coverage_diagnostics)
-    differing_coverage_df = coverage_df[
-        (coverage_df["train_unique"] != coverage_df["eval_unique"])
-        | (coverage_df["unseen_eval_unique"] > 0)
-    ].copy()
-
-    logger.info("Feature Coverage Diagnostics")
-    if differing_coverage_df.empty:
-        logger.info("  No train/test coverage differences detected.")
-    else:
-        display_coverage_df = differing_coverage_df.drop(columns=["partition"]).rename(
-            columns={
-                "eval_unique": "test_unique",
-                "unseen_eval_unique": "unseen_test_unique",
-                "eval_rows_unseen": "test_rows_unseen",
-                "eval_pct_unseen": "test_pct_unseen",
-                "min_train_support_for_eval_values": (
-                    "min_train_support_for_test_values"
-                ),
-            }
-        )
-        display_coverage_df["test_pct_unseen"] = display_coverage_df[
-            "test_pct_unseen"
-        ].round(2)
-        logger.info("\n%s", display_coverage_df.to_string(index=False))
-
+    differing_coverage_df = feature_diagnostics.log_feature_coverage_diagnostics(
+        feature_coverage_diagnostics,
+        evaluation_label="test",
+        include_partition=False,
+    )
     ctx.feature_split_diagnostics = differing_coverage_df.to_dict(orient="records")
 
-    binary_variance_loss = []
-    for row in feature_coverage_diagnostics:
-        column = row["feature"]
-        overall_unique = frame[column].nunique(dropna=True)
-        if overall_unique == 2 and row["train_unique"] == 1 and row["eval_unique"] == 2:
-            binary_variance_loss.append(row)
+    binary_variance_loss = feature_diagnostics.find_binary_variance_loss(
+        frame,
+        feature_coverage_diagnostics,
+    )
 
     if binary_variance_loss:
         affected = "\n".join(
@@ -492,11 +482,15 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
             },
         )
 
-    ctx.zero_variance_features = [
-        row["feature"]
-        for row in feature_coverage_diagnostics
-        if row["train_unique"] <= 1
-    ]
+    ctx.zero_variance_features = feature_diagnostics.find_zero_variance_features(
+        train_df,
+        numeric,
+        categorical,
+    )
+    feature_diagnostics.log_zero_variance_features(
+        ctx.zero_variance_features,
+        "Train Split",
+    )
     return ctx
 
 
@@ -651,6 +645,9 @@ def stage_save_reports(ctx: TrainingContext) -> TrainingContext:
         f1=model_metrics.f1,
         f2=model_metrics.f2,
         optimizer_eval_df=optimizer_eval_df,
+        target_cm=ctx.target_cm,
+        min_bid=ctx.min_bid,
+        bid_step=ctx.bid_step,
     )
 
     lineage = {
@@ -662,6 +659,7 @@ def stage_save_reports(ctx: TrainingContext) -> TrainingContext:
         "data_min_created_at": prep_summary["data_min_created_at"],
         "data_max_created_at": prep_summary["data_max_created_at"],
         "source_row_count": prep_summary["source_row_count"],
+        "full_zero_variance_features": list(ctx.full_zero_variance_features),
         "zero_variance_features": list(ctx.zero_variance_features),
         "feature_split_diagnostics": ctx.feature_split_diagnostics,
     }
@@ -945,6 +943,7 @@ def stage_save_and_promote(ctx: TrainingContext) -> TrainingContext:
             "cv": training_config.calibration_cv,
         },
         "feature_cols": list(feature_cols),
+        "full_zero_variance_features": list(ctx.full_zero_variance_features),
         "zero_variance_features": list(ctx.zero_variance_features),
         "feature_split_diagnostics": ctx.feature_split_diagnostics,
         "train_rows": int(len(ctx.X_train)),

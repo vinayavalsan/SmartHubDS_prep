@@ -1,7 +1,7 @@
 """Training reports and artifacts for SmartHub model runs.
 
-This module builds training-data summaries, plots, evaluation reports,
-comparison datasets, metadata, and deterministic test-set identifiers.
+This module persists training reports, plots, evaluation outputs, comparison
+datasets, metadata, and deterministic test-set identifiers.
 """
 
 import hashlib
@@ -12,7 +12,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.colors import PowerNorm
+from matplotlib.colors import LinearSegmentedColormap, PowerNorm
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve
 
@@ -21,7 +21,19 @@ from smarthub.core.logging_utils import get_logger
 logger = get_logger(__name__)
 
 _DENSITY_MIN_COUNT = 10
-_DENSITY_GAMMA = 0.5
+_DENSITY_GAMMA = 0.25
+_DENSITY_CMAP = LinearSegmentedColormap.from_list(
+    "smarthub_inverse_electric",
+    [
+        "#ffffff",
+        "#fffadc",
+        "#e6c800",
+        "#a05a00",
+        "#780064",
+        "#1e0064",
+        "#000000",
+    ],
+)
 
 
 def _density_colorbar_ticks(max_count):
@@ -54,280 +66,10 @@ def _format_density_tick(count, total_rows):
     return f"{int(round(count)):,} ({fraction_pct:.3f}%)"
 
 
-def build_feature_summary_dataframe(
-    df,
-    continuous_features,
-    discrete_features,
-    categorical_features,
-):
-    """Build one summary row for each configured feature.
-
-    Inputs
-    ------
-    df : pandas.DataFrame
-        Input dataframe.
-    continuous_features : list[str]
-        Continuous feature names.
-    discrete_features : list[str]
-        Discrete feature names.
-    categorical_features : list[str]
-        Categorical feature names.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Feature-level summary table.
-    """
-    rows = []
-
-    feature_types = {
-        **{feature: "continuous" for feature in continuous_features},
-        **{feature: "discrete" for feature in discrete_features},
-        **{feature: "categorical" for feature in categorical_features},
-    }
-
-    for feature, feature_type in feature_types.items():
-        if feature not in df.columns:
-            continue
-
-        series = df[feature]
-        missing_count = (
-            series.isna().sum() + (series.astype(str).str.strip() == "").sum()
-        )
-        missing_pct = missing_count / len(df) * 100 if len(df) else 0
-
-        mode_values = series.dropna().replace("", pd.NA).dropna().mode()
-        mode_value = mode_values.iloc[0] if not mode_values.empty else pd.NA
-
-        row = {
-            "feature": feature,
-            "type": feature_type,
-            "missing_count": int(missing_count),
-            "missing_pct": round(missing_pct, 2),
-            "unique_values": int(series.nunique(dropna=True)),
-            "mode": mode_value,
-            "mean": pd.NA,
-            "median": pd.NA,
-            "min": pd.NA,
-            "max": pd.NA,
-            "std": pd.NA,
-        }
-
-        if feature_type == "continuous":
-            numeric_series = pd.to_numeric(series, errors="coerce")
-            row.update(
-                {
-                    "mean": round(numeric_series.mean(), 4),
-                    "median": round(numeric_series.median(), 4),
-                    "min": round(numeric_series.min(), 4),
-                    "max": round(numeric_series.max(), 4),
-                    "std": round(numeric_series.std(), 4),
-                }
-            )
-
-        rows.append(row)
-
-    return pd.DataFrame(rows)
-
-
-def build_feature_value_counts_dataframe(df, features, top_n_per_feature=30):
-    """Build long-format value counts for selected features.
-
-    Inputs
-    ------
-    df : pandas.DataFrame
-        Input dataframe.
-    features : list[str]
-        Feature names to summarize.
-    top_n_per_feature : int
-        Maximum values retained per feature.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Long-format value-count table.
-    """
-    long_df = df[features].copy()
-
-    for col in features:
-        long_df[col] = (
-            long_df[col].astype("string").fillna("<NA>").replace("", "<EMPTY>")
-        )
-
-    long_df = long_df.melt(
-        var_name="feature",
-        value_name="feature_value",
-    )
-
-    counts_df = (
-        long_df.groupby(["feature", "feature_value"]).size().reset_index(name="count")
-    )
-
-    counts_df["percent"] = (
-        counts_df["count"]
-        / counts_df.groupby("feature")["count"].transform("sum")
-        * 100
-    )
-    counts_df["percent"] = counts_df["percent"].round(2)
-
-    counts_df = counts_df.sort_values(
-        ["feature", "count", "feature_value"],
-        ascending=[True, False, True],
-    )
-
-    counts_df["rank"] = counts_df.groupby("feature")["count"].rank(
-        method="first",
-        ascending=False,
-    )
-    counts_df = counts_df[counts_df["rank"] <= top_n_per_feature].copy()
-    counts_df = counts_df.drop(columns=["rank"])
-
-    return counts_df
-
-
-def build_training_data_summary(
-    df,
-    continuous_features,
-    discrete_features,
-    categorical_features,
-):
-    """Build feature summaries and value-count tables.
-
-    Inputs
-    ------
-    df : pandas.DataFrame
-        Input dataframe.
-    continuous_features : list[str]
-        Continuous feature names.
-    discrete_features : list[str]
-        Discrete feature names.
-    categorical_features : list[str]
-        Categorical feature names.
-
-    Returns
-    -------
-    tuple[pandas.DataFrame, pandas.DataFrame]
-        Feature summary followed by feature-value counts.
-    """
-    feature_summary_df = build_feature_summary_dataframe(
-        df=df,
-        continuous_features=continuous_features,
-        discrete_features=discrete_features,
-        categorical_features=categorical_features,
-    )
-    count_features = list(discrete_features) + list(categorical_features)
-    feature_counts_df = build_feature_value_counts_dataframe(
-        df=df,
-        features=count_features,
-        top_n_per_feature=30,
-    )
-    return feature_summary_df, feature_counts_df
-
-
-def log_training_data_summary(
-    df,
-    feature_summary_df,
-    feature_counts_df,
-    target_col=None,
-):
-    """Log a compact summary of the prepared training data.
-
-    Inputs
-    ------
-    df : pandas.DataFrame
-        Input dataframe.
-    feature_summary_df : pandas.DataFrame
-        Feature-level summary dataframe.
-    feature_counts_df : pandas.DataFrame
-        Feature-value count dataframe.
-    target_col : str | None
-        Optional target column name.
-    """
-    logger.info("Dataset Summary")
-    logger.info("  Total rows                            : %s", f"{len(df):,}")
-
-    if target_col is not None and target_col in df.columns:
-        target = pd.to_numeric(df[target_col], errors="coerce")
-        if target.notna().any():
-            logger.info("  Target win rate                       : %.4f", target.mean())
-
-    if not feature_summary_df.empty:
-        total_missing = int(feature_summary_df["missing_count"].sum())
-        missing_features = int((feature_summary_df["missing_count"] > 0).sum())
-        logger.info(
-            "  Features summarized                   : %s",
-            f"{len(feature_summary_df):,}",
-        )
-        logger.info(
-            "  Features with missing values          : %s",
-            f"{missing_features:,}",
-        )
-        logger.info(
-            "  Total missing feature values          : %s",
-            f"{total_missing:,}",
-        )
-
-        top_missing = feature_summary_df.sort_values(
-            "missing_pct", ascending=False
-        ).head(8)
-        top_missing = top_missing[top_missing["missing_count"] > 0]
-        if not top_missing.empty:
-            logger.info("  Top missing features")
-            for row in top_missing.itertuples(index=False):
-                logger.info(
-                    "    %-35s %8s (%6.2f%%)",
-                    row.feature,
-                    f"{int(row.missing_count):,}",
-                    float(row.missing_pct),
-                )
-
-    if feature_counts_df is not None and not feature_counts_df.empty:
-        logger.info(
-            "  Feature-value count rows saved        : %s",
-            f"{len(feature_counts_df):,}",
-        )
-
-
-def print_training_data_summary(
-    df,
-    continuous_features,
-    discrete_features,
-    categorical_features,
-    target_col=None,
-):
-    """Build and log training-data summaries.
-
-    Inputs
-    ------
-    df : pandas.DataFrame
-        Input dataframe.
-    continuous_features : list[str]
-        Continuous feature names.
-    discrete_features : list[str]
-        Discrete feature names.
-    categorical_features : list[str]
-        Categorical feature names.
-    target_col : str | None
-        Optional target column name.
-
-    Returns
-    -------
-    tuple[pandas.DataFrame, pandas.DataFrame]
-        Feature summary followed by feature-value counts.
-    """
-    feature_summary_df, feature_counts_df = build_training_data_summary(
-        df=df,
-        continuous_features=continuous_features,
-        discrete_features=discrete_features,
-        categorical_features=categorical_features,
-    )
-    log_training_data_summary(
-        df=df,
-        feature_summary_df=feature_summary_df,
-        feature_counts_df=feature_counts_df,
-        target_col=target_col,
-    )
-    return feature_summary_df, feature_counts_df
+def _limit_density_colorbar(colorbar, max_count):
+    """Display only the retained density range while preserving 0 = white."""
+    if max_count >= _DENSITY_MIN_COUNT:
+        colorbar.ax.set_ylim(float(_DENSITY_MIN_COUNT), float(max_count))
 
 
 def save_feature_summary_files(
@@ -389,6 +131,7 @@ def _plot_histogram(report_dir, df, column, filename, xlabel, title, bins=40):
     plt.xlabel(xlabel)
     plt.ylabel("Number of rows")
     plt.title(title)
+    plt.grid(True, alpha=0.25, linewidth=0.6)
     plt.tight_layout()
     path = Path(report_dir) / filename
     plt.savefig(path)
@@ -478,6 +221,7 @@ def _save_calibration_by_bucket(report_dir, y_test, pred):
     calibration_ax.set_title("Observed vs Predicted Win Rate by Probability Bucket")
     calibration_ax.set_xlim(0.0, 1.0)
     calibration_ax.set_ylim(0.0, 1.0)
+    calibration_ax.grid(True, alpha=0.25, linewidth=0.6)
     calibration_ax.legend(loc="upper left")
 
     fig.tight_layout()
@@ -488,7 +232,7 @@ def _save_calibration_by_bucket(report_dir, y_test, pred):
 
 
 def _save_policy_profit_comparison(report_dir, optimizer_eval_df):
-    """Compare observed profit with ML probability-weighted expected profit.
+    """Compare policy revenue, bid spend, profit, and aggregate CM.
 
     Inputs
     ------
@@ -503,40 +247,145 @@ def _save_policy_profit_comparison(report_dir, optimizer_eval_df):
         Saved plot path, or ``None`` when required columns are unavailable.
     """
     required = {
+        "observed_policy_expected_revenue",
+        "observed_policy_bid_cost",
         "observed_policy_expected_profit",
+        "current_bid_predicted_win_rate",
+        "recommended_bid_predicted_win_rate",
         "current_bid_expected_profit",
         "recommended_bid_expected_profit",
+        "bid",
+        "recommended_bid",
     }
     if not required.issubset(optimizer_eval_df.columns):
         return None
 
-    values = [
-        float(optimizer_eval_df["observed_policy_expected_profit"].sum()),
-        float(optimizer_eval_df["current_bid_expected_profit"].sum()),
-        float(optimizer_eval_df["recommended_bid_expected_profit"].sum()),
+    revenue_col = None
+    for candidate in ("expected_revenue", "revenue"):
+        if candidate in optimizer_eval_df.columns:
+            revenue_col = candidate
+            break
+    if revenue_col is None:
+        return None
+
+    current_win_rate = pd.to_numeric(
+        optimizer_eval_df["current_bid_predicted_win_rate"], errors="coerce"
+    )
+    recommended_win_rate = pd.to_numeric(
+        optimizer_eval_df["recommended_bid_predicted_win_rate"], errors="coerce"
+    )
+    revenue = pd.to_numeric(optimizer_eval_df[revenue_col], errors="coerce")
+    current_bid = pd.to_numeric(optimizer_eval_df["bid"], errors="coerce")
+    recommended_bid = pd.to_numeric(
+        optimizer_eval_df["recommended_bid"], errors="coerce"
+    )
+
+    observed_revenue = float(
+        pd.to_numeric(
+            optimizer_eval_df["observed_policy_expected_revenue"], errors="coerce"
+        ).sum()
+    )
+    observed_bid_spend = float(
+        pd.to_numeric(
+            optimizer_eval_df["observed_policy_bid_cost"], errors="coerce"
+        ).sum()
+    )
+    observed_profit = float(
+        pd.to_numeric(
+            optimizer_eval_df["observed_policy_expected_profit"], errors="coerce"
+        ).sum()
+    )
+
+    current_revenue = float((current_win_rate * revenue).sum())
+    current_bid_spend = float((current_win_rate * current_bid).sum())
+    current_profit = float(
+        pd.to_numeric(
+            optimizer_eval_df["current_bid_expected_profit"], errors="coerce"
+        ).sum()
+    )
+
+    recommended_revenue = float((recommended_win_rate * revenue).sum())
+    recommended_bid_spend = float((recommended_win_rate * recommended_bid).sum())
+    recommended_profit = float(
+        pd.to_numeric(
+            optimizer_eval_df["recommended_bid_expected_profit"], errors="coerce"
+        ).sum()
+    )
+
+    policy_values = [
+        (observed_revenue, observed_bid_spend, observed_profit),
+        (current_revenue, current_bid_spend, current_profit),
+        (recommended_revenue, recommended_bid_spend, recommended_profit),
     ]
+    cms = [
+        observed_profit / observed_revenue if observed_revenue else float("nan"),
+        current_profit / current_revenue if current_revenue else float("nan"),
+        (
+            recommended_profit / recommended_revenue
+            if recommended_revenue
+            else float("nan")
+        ),
+    ]
+
     labels = [
         "Existing policy\n(observed)",
         "ML @ existing bids\n(probability-weighted)",
         "ML optimized\n(probability-weighted)",
     ]
 
-    plt.figure(figsize=(9, 6))
-    bars = plt.bar(labels, values)
-    plt.ylabel("Profit / probability-weighted expected profit")
-    plt.title("Observed Profit vs ML Probability-Weighted Expected Profit")
-    for bar, value in zip(bars, values):
-        plt.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height(),
-            f"${value:,.0f}",
-            ha="center",
-            va="bottom",
-        )
-    plt.tight_layout()
+    revenue_values = [row[0] for row in policy_values]
+    bid_spend_values = [row[1] for row in policy_values]
+    profit_values = [row[2] for row in policy_values]
+
+    x = np.arange(len(labels))
+    width = 0.24
+
+    fig, ax = plt.subplots(figsize=(11, 7))
+    revenue_bars = ax.bar(x - width, revenue_values, width, label="Revenue")
+    bid_spend_bars = ax.bar(x, bid_spend_values, width, label="Bid spend")
+    profit_bars = ax.bar(x + width, profit_values, width, label="Profit")
+
+    ax.set_ylabel("Total dollars")
+    ax.set_title("Policy Economics: Revenue, Bid Spend, Profit, and CM")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax.legend()
+
+    max_value = max(revenue_values + bid_spend_values + profit_values)
+    ax.set_ylim(0.0, max_value * 1.22 if max_value > 0 else 1.0)
+
+    for bars, values in (
+        (revenue_bars, revenue_values),
+        (bid_spend_bars, bid_spend_values),
+        (profit_bars, profit_values),
+    ):
+        for bar, value in zip(bars, values):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max_value * 0.01,
+                f"${value:,.0f}",
+                ha="center",
+                va="bottom",
+                rotation=90,
+                fontsize=9,
+            )
+
+    for index, cm in enumerate(cms):
+        if pd.notna(cm):
+            ax.text(
+                x[index],
+                max_value * 1.11,
+                f"CM = {cm:.1%}",
+                ha="center",
+                va="center",
+                fontweight="bold",
+            )
+
+    fig.tight_layout()
     path = Path(report_dir) / "policy_profit_comparison.png"
-    plt.savefig(path)
-    plt.close()
+    fig.savefig(path)
+    plt.close(fig)
     return path
 
 
@@ -593,6 +442,7 @@ def _save_policy_win_rate_comparison(report_dir, optimizer_eval_df):
     bars = plt.bar(labels, values)
     plt.ylabel("Win rate")
     plt.title("Existing Policy vs ML Win Rate")
+    plt.grid(True, axis="y", alpha=0.25, linewidth=0.6)
     plt.ylim(0.0, max(values) * 1.2 if max(values) > 0 else 1.0)
     for bar, value in zip(bars, values):
         plt.text(
@@ -663,6 +513,7 @@ def _save_expected_profit_by_max_win_probability(report_dir, optimizer_eval_df):
     ax.set_title("Probability-Weighted Expected Profit Below Win-Rate Threshold")
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.02)
+    ax.grid(True, alpha=0.25, linewidth=0.6)
 
     fig.tight_layout()
     path = Path(report_dir) / "expected_profit_by_max_win_probability.png"
@@ -759,6 +610,7 @@ def _save_bid_change_vs_win_probability_change(
             range=(x_range, y_range),
         )
         counts[counts < _DENSITY_MIN_COUNT] = np.nan
+        counts[counts <= 0] = np.nan
         histograms[name] = (counts, x_edges, y_edges)
 
         finite_counts = counts[np.isfinite(counts)]
@@ -767,7 +619,7 @@ def _save_bid_change_vs_win_probability_change(
 
     norm = PowerNorm(
         gamma=_DENSITY_GAMMA,
-        vmin=float(_DENSITY_MIN_COUNT),
+        vmin=1.0,
         vmax=max_count,
     )
 
@@ -792,6 +644,7 @@ def _save_bid_change_vs_win_probability_change(
                 x_edges,
                 y_edges,
                 counts.T,
+                cmap=_DENSITY_CMAP,
                 norm=norm,
                 shading="auto",
             )
@@ -802,6 +655,7 @@ def _save_bid_change_vs_win_probability_change(
         ax.set_xlabel("Bid change: ML recommended - existing bid")
         ax.set_xlim(*x_range)
         ax.set_ylim(*y_range)
+        ax.grid(True, alpha=0.25, linewidth=0.6)
 
     axes[0].set_ylabel(
         "Predicted win-probability change: ML recommended - existing bid"
@@ -822,6 +676,7 @@ def _save_bid_change_vs_win_probability_change(
         colorbar.set_ticklabels(
             [_format_density_tick(value, total_test_leads) for value in ticks]
         )
+        _limit_density_colorbar(colorbar, max_count)
         colorbar.set_label("Lead density: count (% of test leads)")
 
     fig.suptitle("Bid Change vs Predicted Win-Probability Change - 2D Count Heatmap")
@@ -963,6 +818,7 @@ def _save_bid_distribution_by_outcome(report_dir, optimizer_eval_df):
         ax.set_title(f"{title} (n={len(subset):,})")
         ax.set_xlabel("Bid")
         ax.set_xlim(bid_min, bid_max)
+        ax.grid(True, alpha=0.25, linewidth=0.6)
         ax.legend()
 
     axes[0].set_ylabel("Fraction of leads within historical outcome")
@@ -975,7 +831,390 @@ def _save_bid_distribution_by_outcome(report_dir, optimizer_eval_df):
     return path
 
 
-def _save_optimizer_plots(report_dir, optimizer_eval_df):
+def _optimizer_diagnostic_frame(
+    optimizer_eval_df,
+    target_cm,
+    min_bid,
+    bid_step,
+):
+    """Build numeric optimizer diagnostics, including per-row bid ceiling."""
+    required = {"bid", "recommended_bid", "expected_profit_lift"}
+    if not required.issubset(optimizer_eval_df.columns):
+        return pd.DataFrame()
+
+    revenue_col = next(
+        (
+            name
+            for name in ("expected_revenue", "revenue")
+            if name in optimizer_eval_df.columns
+        ),
+        None,
+    )
+    if revenue_col is None or target_cm is None or min_bid is None or bid_step is None:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(
+        {
+            "existing_bid": pd.to_numeric(optimizer_eval_df["bid"], errors="coerce"),
+            "recommended_bid": pd.to_numeric(
+                optimizer_eval_df["recommended_bid"], errors="coerce"
+            ),
+            "expected_profit_lift": pd.to_numeric(
+                optimizer_eval_df["expected_profit_lift"],
+                errors="coerce",
+            ),
+            "expected_revenue": pd.to_numeric(
+                optimizer_eval_df[revenue_col], errors="coerce"
+            ),
+        }
+    )
+
+    for source, destination in (
+        ("current_bid_predicted_win_rate", "current_predicted_win_rate"),
+        (
+            "recommended_bid_predicted_win_rate",
+            "recommended_predicted_win_rate",
+        ),
+    ):
+        if source in optimizer_eval_df.columns:
+            frame[destination] = pd.to_numeric(
+                optimizer_eval_df[source], errors="coerce"
+            )
+
+    outcome_col = next(
+        (name for name in ("won_flag", "won") if name in optimizer_eval_df.columns),
+        None,
+    )
+    if outcome_col is not None:
+        raw_outcome = optimizer_eval_df[outcome_col]
+        outcome = pd.to_numeric(raw_outcome, errors="coerce")
+        if outcome.isna().any():
+            normalized = raw_outcome.astype("string").str.strip().str.lower()
+            outcome = outcome.fillna(normalized.map({"true": 1.0, "false": 0.0}))
+        frame["observed_outcome"] = outcome
+
+    frame = frame.dropna(
+        subset=[
+            "existing_bid",
+            "recommended_bid",
+            "expected_profit_lift",
+            "expected_revenue",
+        ]
+    )
+    if frame.empty:
+        return frame
+
+    step = float(bid_step)
+    minimum = float(min_bid)
+    cm_ceiling = frame["expected_revenue"] * (1.0 - float(target_cm))
+    frame["maximum_candidate_bid"] = (
+        np.floor((cm_ceiling - minimum) / step + 1e-12) * step + minimum
+    )
+    frame["maximum_candidate_bid"] = frame["maximum_candidate_bid"].clip(lower=minimum)
+    frame["bid_change"] = frame["recommended_bid"] - frame["existing_bid"]
+    return frame
+
+
+def log_optimizer_recommendation_diagnostics(
+    optimizer_eval_df,
+    target_cm,
+    min_bid,
+    bid_step,
+):
+    """Log optimizer boundary usage and large bid movements."""
+    frame = _optimizer_diagnostic_frame(optimizer_eval_df, target_cm, min_bid, bid_step)
+    if frame.empty:
+        return
+
+    tolerance = max(float(bid_step) * 1e-6, 1e-9)
+    at_min = np.isclose(
+        frame["recommended_bid"],
+        float(min_bid),
+        atol=tolerance,
+        rtol=0.0,
+    )
+    at_max = np.isclose(
+        frame["recommended_bid"],
+        frame["maximum_candidate_bid"],
+        atol=tolerance,
+        rtol=0.0,
+    )
+    interior = ~(at_min | at_max)
+    large_increase = frame["bid_change"] >= 10.0
+    large_decrease = frame["bid_change"] <= -10.0
+    total = len(frame)
+
+    logger.info("Optimizer Recommendation Diagnostics")
+    for label, mask in (
+        ("At minimum bid", at_min),
+        ("At maximum candidate bid", at_max),
+        ("Interior recommendation", interior),
+        ("Large bid increase >= $10", large_increase),
+        ("Large bid decrease <= -$10", large_decrease),
+    ):
+        count = int(mask.sum())
+        logger.info(
+            "  %-38s: %s (%.2f%%)",
+            label,
+            f"{count:,}",
+            count / total * 100.0,
+        )
+
+    boundary = frame.loc[at_max]
+    if boundary.empty:
+        return
+
+    logger.info("  Maximum-Candidate Bid Rows")
+    logger.info(
+        "    %-36s: $%.2f",
+        "Average existing bid",
+        boundary["existing_bid"].mean(),
+    )
+    logger.info(
+        "    %-36s: $%.2f",
+        "Average recommended bid",
+        boundary["recommended_bid"].mean(),
+    )
+    logger.info(
+        "    %-36s: $%.2f",
+        "Average expected revenue",
+        boundary["expected_revenue"].mean(),
+    )
+    logger.info(
+        "    %-36s: $%.2f",
+        "Average expected profit lift",
+        boundary["expected_profit_lift"].mean(),
+    )
+
+    for column, label in (
+        ("current_predicted_win_rate", "Average current predicted win rate"),
+        (
+            "recommended_predicted_win_rate",
+            "Average recommended predicted win rate",
+        ),
+        ("observed_outcome", "Historical win rate"),
+    ):
+        if column in boundary.columns:
+            values = boundary[column].dropna()
+            if not values.empty:
+                logger.info(
+                    "    %-36s: %.4f",
+                    label,
+                    values.mean(),
+                )
+
+
+def _save_optimizer_boundary_diagnostics(
+    report_dir, optimizer_eval_df, target_cm, min_bid, bid_step
+):
+    """Plot the share of recommendations at the lower/upper bid boundary."""
+    frame = _optimizer_diagnostic_frame(optimizer_eval_df, target_cm, min_bid, bid_step)
+    if frame.empty:
+        return None
+    tolerance = max(float(bid_step) * 1e-6, 1e-9)
+    at_min = np.isclose(
+        frame["recommended_bid"], float(min_bid), atol=tolerance, rtol=0.0
+    )
+    at_max = np.isclose(
+        frame["recommended_bid"],
+        frame["maximum_candidate_bid"],
+        atol=tolerance,
+        rtol=0.0,
+    )
+    counts = [int(at_min.sum()), int((~(at_min | at_max)).sum()), int(at_max.sum())]
+    labels = ["Minimum bid", "Interior", "Maximum candidate bid"]
+    total = len(frame)
+    fig, ax = plt.subplots(figsize=(9, 6))
+    bars = ax.bar(labels, counts)
+    ax.set_ylabel("Number of rows")
+    ax.set_title("Optimizer Recommendation Boundary Diagnostics")
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    for bar, count in zip(bars, counts):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{count:,} ({count / total:.1%})",
+            ha="center",
+            va="bottom",
+        )
+    fig.tight_layout()
+    path = Path(report_dir) / "optimizer_boundary_diagnostics.png"
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
+
+def _save_existing_vs_recommended_bid_heatmap(report_dir, optimizer_eval_df):
+    """Plot existing bid against ML recommended bid as a 2D count heatmap."""
+    if not {"bid", "recommended_bid"}.issubset(optimizer_eval_df.columns):
+        return None
+    x = pd.to_numeric(optimizer_eval_df["bid"], errors="coerce")
+    y = pd.to_numeric(optimizer_eval_df["recommended_bid"], errors="coerce")
+    valid = x.notna() & y.notna()
+    if not valid.any():
+        return None
+    x, y = x[valid], y[valid]
+    low, high = float(min(x.min(), y.min())), float(max(x.max(), y.max()))
+    if low == high:
+        low, high = low - 0.5, high + 0.5
+    counts, x_edges, y_edges = np.histogram2d(
+        x, y, bins=60, range=((low, high), (low, high))
+    )
+    counts[counts < _DENSITY_MIN_COUNT] = np.nan
+    counts[counts <= 0] = np.nan
+    finite = counts[np.isfinite(counts)]
+    max_count = (
+        max(float(_DENSITY_MIN_COUNT), float(finite.max()))
+        if finite.size
+        else float(_DENSITY_MIN_COUNT)
+    )
+    fig, ax = plt.subplots(figsize=(9, 7))
+    heatmap = ax.pcolormesh(
+        x_edges,
+        y_edges,
+        counts.T,
+        cmap=_DENSITY_CMAP,
+        norm=PowerNorm(gamma=_DENSITY_GAMMA, vmin=1.0, vmax=max_count),
+        shading="auto",
+    )
+    ax.plot([low, high], [low, high], linestyle="--")
+    ax.set_xlabel("Existing bid")
+    ax.set_ylabel("ML recommended bid")
+    ax.set_title("Existing Bid vs ML Recommended Bid - 2D Count Heatmap")
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+    colorbar = fig.colorbar(heatmap, ax=ax)
+    ticks = _density_colorbar_ticks(max_count)
+    colorbar.set_ticks(ticks)
+    colorbar.set_ticklabels(
+        [_format_density_tick(v, len(optimizer_eval_df)) for v in ticks]
+    )
+    _limit_density_colorbar(colorbar, max_count)
+    colorbar.set_label("Lead density: count (% of test leads)")
+    fig.tight_layout()
+    path = Path(report_dir) / "existing_vs_recommended_bid_heatmap.png"
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def _save_bid_change_vs_expected_profit_lift_heatmap(report_dir, optimizer_eval_df):
+    """Plot bid change against probability-weighted expected-profit lift."""
+    if not {"bid", "recommended_bid", "expected_profit_lift"}.issubset(
+        optimizer_eval_df.columns
+    ):
+        return None
+    x = pd.to_numeric(
+        optimizer_eval_df["recommended_bid"], errors="coerce"
+    ) - pd.to_numeric(optimizer_eval_df["bid"], errors="coerce")
+    y = pd.to_numeric(optimizer_eval_df["expected_profit_lift"], errors="coerce")
+    valid = x.notna() & y.notna()
+    if not valid.any():
+        return None
+    x, y = x[valid], y[valid]
+    counts, x_edges, y_edges = np.histogram2d(x, y, bins=60)
+    counts[counts < _DENSITY_MIN_COUNT] = np.nan
+    counts[counts <= 0] = np.nan
+    finite = counts[np.isfinite(counts)]
+    max_count = (
+        max(float(_DENSITY_MIN_COUNT), float(finite.max()))
+        if finite.size
+        else float(_DENSITY_MIN_COUNT)
+    )
+    fig, ax = plt.subplots(figsize=(9, 7))
+    heatmap = ax.pcolormesh(
+        x_edges,
+        y_edges,
+        counts.T,
+        cmap=_DENSITY_CMAP,
+        norm=PowerNorm(gamma=_DENSITY_GAMMA, vmin=1.0, vmax=max_count),
+        shading="auto",
+    )
+    ax.axvline(0.0, linestyle="--", linewidth=1)
+    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.set_xlabel("Bid change: ML recommended - existing bid")
+    ax.set_ylabel("Probability-weighted expected profit lift")
+    ax.set_title("Bid Change vs Expected Profit Lift - 2D Count Heatmap")
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+    colorbar = fig.colorbar(heatmap, ax=ax)
+    ticks = _density_colorbar_ticks(max_count)
+    colorbar.set_ticks(ticks)
+    colorbar.set_ticklabels(
+        [_format_density_tick(v, len(optimizer_eval_df)) for v in ticks]
+    )
+    _limit_density_colorbar(colorbar, max_count)
+    colorbar.set_label("Lead density: count (% of test leads)")
+    fig.tight_layout()
+    path = Path(report_dir) / "bid_change_vs_expected_profit_lift_heatmap.png"
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def _save_bid_change_vs_recommended_cm_heatmap(
+    report_dir, optimizer_eval_df, target_cm
+):
+    """Plot bid change against recommended CM, with the target CM marked."""
+    if target_cm is None:
+        return None
+    if not {"bid", "recommended_bid", "recommended_bid_cm_if_won"}.issubset(
+        optimizer_eval_df.columns
+    ):
+        return None
+    x = pd.to_numeric(
+        optimizer_eval_df["recommended_bid"], errors="coerce"
+    ) - pd.to_numeric(optimizer_eval_df["bid"], errors="coerce")
+    y = pd.to_numeric(optimizer_eval_df["recommended_bid_cm_if_won"], errors="coerce")
+    valid = x.notna() & y.notna()
+    if not valid.any():
+        return None
+    x, y = x[valid], y[valid]
+    counts, x_edges, y_edges = np.histogram2d(x, y, bins=60)
+    counts[counts < _DENSITY_MIN_COUNT] = np.nan
+    counts[counts <= 0] = np.nan
+    finite = counts[np.isfinite(counts)]
+    max_count = (
+        max(float(_DENSITY_MIN_COUNT), float(finite.max()))
+        if finite.size
+        else float(_DENSITY_MIN_COUNT)
+    )
+    fig, ax = plt.subplots(figsize=(9, 7))
+    heatmap = ax.pcolormesh(
+        x_edges,
+        y_edges,
+        counts.T,
+        cmap=_DENSITY_CMAP,
+        norm=PowerNorm(gamma=_DENSITY_GAMMA, vmin=1.0, vmax=max_count),
+        shading="auto",
+    )
+    ax.axhline(
+        float(target_cm),
+        linestyle="--",
+        linewidth=1,
+        label=f"Target CM = {float(target_cm):.1%}",
+    )
+    ax.set_xlabel("Bid change: ML recommended - existing bid")
+    ax.set_ylabel("Recommended CM if won")
+    ax.set_title("Bid Change vs Recommended CM - 2D Count Heatmap")
+    ax.legend()
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+    colorbar = fig.colorbar(heatmap, ax=ax)
+    ticks = _density_colorbar_ticks(max_count)
+    colorbar.set_ticks(ticks)
+    colorbar.set_ticklabels(
+        [_format_density_tick(v, len(optimizer_eval_df)) for v in ticks]
+    )
+    _limit_density_colorbar(colorbar, max_count)
+    colorbar.set_label("Lead density: count (% of test leads)")
+    fig.tight_layout()
+    path = Path(report_dir) / "bid_change_vs_recommended_cm_heatmap.png"
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def _save_optimizer_plots(
+    report_dir, optimizer_eval_df, target_cm=None, min_bid=None, bid_step=None
+):
     """Write the retained optimizer diagnostic plots.
 
     Inputs
@@ -997,6 +1236,12 @@ def _save_optimizer_plots(report_dir, optimizer_eval_df):
             "optimizer_expected_profit_lift.png",
             "Probability-weighted expected profit lift: recommended - current",
             "Probability-Weighted Expected Profit Lift from Recommended Bid",
+        ),
+        (
+            "n_candidate_bids",
+            "candidate_bid_count_distribution.png",
+            "Number of candidate bids evaluated",
+            "Candidate Bid Count Distribution",
         ),
         (
             "bid_change",
@@ -1029,10 +1274,27 @@ def _save_optimizer_plots(report_dir, optimizer_eval_df):
         _save_expected_profit_by_max_win_probability,
         _save_bid_change_vs_win_probability_change,
         _save_bid_distribution_by_outcome,
+        _save_existing_vs_recommended_bid_heatmap,
+        _save_bid_change_vs_expected_profit_lift_heatmap,
     ):
         path = plot_builder(report_dir, optimizer_eval_df)
         if path is not None:
             files.append(path.name)
+
+    for path in (
+        _save_optimizer_boundary_diagnostics(
+            report_dir, optimizer_eval_df, target_cm, min_bid, bid_step
+        ),
+        _save_bid_change_vs_recommended_cm_heatmap(
+            report_dir, optimizer_eval_df, target_cm
+        ),
+    ):
+        if path is not None:
+            files.append(path.name)
+
+    log_optimizer_recommendation_diagnostics(
+        optimizer_eval_df, target_cm, min_bid, bid_step
+    )
 
     if {
         "current_bid_predicted_win_rate",
@@ -1059,6 +1321,7 @@ def _save_optimizer_plots(report_dir, optimizer_eval_df):
                 range=((0.0, 1.0), (0.0, 1.0)),
             )
             counts[counts < _DENSITY_MIN_COUNT] = np.nan
+            counts[counts <= 0] = np.nan
 
             finite_counts = counts[np.isfinite(counts)]
             max_count = (
@@ -1072,9 +1335,10 @@ def _save_optimizer_plots(report_dir, optimizer_eval_df):
                 x_edges,
                 y_edges,
                 counts.T,
+                cmap=_DENSITY_CMAP,
                 norm=PowerNorm(
                     gamma=_DENSITY_GAMMA,
-                    vmin=float(_DENSITY_MIN_COUNT),
+                    vmin=1.0,
                     vmax=max_count,
                 ),
                 shading="auto",
@@ -1086,6 +1350,7 @@ def _save_optimizer_plots(report_dir, optimizer_eval_df):
             ax.set_title("Current vs Recommended Predicted Win Rate - 2D Count Heatmap")
             ax.set_xlim(0.0, 1.0)
             ax.set_ylim(0.0, 1.0)
+            ax.grid(True, alpha=0.25, linewidth=0.6)
 
             fig.subplots_adjust(
                 left=0.10,
@@ -1100,6 +1365,7 @@ def _save_optimizer_plots(report_dir, optimizer_eval_df):
             colorbar.set_ticklabels(
                 [_format_density_tick(value, total_test_leads) for value in ticks]
             )
+            _limit_density_colorbar(colorbar, max_count)
             colorbar.set_label("Lead density: count (% of test leads)")
 
             fig.savefig(
@@ -1125,6 +1391,9 @@ def save_performance_plots(
     f1,
     f2,
     optimizer_eval_df=None,
+    target_cm=None,
+    min_bid=None,
+    bid_step=None,
 ):
     """Write classifier and optimizer diagnostic plots.
 
@@ -1166,6 +1435,7 @@ def save_performance_plots(
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
     plt.title("ROC Curve")
+    plt.grid(True, alpha=0.25, linewidth=0.6)
     plt.legend()
     plt.tight_layout()
     plt.savefig(report_dir / "roc_curve.png")
@@ -1178,6 +1448,7 @@ def save_performance_plots(
     plt.xlabel("Recall")
     plt.ylabel("Precision")
     plt.title("Precision-Recall Curve")
+    plt.grid(True, alpha=0.25, linewidth=0.6)
     plt.legend()
     plt.tight_layout()
     plt.savefig(report_dir / "precision_recall_curve.png")
@@ -1196,6 +1467,7 @@ def save_performance_plots(
     plt.xlabel("Average predicted win probability")
     plt.ylabel("Actual win rate")
     plt.title("Calibration Curve")
+    plt.grid(True, alpha=0.25, linewidth=0.6)
     plt.legend()
     plt.tight_layout()
     plt.savefig(report_dir / "calibration_curve.png")
@@ -1213,6 +1485,7 @@ def save_performance_plots(
     plt.xlabel("Predicted win probability")
     plt.ylabel("Number of rows")
     plt.title("Predicted Probability Distribution")
+    plt.grid(True, alpha=0.25, linewidth=0.6)
     plt.legend()
     plt.tight_layout()
     plt.savefig(report_dir / "probability_histogram.png")
@@ -1282,7 +1555,9 @@ def save_performance_plots(
     plt.close()
 
     if optimizer_eval_df is not None:
-        _save_optimizer_plots(report_dir, optimizer_eval_df)
+        _save_optimizer_plots(
+            report_dir, optimizer_eval_df, target_cm, min_bid, bid_step
+        )
 
 
 def build_optimizer_scenario_summary(optimizer_eval_df):
@@ -1518,6 +1793,7 @@ def log_saved_report_files(report_dir, optimizer_eval_df=None):
         files.extend(
             [
                 "optimizer_expected_profit_lift.png",
+                "candidate_bid_count_distribution.png",
                 "recommended_bid_change.png",
                 "recommended_cm_distribution.png",
                 "current_vs_recommended_win_rate.png",
@@ -1526,6 +1802,10 @@ def log_saved_report_files(report_dir, optimizer_eval_df=None):
                 "expected_profit_by_max_win_probability.png",
                 "bid_change_vs_win_probability_change.png",
                 "bid_distribution_by_outcome.png",
+                "optimizer_boundary_diagnostics.png",
+                "existing_vs_recommended_bid_heatmap.png",
+                "bid_change_vs_expected_profit_lift_heatmap.png",
+                "bid_change_vs_recommended_cm_heatmap.png",
                 "optimizer_scenario_summary.csv",
                 "bid_optimizer_test_rows.csv",
             ]

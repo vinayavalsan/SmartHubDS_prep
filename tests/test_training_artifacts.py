@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from smarthub.train_and_predict import feature_diagnostics as fdg
 from smarthub.train_and_predict import training_artifacts as ta
 
 
@@ -48,7 +49,7 @@ def test_build_feature_summary_reports_types_missing_and_numeric_stats():
         }
     )
 
-    result = ta.build_feature_summary_dataframe(
+    result = fdg.build_feature_summary_dataframe(
         frame,
         continuous_features=["age"],
         discrete_features=["vehicles"],
@@ -75,7 +76,7 @@ def test_build_feature_summary_reports_types_missing_and_numeric_stats():
 def test_build_feature_summary_skips_configured_columns_not_in_frame():
     frame = pd.DataFrame({"age": [20, 30]})
 
-    result = ta.build_feature_summary_dataframe(
+    result = fdg.build_feature_summary_dataframe(
         frame,
         continuous_features=["age", "missing_numeric"],
         discrete_features=[],
@@ -93,7 +94,7 @@ def test_feature_value_counts_tracks_na_empty_percent_and_top_n():
         }
     )
 
-    result = ta.build_feature_value_counts_dataframe(
+    result = fdg.build_feature_value_counts_dataframe(
         frame,
         features=["state", "tier"],
         top_n_per_feature=2,
@@ -105,7 +106,7 @@ def test_feature_value_counts_tracks_na_empty_percent_and_top_n():
     assert state_rows.loc["CA", "count"] == 2
     assert state_rows.loc["CA", "percent"] == pytest.approx(40.0)
 
-    full_state = ta.build_feature_value_counts_dataframe(
+    full_state = fdg.build_feature_value_counts_dataframe(
         frame,
         features=["state"],
         top_n_per_feature=10,

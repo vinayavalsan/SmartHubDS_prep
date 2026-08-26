@@ -6,13 +6,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from smarthub.train_and_predict import feature_target_association as fta
+from smarthub.train_and_predict import feature_diagnostics as fdg
 
 
 def test_numeric_values_coerces_and_median_fills_missing():
     series = pd.Series([1, "2", None, "bad", 5])
 
-    values = fta._numeric_values(series)
+    values = fdg._numeric_values(series)
 
     assert values.shape == (5, 1)
     assert values[:, 0].tolist() == [1.0, 2.0, 2.0, 2.0, 5.0]
@@ -22,7 +22,7 @@ def test_numeric_values_coerces_and_median_fills_missing():
 def test_numeric_values_all_missing_falls_back_to_zero():
     series = pd.Series([None, np.nan, "bad"])
 
-    values = fta._numeric_values(series)
+    values = fdg._numeric_values(series)
 
     assert values.shape == (3, 1)
     assert values[:, 0].tolist() == [0.0, 0.0, 0.0]
@@ -31,8 +31,8 @@ def test_numeric_values_all_missing_falls_back_to_zero():
 def test_categorical_values_handles_missing_and_is_deterministic():
     series = pd.Series(["TX", None, "CA", "TX", ""])
 
-    first = fta._categorical_values(series)
-    second = fta._categorical_values(series)
+    first = fdg._categorical_values(series)
+    second = fdg._categorical_values(series)
 
     assert first.shape == (5, 1)
     assert np.array_equal(first, second)
@@ -48,7 +48,7 @@ def test_constant_feature_has_zero_mutual_information():
         }
     )
 
-    result = fta.build_feature_target_association(
+    result = fdg.build_feature_target_association(
         frame=frame,
         numeric_features=["constant_numeric"],
         categorical_features=["constant_categorical"],
@@ -74,7 +74,7 @@ def test_strong_categorical_signal_ranks_above_unrelated_feature():
         }
     )
 
-    result = fta.build_feature_target_association(
+    result = fdg.build_feature_target_association(
         frame=frame,
         numeric_features=[],
         categorical_features=["strong_signal", "noise"],
@@ -100,7 +100,7 @@ def test_strong_numeric_signal_ranks_above_unrelated_feature():
         }
     )
 
-    result = fta.build_feature_target_association(
+    result = fdg.build_feature_target_association(
         frame=frame,
         numeric_features=["strong_numeric", "noise_numeric"],
         categorical_features=[],
@@ -120,7 +120,7 @@ def test_missing_configured_feature_is_skipped():
         }
     )
 
-    result = fta.build_feature_target_association(
+    result = fdg.build_feature_target_association(
         frame=frame,
         numeric_features=["present", "missing_numeric"],
         categorical_features=["missing_categorical"],
@@ -139,7 +139,7 @@ def test_rows_with_missing_target_are_excluded():
         }
     )
 
-    result = fta.build_feature_target_association(
+    result = fdg.build_feature_target_association(
         frame=frame,
         numeric_features=["feature"],
         categorical_features=[],
@@ -161,7 +161,7 @@ def test_feature_type_is_reported_correctly():
         }
     )
 
-    result = fta.build_feature_target_association(
+    result = fdg.build_feature_target_association(
         frame=frame,
         numeric_features=["numeric_feature"],
         categorical_features=["categorical_feature"],
@@ -184,12 +184,12 @@ def test_results_are_sorted_by_mutual_information_then_feature_name(monkeypatch)
     )
 
     monkeypatch.setattr(
-        fta,
+        fdg,
         "mutual_info_classif",
         lambda values, target, discrete_features, random_state: np.array([0.25]),
     )
 
-    result = fta.build_feature_target_association(
+    result = fdg.build_feature_target_association(
         frame=frame,
         numeric_features=["z_feature", "a_feature"],
         categorical_features=[],
@@ -220,8 +220,8 @@ def test_repeated_calls_with_same_seed_are_identical():
         random_seed=17,
     )
 
-    first = fta.build_feature_target_association(**kwargs)
-    second = fta.build_feature_target_association(**kwargs)
+    first = fdg.build_feature_target_association(**kwargs)
+    second = fdg.build_feature_target_association(**kwargs)
 
     assert first == second
 
@@ -230,7 +230,7 @@ def test_target_column_missing_raises_key_error():
     frame = pd.DataFrame({"feature": [1, 2, 3]})
 
     with pytest.raises(KeyError):
-        fta.build_feature_target_association(
+        fdg.build_feature_target_association(
             frame=frame,
             numeric_features=["feature"],
             categorical_features=[],
@@ -239,7 +239,7 @@ def test_target_column_missing_raises_key_error():
         )
 
 
-def test_log_feature_target_association_logs_empty_message():
+def test_log_feature_target_association_logs_empty_message(monkeypatch):
     class _Logger:
         def __init__(self):
             self.messages = []
@@ -248,8 +248,9 @@ def test_log_feature_target_association_logs_empty_message():
             self.messages.append(message % args if args else message)
 
     logger = _Logger()
+    monkeypatch.setattr(fdg, "logger", logger)
 
-    fta.log_feature_target_association([], logger)
+    fdg.log_feature_target_association([])
 
     assert logger.messages[0] == "Feature-Target Association"
     assert any(
@@ -258,7 +259,7 @@ def test_log_feature_target_association_logs_empty_message():
     )
 
 
-def test_log_feature_target_association_logs_ranked_table():
+def test_log_feature_target_association_logs_ranked_table(monkeypatch):
     class _Logger:
         def __init__(self):
             self.messages = []
@@ -267,6 +268,7 @@ def test_log_feature_target_association_logs_ranked_table():
             self.messages.append(message % args if args else message)
 
     logger = _Logger()
+    monkeypatch.setattr(fdg, "logger", logger)
     diagnostics = [
         {
             "rank": 1,
@@ -276,7 +278,7 @@ def test_log_feature_target_association_logs_ranked_table():
         }
     ]
 
-    fta.log_feature_target_association(diagnostics, logger)
+    fdg.log_feature_target_association(diagnostics)
 
     rendered = "\n".join(logger.messages)
     assert "Feature-Target Association" in rendered

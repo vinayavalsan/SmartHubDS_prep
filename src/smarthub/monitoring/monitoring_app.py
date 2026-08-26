@@ -176,13 +176,16 @@ def main():
     st.title("SmartHub Monitoring")
     # (The inference log lives on the dedicated "Predictions" tab, not here.)
 
-    days = st.selectbox(
-        "History window",
-        options=[3, 4, 5, 6, 7],
-        index=0,
-        format_func=lambda d: f"last {d} days",
-        key="mon_days",
-    )
+    cw1, cw2 = st.columns([1, 3])
+    with cw1:
+        days = st.number_input(
+            "History window (days)",
+            min_value=1,
+            max_value=21,
+            value=3,
+            step=1,
+            key="mon_days",
+        )
     try:
         df = load_data(int(days))
     except io.DataNotFoundError as exc:

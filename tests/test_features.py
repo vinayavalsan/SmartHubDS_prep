@@ -273,7 +273,7 @@ def test_model_schema_uses_enabled_and_lead_types_only():
             for spec in FEATURES.values()
             if spec.enabled
             and name in spec.lead_types
-            and spec.kind in {"numeric", "binary"}
+            and spec.kind in {"numeric_continuous", "numeric_discrete", "binary"}
         ]
         expected_categorical = [
             spec.name
@@ -313,7 +313,7 @@ def test_new_enabled_feature_needs_only_one_registry_entry(monkeypatch):
         "synthetic_score",
         FeatureSpec(
             name="synthetic_score",
-            kind="numeric",
+            kind="numeric_continuous",
             source="raw",
             lead_types=frozenset({"auto"}),
             enabled=True,

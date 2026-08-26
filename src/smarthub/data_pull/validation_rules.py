@@ -47,7 +47,8 @@ def leads_schema():
     ``ValidationSpec`` in ``field_registry`` — the single source of truth — so
     ranges/domains/uniqueness are no longer duplicated here:
 
-    - numeric with min **and** max -> ``in_range``; min only -> ``ge`` (both
+    - numeric continuous/discrete with min **and** max -> ``in_range``; min only ->
+      ``ge`` (both
       coerce string numerics to float);
     - categorical with ``allowed_values`` -> ``isin``;
     - ``unique`` fields (e.g. ``id``) -> unique + not-null.
@@ -74,7 +75,7 @@ def leads_schema():
         unique = bool(v.unique)
         nullable = not unique  # id: unique + not-null; everything else nullable
 
-        if v.kind == "numeric":
+        if v.kind in {"numeric_continuous", "numeric_discrete"}:
             if v.min_value is not None and v.max_value is not None:
                 dtype, coerce = float, True
                 checks.append(Check.in_range(v.min_value, v.max_value))
@@ -135,12 +136,24 @@ def _invalid_numeric_mask(series: pd.Series) -> pd.Series:
 
 
 def _invalid_categorical_mask(series: pd.Series) -> pd.Series:
-    """Return present categorical values that are not strings."""
+    """Return present values that are invalid for a categorical field.
+
+    Categorical describes feature semantics rather than storage dtype, so
+    string and numeric scalar labels are both valid category values.
+    """
     present = ~_null_or_blank(series)
-    is_string = series.map(
-        lambda value: isinstance(value, str) if pd.notna(value) else False
-    )
-    return present & ~is_string
+
+    def _is_valid(value) -> bool:
+        if pd.isna(value):
+            return False
+        if isinstance(value, str):
+            return True
+        if isinstance(value, Number) and not isinstance(value, (bool, np.bool_)):
+            return True
+        return False
+
+    valid = series.map(_is_valid)
+    return present & ~valid
 
 
 def _invalid_binary_mask(series: pd.Series) -> pd.Series:
@@ -176,14 +189,17 @@ def _invalid_datetime_mask(series: pd.Series) -> pd.Series:
 
 
 _KIND_VALIDATORS = {
-    "numeric": _invalid_numeric_mask,
-    "categorical": _invalid_categorical_mask,
+    "numeric_continuous": _invalid_numeric_mask,
+    "numeric_discrete": _invalid_numeric_mask,
     "binary": _invalid_binary_mask,
     "datetime": _invalid_datetime_mask,
 }
 
 
-def validate_kind(series: pd.Series, kind: str) -> KindValidationResult:
+def validate_kind(
+    series: pd.Series,
+    kind: str,
+) -> KindValidationResult:
     """Validate present raw values against a registry-declared field kind.
 
     Missing and blank values are ignored here because missingness is reported
@@ -195,8 +211,8 @@ def validate_kind(series: pd.Series, kind: str) -> KindValidationResult:
     series : pandas.Series
         Raw values exactly as returned by the warehouse query.
     kind : str
-        Registry kind: numeric, categorical, binary, or datetime.
-
+        Registry kind: numeric_continuous, numeric_discrete, categorical, binary,
+        or datetime.
     Returns
     -------
     KindValidationResult
@@ -207,11 +223,13 @@ def validate_kind(series: pd.Series, kind: str) -> KindValidationResult:
     ValueError
         If ``kind`` is not one of the supported registry kinds.
     """
-    validator = _KIND_VALIDATORS.get(kind)
-    if validator is None:
-        raise ValueError(f"Unsupported validation kind: {kind!r}.")
-
-    invalid = validator(series)
+    if kind == "categorical":
+        invalid = _invalid_categorical_mask(series)
+    else:
+        validator = _KIND_VALIDATORS.get(kind)
+        if validator is None:
+            raise ValueError(f"Unsupported validation kind: {kind!r}.")
+        invalid = validator(series)
     examples = series.loc[invalid].dropna().unique().tolist()[:5]
     return KindValidationResult(
         check=f"invalid {kind} value",

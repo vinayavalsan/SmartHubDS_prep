@@ -53,7 +53,7 @@ class DataSourceSpec:
 class ValidationSpec:
     """How a raw field should be validated and reported."""
 
-    kind: str  # "numeric" | "categorical" | "binary" | "datetime"
+    kind: str  # numeric_continuous | numeric_discrete | categorical | binary | datetime
     flag_missing: bool = False
     required: bool = True
     min_value: float | int | None = None
@@ -96,7 +96,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="id"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="categorical",
             flag_missing=True,
             unique=True,
         ),
@@ -118,7 +118,10 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         name="account_id",
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="account_id"),
-        validation=ValidationSpec(kind="numeric", flag_missing=True),
+        validation=ValidationSpec(
+            kind="categorical",
+            flag_missing=True,
+        ),
         pii=False,
         enabled=True,
     ),
@@ -126,7 +129,10 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         name="campaign_id",
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="campaign_id"),
-        validation=ValidationSpec(kind="numeric", flag_missing=True),
+        validation=ValidationSpec(
+            kind="categorical",
+            flag_missing=True,
+        ),
         pii=False,
         enabled=True,
     ),
@@ -134,7 +140,10 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         name="lead_type_id",
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="lead_type_id"),
-        validation=ValidationSpec(kind="numeric", flag_missing=True),
+        validation=ValidationSpec(
+            kind="categorical",
+            flag_missing=True,
+        ),
         pii=False,
         enabled=True,
     ),
@@ -142,7 +151,10 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         name="source_type_id",
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="source_type_id"),
-        validation=ValidationSpec(kind="numeric", flag_missing=False),
+        validation=ValidationSpec(
+            kind="categorical",
+            flag_missing=False,
+        ),
         pii=False,
         enabled=True,
     ),
@@ -150,7 +162,10 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         name="bidding_strategy_id",
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="bidding_strategy_id"),
-        validation=ValidationSpec(kind="numeric", flag_missing=False),
+        validation=ValidationSpec(
+            kind="categorical",
+            flag_missing=False,
+        ),
         pii=False,
         enabled=True,
     ),
@@ -167,7 +182,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="total_listings"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=False,
             min_value=0,
         ),
@@ -179,7 +194,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="accepted_listings"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=False,
             min_value=0,
         ),
@@ -191,7 +206,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="bid"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_continuous",
             flag_missing=True,
             min_value=0,
         ),
@@ -203,7 +218,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="rev"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_continuous",
             flag_missing=False,
             min_value=0,
         ),
@@ -238,7 +253,10 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         name="error_reason_id",
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="error_reason_id"),
-        validation=ValidationSpec(kind="numeric", flag_missing=False),
+        validation=ValidationSpec(
+            kind="categorical",
+            flag_missing=False,
+        ),
         pii=False,
         enabled=True,
     ),
@@ -247,7 +265,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="response_ms"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_continuous",
             flag_missing=False,
             min_value=0,
         ),
@@ -314,7 +332,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
             column="continuous_coverage_months",
         ),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=True,
             min_value=0,
             max_value=600,
@@ -383,7 +401,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="age"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=True,
             min_value=0,
             max_value=130,
@@ -396,7 +414,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="num_dependents"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=False,
             min_value=0,
             max_value=15,
@@ -437,7 +455,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="life_coverage_amount"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_continuous",
             flag_missing=False,
             min_value=0,
         ),
@@ -457,17 +475,6 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="sic_code"),
         validation=ValidationSpec(kind="categorical", flag_missing=False),
-        pii=False,
-        enabled=True,
-    ),
-    "num_employees": RawFieldSpec(
-        name="num_employees",
-        lead_types=_ALL_LEAD_TYPES,
-        source=DataSourceSpec(table="lead_pings", column="num_employees"),
-        validation=ValidationSpec(
-            kind="categorical",
-            flag_missing=False,
-        ),
         pii=False,
         enabled=True,
     ),
@@ -511,7 +518,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         name="pst_hour",
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="pst_hour"),
-        validation=ValidationSpec(kind="numeric", flag_missing=False),
+        validation=ValidationSpec(kind="numeric_discrete", flag_missing=False),
         pii=False,
         enabled=True,
     ),
@@ -520,7 +527,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=_ALL_LEAD_TYPES,
         source=DataSourceSpec(table="lead_pings", column="exp_rev"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_continuous",
             flag_missing=False,
             min_value=0,
         ),
@@ -535,7 +542,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=frozenset({"auto"}),
         source=DataSourceSpec(table="lead_pings", column="num_drivers"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=True,
             min_value=0,
             max_value=10,
@@ -548,7 +555,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=frozenset({"auto"}),
         source=DataSourceSpec(table="lead_pings", column="num_vehicles"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=True,
             min_value=0,
             max_value=20,
@@ -577,7 +584,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=frozenset({"auto"}),
         source=DataSourceSpec(table="lead_pings", column="num_auto_violations"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=True,
             min_value=0,
             max_value=20,
@@ -590,7 +597,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=frozenset({"auto"}),
         source=DataSourceSpec(table="lead_pings", column="num_auto_claims"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=False,
             min_value=0,
             max_value=20,
@@ -603,7 +610,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=frozenset({"auto"}),
         source=DataSourceSpec(table="lead_pings", column="num_auto_accidents"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=True,
             min_value=0,
             max_value=20,
@@ -619,7 +626,7 @@ RAW_FIELD_REGISTRY: dict[str, RawFieldSpec] = {
         lead_types=frozenset({"home"}),
         source=DataSourceSpec(table="lead_pings", column="num_home_claims"),
         validation=ValidationSpec(
-            kind="numeric",
+            kind="numeric_discrete",
             flag_missing=True,
             min_value=0,
             max_value=20,
@@ -693,7 +700,8 @@ def numeric_validation_bounds(
         If the requested field is not configured as numeric.
     """
     spec = get(name)
-    if spec.validation.kind != "numeric":
+    numeric_kinds = {"numeric_continuous", "numeric_discrete"}
+    if spec.validation.kind not in numeric_kinds:
         raise ValueError(f"Field {name!r} is not configured as numeric.")
     return spec.validation.min_value, spec.validation.max_value
 

@@ -6,31 +6,172 @@ Run with:
 
 from __future__ import annotations
 
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from smarthub.core import io
+from smarthub.core import auction, io, storage, transforms
+from smarthub.core.config import StorageSettings
+from smarthub.core.lead_types import lead_type_name
 from smarthub.core.transforms import (
     aggregate_leads,
     build_metric_plot_data,
     cumulative_winrate_curves,
     funnel_counts,
 )
+from smarthub.feature_engineering.feature_registry import FEATURES
 from smarthub.monitoring import _ui
 
 # set_page_config is called by the entry (app.py or the __main__ guard below).
 
 
+def _registry_derived_feature_names(df=None):
+    """Return registry-derived names, optionally limited to dataframe columns."""
+    names = [
+        spec.name
+        for spec in FEATURES.values()
+        if spec.source == "derived" and spec.derive is not None
+    ]
+    if df is None:
+        return names
+    return [name for name in names if name in df.columns]
+
+
+def _plot_dimension_options(df):
+    """Return plot dimensions with registry-derived features guaranteed present."""
+    base = list(_ui.get_legend_options(df))
+    derived = _registry_derived_feature_names(df)
+    options = ["None"] + derived + [value for value in base if value != "None"]
+    return list(dict.fromkeys(options))
+
+
+def _is_numeric_plot_feature(df, column):
+    """Return whether a column should be treated as numeric on plot axes."""
+    spec = FEATURES.get(column)
+    if spec is not None and spec.kind in {
+        "numeric",
+        "numeric_continuous",
+        "numeric_discrete",
+        "binary",
+    }:
+        return True
+    if column in {"bid", "rev", "payout", "profit"}:
+        return True
+    return column in df.columns and pd.api.types.is_numeric_dtype(df[column])
+
+
+def _numeric_plot_axis_options(df):
+    """Return numeric plot axes, including registry-derived numeric features."""
+    preferred = [
+        column for column in ("profit", "bid", "payout", "rev") if column in df.columns
+    ]
+    registry_names = [
+        spec.name
+        for spec in FEATURES.values()
+        if spec.name in df.columns
+        and spec.kind in {"numeric", "numeric_continuous", "numeric_discrete", "binary"}
+    ]
+    detected = [column for column in df.columns if _is_numeric_plot_feature(df, column)]
+    return list(dict.fromkeys(preferred + registry_names + detected))
+
+
+def _add_registry_derived_features(df):
+    """Add every registry-defined derived feature without filtering rows.
+
+    Derived columns are generated directly from ``FEATURES`` so monitoring
+    stays aligned with the feature registry automatically as new derivations
+    are added. Lead-type-specific derivations are only populated for rows to
+    which the registry says they apply.
+    """
+    out = df.copy()
+    derived_specs = [
+        spec
+        for spec in FEATURES.values()
+        if spec.source == "derived" and spec.derive is not None
+    ]
+    for spec in derived_specs:
+        if spec.name not in out.columns:
+            out[spec.name] = pd.NA
+
+    if "lead_type_id" not in out.columns:
+        return out
+
+    lead_type_ids = pd.to_numeric(out["lead_type_id"], errors="coerce")
+    for raw_lead_type_id in lead_type_ids.dropna().unique():
+        current_id = int(raw_lead_type_id)
+        current_name = lead_type_name(current_id)
+        mask = lead_type_ids.eq(current_id)
+
+        for spec in derived_specs:
+            if spec.lead_types and current_name not in spec.lead_types:
+                continue
+            source = out.loc[mask].copy()
+            derived = spec.derive(source)
+            out.loc[mask, spec.name] = derived
+
+    return out
+
+
+def _prepare_monitoring_leads_frame(df):
+    """Prepare already-eligible lead rows for dashboard display.
+
+    Row filtering is intentionally handled in ``load_data`` using the same
+    shared auction rules as feature engineering. This helper normalizes display
+    fields, adds every registry-derived feature, and computes dashboard metrics
+    without removing any additional rows.
+    """
+    out = df.drop(columns=transforms.LEADS_DROP_COLS, errors="ignore").copy()
+
+    id_cols = (
+        "campaign_id",
+        "lead_type_id",
+        "account_id",
+        "source_type_id",
+        "bidding_strategy_id",
+    )
+    for id_col in id_cols:
+        if id_col in out.columns:
+            out[id_col] = out[id_col].astype("Int64")
+
+    if "state" in out.columns:
+        out["state"] = out["state"].fillna("NAvail")
+        blank_state = out["state"].astype("string").str.strip() == ""
+        out.loc[blank_state, "state"] = "NAvail"
+
+    out = _add_registry_derived_features(out)
+
+    if "created_at" in out.columns:
+        out["created_at"] = pd.to_datetime(out["created_at"], utc=True)
+
+    if "won" in out.columns:
+        out["won"] = transforms.normalize_won(out["won"])
+
+    if "rev" in out.columns:
+        out["rev"] = out["rev"].fillna(0.0)
+    if {"won", "bid"}.issubset(out.columns):
+        out["payout"] = out["won"].astype("float64") * out["bid"]
+    if {"rev", "payout"}.issubset(out.columns):
+        out["profit"] = out["rev"] - out["payout"]
+
+    return out
+
+
 @st.cache_data
 def load_data(days: int):
-    """Load and cache a recent ``days``-window of leads.
+    """Load recent leads and apply the feature-engineering eligibility rules.
 
-    Bounded on purpose: a long-running deployment accumulates millions of lead
-    rows, and loading all of them into the dashboard container OOMs/hangs it.
-    The window reads only the recent day-partitions (see
-    ``storage.read_parquet_window``).
+    The dashboard uses only the two shared row filters that define a usable
+    auction observation for feature engineering: remove errored pings, then
+    remove auction-ineligible rows. No additional row filtering is applied.
     """
-    return io.load_leads_window(days)
+    try:
+        raw = storage.load_window_raw(StorageSettings.from_env(), days)
+    except storage.StorageError as exc:
+        raise io.DataNotFoundError(str(exc)) from exc
+
+    eligible = raw.loc[~auction.erred_mask(raw)].copy()
+    eligible = eligible.loc[auction.auction_eligible_mask(eligible)].copy()
+    return _prepare_monitoring_leads_frame(eligible)
 
 
 def ordered_state_list(df) -> list[str]:
@@ -81,7 +222,11 @@ def _build_plot_type_1_data(df, feature_col, metric_col, legend_col):
         group_cols.append(legend_col)
 
     plot_df = build_metric_plot_data(df, group_cols, metric_col)
-    plot_df[feature_col] = plot_df[feature_col].astype(str)
+    if _is_numeric_plot_feature(df, feature_col):
+        plot_df[feature_col] = pd.to_numeric(plot_df[feature_col], errors="coerce")
+        plot_df = plot_df.sort_values(feature_col)
+    else:
+        plot_df[feature_col] = plot_df[feature_col].astype(str)
     if legend_col != "None" and legend_col in plot_df.columns:
         plot_df[legend_col] = plot_df[legend_col].astype(str)
     return plot_df
@@ -138,9 +283,13 @@ def display_plot_type_1(df):
     st.markdown("### Plot Type 1")
     col1, col2, col3 = st.columns(3)
 
-    feature_options = sorted(df.columns.tolist())
+    derived_features = _registry_derived_feature_names(df)
+    other_features = sorted(
+        column for column in df.columns if column not in derived_features
+    )
+    feature_options = derived_features + other_features
     metric_options = _ui.get_plot_metric_options(df)
-    legend_options = _ui.get_legend_options(df)
+    legend_options = _plot_dimension_options(df)
     default_feature = (
         "num_auto_violations"
         if "num_auto_violations" in feature_options
@@ -269,7 +418,7 @@ def display_plot_type_2(df):
 
     col1, col2, col3 = st.columns(3)
     metric_options = _ui.get_plot_metric_options(df)
-    legend_options = _ui.get_legend_options(df)
+    legend_options = _plot_dimension_options(df)
 
     with col1:
         freq_label = st.selectbox("Frequency", options=list(_FREQ_MAP.keys()), index=0)
@@ -301,22 +450,22 @@ def display_plot_type_2(df):
 
 
 # ---------------------------------------------------------------------------
-# Plot Type 3 - dollar-value bins
+# Plot Type 3 - numeric feature bins
 # ---------------------------------------------------------------------------
 
-_X_AXIS_MAP = {"profit": "profit", "bid": "bid", "payout": "payout", "revenue": "rev"}
-_BUCKET_OPTIONS = {"$0.50": 0.5, "$1": 1, "$2": 2, "$5": 5, "$10": 10}
+_NUMERIC_BUCKET_OPTIONS = {"0.5": 0.5, "1": 1, "2": 2, "5": 5, "10": 10}
+_BID_BUCKET_OPTIONS = {"$0.50": 0.5, "$1": 1, "$2": 2, "$5": 5, "$10": 10}
 
 
 def _build_plot_type_3_data(df, x_col, bucket_size, metric_col, legend_col):
-    """Bin a dollar-valued column and aggregate a metric per bucket.
+    """Bin a numeric column and aggregate a metric per bucket.
 
     Inputs
     ------
     df : pd.DataFrame
         Filtered leads data.
     x_col : str
-        Dollar-valued column to bucket.
+        Numeric column to bucket.
     bucket_size : float
         Width of each bucket.
     metric_col : str
@@ -396,22 +545,22 @@ def _figure_type_3(
 
 
 def display_plot_type_3(df):
-    """Render the Plot Type 3 controls and dollar-bucketed charts.
+    """Render the Plot Type 3 controls and numeric-bucketed charts.
 
     Inputs
     ------
     df : pd.DataFrame
-        Filtered leads data; requires a profit/bid/payout/revenue column.
+        Filtered leads data with at least one numeric feature.
     """
-    st.markdown("### Plot Type 3 - Metric Value Series")
-    x_axis_options = [lbl for lbl, col in _X_AXIS_MAP.items() if col in df.columns]
+    st.markdown("### Plot Type 3 - Numeric Feature Series")
+    x_axis_options = _numeric_plot_axis_options(df)
     if not x_axis_options:
-        st.info("Plot Type 3 requires one of profit, bid, payout, or revenue.")
+        st.info("Plot Type 3 requires at least one numeric feature.")
         return
 
     col1, col2, col3, col4 = st.columns(4)
     metric_options = _ui.get_plot_metric_options(df)
-    legend_options = _ui.get_legend_options(df)
+    legend_options = _plot_dimension_options(df)
 
     with col1:
         x_label = st.selectbox(
@@ -423,7 +572,7 @@ def display_plot_type_3(df):
     with col2:
         size_lbl = st.selectbox(
             "Bin width",
-            options=list(_BUCKET_OPTIONS.keys()),
+            options=list(_NUMERIC_BUCKET_OPTIONS.keys()),
             index=1,
             key="plot_type_3_frequency",
         )
@@ -446,8 +595,8 @@ def display_plot_type_3(df):
         st.info("Select at least one y-axis metric to display the plot.")
         return
 
-    x_col = _X_AXIS_MAP[x_label]
-    bucket_size = _BUCKET_OPTIONS[size_lbl]
+    x_col = x_label
+    bucket_size = _NUMERIC_BUCKET_OPTIONS[size_lbl]
 
     for metric_col in metric_cols:
         plot_df, bucket_upper_col = _build_plot_type_3_data(
@@ -519,11 +668,14 @@ def display_plot_type_4(df):
         st.info("bid and won columns are required for Plot Type 4.")
         return
 
-    legend_options = _ui.get_legend_options(df)
+    legend_options = _plot_dimension_options(df)
     col1, col2, col3 = st.columns(3)
     with col1:
         size_lbl = st.selectbox(
-            "Bin width", options=list(_BUCKET_OPTIONS.keys()), index=1, key="plot4_bin"
+            "Bin width",
+            options=list(_BID_BUCKET_OPTIONS.keys()),
+            index=1,
+            key="plot4_bin",
         )
     with col2:
         legend_col = st.selectbox(
@@ -535,7 +687,7 @@ def display_plot_type_4(df):
     with col3:
         show_delta = st.checkbox("Show win-rate delta", value=False, key="plot4_delta")
 
-    bucket = _BUCKET_OPTIONS[size_lbl]
+    bucket = _BID_BUCKET_OPTIONS[size_lbl]
 
     if legend_col == "None":
         curves = cumulative_winrate_curves(df, bucket)
@@ -681,11 +833,12 @@ def main():
     st.title("SmartHub Leads")
     cw1, cw2 = st.columns([1, 3])
     with cw1:
-        days = st.selectbox(
-            "History window",
-            options=[3, 4, 5, 6, 7],
-            index=0,
-            format_func=lambda d: f"last {d} days",
+        days = st.number_input(
+            "History window (days)",
+            min_value=1,
+            max_value=21,
+            value=3,
+            step=1,
         )
     if st.button("🔄 Reload Data"):
         st.cache_data.clear()
@@ -705,8 +858,13 @@ def main():
     _render_metrics(filtered_df)
 
     st.sidebar.subheader("Aggregated Data")
+    aggregate_options = [
+        option for option in _plot_dimension_options(filtered_df) if option != "None"
+    ]
     aggregate_by = st.sidebar.selectbox(
-        "Aggregate by", options=["state", "created_hour", "created_dayofweek"]
+        "Aggregate by",
+        options=aggregate_options,
+        index=_ui.get_default_option(aggregate_options, "state"),
     )
 
     st.subheader("Aggregated Data")

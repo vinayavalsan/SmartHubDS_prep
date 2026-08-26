@@ -25,13 +25,7 @@ from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, train_test
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.core.logging_utils import get_logger
 
-from . import (
-    config,
-    feature_target_association,
-    models,
-    optimizer_evaluation,
-    preprocessing,
-)
+from . import config, feature_diagnostics, models, optimizer_evaluation, preprocessing
 
 logger = get_logger(__name__)
 
@@ -308,7 +302,7 @@ def _build_hpo_coverage_diagnostics(
     feature_cols = numeric + categorical
     X = development[feature_cols]
     y = development[config.TARGET_COL]
-    features = preprocessing.coverage_features(development, numeric, categorical)
+    features = feature_diagnostics.coverage_features(development, numeric, categorical)
     diagnostics: list[dict[str, Any]] = []
 
     for fold_number, (train_idx, valid_idx) in enumerate(
@@ -316,7 +310,7 @@ def _build_hpo_coverage_diagnostics(
         start=1,
     ):
         diagnostics.extend(
-            preprocessing.feature_coverage_rows(
+            feature_diagnostics.feature_coverage_rows(
                 development.iloc[train_idx],
                 development.iloc[valid_idx],
                 features,
@@ -325,7 +319,7 @@ def _build_hpo_coverage_diagnostics(
         )
 
     diagnostics.extend(
-        preprocessing.feature_coverage_rows(
+        feature_diagnostics.feature_coverage_rows(
             development,
             holdout,
             features,
@@ -413,37 +407,11 @@ def _log_hpo_time_range_diagnostics(
 
 
 def _log_hpo_coverage_diagnostics(diagnostics: list[dict[str, Any]]) -> None:
-    """Log compact feature-coverage diagnostics without affecting HPO."""
-    if not diagnostics:
-        logger.info("Feature Coverage Diagnostics: no categorical/binary features.")
-        return
-
-    table = pd.DataFrame(diagnostics)
-    report = table[
-        (table["train_unique"] != table["eval_unique"])
-        | (table["unseen_eval_unique"] > 0)
-    ].copy()
-
-    logger.info("Feature Coverage Diagnostics")
-    if report.empty:
-        logger.info("  No train/evaluation coverage differences detected.")
-        return
-
-    report["eval_pct_unseen"] = report["eval_pct_unseen"].round(2)
-    logger.info(
-        "\n%s",
-        report[
-            [
-                "partition",
-                "feature",
-                "train_unique",
-                "eval_unique",
-                "unseen_eval_unique",
-                "eval_rows_unseen",
-                "eval_pct_unseen",
-                "min_train_support_for_eval_values",
-            ]
-        ].to_string(index=False),
+    """Log feature-coverage diagnostics for HPO evaluation boundaries."""
+    feature_diagnostics.log_feature_coverage_diagnostics(
+        diagnostics,
+        evaluation_label="eval",
+        include_partition=True,
     )
 
 
@@ -1020,18 +988,15 @@ def run_hyperparameter_search(
     )
     preprocessing.assert_trainable(frame, lead_type_name)
 
-    feature_target_diagnostics = (
-        feature_target_association.build_feature_target_association(
-            frame=frame,
-            numeric_features=numeric,
-            categorical_features=categorical,
-            target_column=config.TARGET_COL,
-            random_seed=search_config.random_seed,
-        )
+    feature_target_diagnostics = feature_diagnostics.build_feature_target_association(
+        frame=frame,
+        numeric_features=numeric,
+        categorical_features=categorical,
+        target_column=config.TARGET_COL,
+        random_seed=search_config.random_seed,
     )
-    feature_target_association.log_feature_target_association(
+    feature_diagnostics.log_feature_target_association(
         feature_target_diagnostics,
-        logger,
     )
 
     if settings["optimizer_enabled"] and config.REVENUE_COL not in frame.columns:
@@ -1058,7 +1023,7 @@ def run_hyperparameter_search(
     # Detect zero-variance features using only model-fitting rows. Keep them
     # in the feature schema; the finalist holdout must not influence this
     # diagnostic.
-    zero_variance_features = preprocessing.find_zero_variance_features(
+    zero_variance_features = feature_diagnostics.find_zero_variance_features(
         development,
         numeric,
         categorical,

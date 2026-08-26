@@ -9,7 +9,8 @@ from smarthub.feature_engineering.feature_registry import FEATURES
 # (for example campaign_id). Likewise a binary raw field may be modeled as a
 # categorical feature. Other kind changes should be explicit and reviewed.
 KIND_COMPATIBILITY = {
-    "numeric": {"numeric", "categorical"},
+    "numeric_continuous": {"numeric_continuous", "categorical"},
+    "numeric_discrete": {"numeric_discrete", "categorical"},
     "categorical": {"categorical"},
     "binary": {"binary", "categorical"},
     "datetime": {"datetime"},

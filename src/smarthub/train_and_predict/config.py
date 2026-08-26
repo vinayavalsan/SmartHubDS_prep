@@ -471,6 +471,17 @@ def load_training_config(
         lead_type_id,
         "training",
     )
+    lead_types_root = _mapping(
+        training_namespace.get("lead_types"),
+        "training.lead_types",
+    )
+    lead_type_root = lead_types_root.get(lead_type_id)
+    if lead_type_root is None:
+        lead_type_root = lead_types_root.get(str(lead_type_id))
+    lead_type_root = _mapping(
+        lead_type_root,
+        f"training.lead_types.{lead_type_id}",
+    )
     calibration_root = _mapping(
         training_root.get("calibration"),
         "training.calibration",
@@ -527,27 +538,29 @@ def load_training_config(
 
     random_seed = int(training_root["random_seed"])
     if "enabled" not in calibration_root:
-        raise ValueError("Missing required config: training.calibration.enabled")
+        raise ValueError("Missing required config: " "training.calibration.enabled")
     calibration_enabled = calibration_root["enabled"]
     if not isinstance(calibration_enabled, bool):
-        raise TypeError("training.calibration.enabled must be a YAML boolean.")
+        raise TypeError("training.calibration.enabled " "must be a YAML boolean.")
 
     if calibration_enabled:
         if "method" not in calibration_root:
             raise ValueError(
-                "Missing required config: training.calibration.method "
-                "when training.calibration.enabled is true."
+                "Missing required config: "
+                "training.calibration.method "
+                "when calibration.enabled is true."
             )
         if "cv" not in calibration_root:
             raise ValueError(
-                "Missing required config: training.calibration.cv "
-                "when training.calibration.enabled is true."
+                "Missing required config: "
+                "training.calibration.cv "
+                "when calibration.enabled is true."
             )
 
         calibration_method = str(calibration_root["method"]).strip().lower()
         if calibration_method not in {"sigmoid", "isotonic"}:
             raise ValueError(
-                "training.calibration.method must be one of 'sigmoid' or 'isotonic'."
+                "training.calibration.method must be one of " "'sigmoid' or 'isotonic'."
             )
         calibration_cv = _positive_int(
             calibration_root["cv"],

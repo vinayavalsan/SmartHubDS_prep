@@ -27,7 +27,13 @@ def test_specs_are_frozen():
 
 def test_validation_kinds_are_known():
     """Every field declares a supported validation kind."""
-    allowed = {"numeric", "categorical", "binary", "datetime"}
+    allowed = {
+        "numeric_continuous",
+        "numeric_discrete",
+        "categorical",
+        "binary",
+        "datetime",
+    }
     for spec in fr.RAW_FIELD_REGISTRY.values():
         assert spec.validation.kind in allowed
 
