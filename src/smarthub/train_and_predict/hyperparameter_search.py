@@ -167,6 +167,7 @@ def _hpo_settings(
     return {
         "validation_strategy": search_config.validation_strategy,
         "split": dict(search_config.split),
+        "early_stopping": search_config.early_stopping.as_dict(),
         "holdout_fraction": search_config.holdout_fraction,
         "probability_shortlist_top_n": (search_config.probability_shortlist_top_n),
         "optimizer_top_n": search_config.optimizer_top_n,
@@ -423,10 +424,12 @@ def _score_trial_folds(
     cross_validation,
     trial_number: int,
     total_folds: int,
-) -> list[float]:
+    early_stopping_settings: dict[str, Any],
+) -> tuple[list[float], list[int]]:
     """Fit and score one estimator independently on every CV fold."""
     scorer = get_scorer(scoring)
     scores: list[float] = []
+    best_iterations: list[int] = []
 
     for fold_number, (train_idx, valid_idx) in enumerate(
         _iter_splits(cross_validation, X, y),
@@ -451,33 +454,79 @@ def _score_trial_folds(
         )
         fold_started = time.perf_counter()
         fitted = clone(estimator)
-        fitted.fit(X.iloc[train_idx], y_train)
+        if early_stopping_settings["enabled"]:
+            early_stopping_result = models.fit_lightgbm_with_early_stopping(
+                fitted,
+                X.iloc[train_idx],
+                y_train,
+                X.iloc[valid_idx],
+                y_valid,
+                stopping_rounds=early_stopping_settings["stopping_rounds"],
+                eval_metric=early_stopping_settings["metric"],
+            )
+            best_iteration = early_stopping_result["best_iteration"]
+            best_iterations.append(best_iteration)
+        else:
+            fitted.fit(X.iloc[train_idx], y_train)
+
         score = float(scorer(fitted, X.iloc[valid_idx], y_valid))
         fold_elapsed = time.perf_counter() - fold_started
         scores.append(score)
 
-        logger.info(
-            "Trial %s | fold %s/%s | complete | score=%.6f | " "elapsed=%.1fs",
-            trial_number,
-            fold_number,
-            total_folds,
-            score,
-            fold_elapsed,
-        )
+        if early_stopping_settings["enabled"]:
+            best_score = early_stopping_result["best_score"]
+            logger.info(
+                "Trial %s | fold %s/%s | complete | score=%.6f | "
+                "best_iteration=%s | stopped_at=%s | best_%s=%s | "
+                "early_stop=%s | elapsed=%.1fs",
+                trial_number,
+                fold_number,
+                total_folds,
+                score,
+                best_iteration,
+                early_stopping_result["stopped_iteration"],
+                early_stopping_settings["metric"],
+                f"{best_score:.6f}" if best_score is not None else "n/a",
+                "yes" if early_stopping_result["stopped_early"] else "no",
+                fold_elapsed,
+            )
+        else:
+            logger.info(
+                "Trial %s | fold %s/%s | complete | score=%.6f | " "elapsed=%.1fs",
+                trial_number,
+                fold_number,
+                total_folds,
+                score,
+                fold_elapsed,
+            )
 
-    return scores
+    return scores, best_iterations
 
 
-def _trial_stability(scores: list[float]) -> dict[str, Any]:
-    """Summarize fold-level stability for one Optuna trial."""
+def _trial_stability(
+    scores: list[float],
+    best_iterations: list[int] | None = None,
+) -> dict[str, Any]:
+    """Summarize fold-level score and boosting-iteration stability."""
     array = np.asarray(scores, dtype=float)
-    return {
+    result = {
         "cv_mean": float(np.mean(array)),
         "cv_std": float(np.std(array, ddof=0)),
         "cv_min": float(np.min(array)),
         "cv_max": float(np.max(array)),
         "fold_scores": [float(value) for value in array],
     }
+    if best_iterations:
+        iterations = np.asarray(best_iterations, dtype=int)
+        result.update(
+            {
+                "fold_best_iterations": [int(value) for value in iterations],
+                "best_iteration_median": int(round(float(np.median(iterations)))),
+                "best_iteration_min": int(np.min(iterations)),
+                "best_iteration_max": int(np.max(iterations)),
+            }
+        )
+    return result
 
 
 def _build_estimator(
@@ -599,6 +648,13 @@ def _evaluate_probability_candidate(
     """Fit one trial/calibration pair and score probability quality only."""
     feature_cols = numeric + categorical
     model_parameters = {**fixed_parameters, **trial.params}
+    best_iteration = trial.user_attrs.get("best_iteration_median")
+    if settings["early_stopping"]["enabled"]:
+        if best_iteration is None:
+            raise ValueError(
+                "Early-stopped HPO trial is missing best_iteration_median."
+            )
+        model_parameters["n_estimators"] = int(best_iteration)
     estimator = _build_estimator(
         model_type=model_type,
         numeric=numeric,
@@ -626,6 +682,8 @@ def _evaluate_probability_candidate(
         "cv_min": float(trial.user_attrs.get("cv_min", float("nan"))),
         "cv_max": float(trial.user_attrs.get("cv_max", float("nan"))),
         "fold_scores": trial.user_attrs.get("fold_scores", []),
+        "fold_best_iterations": trial.user_attrs.get("fold_best_iterations", []),
+        "best_iteration": (int(best_iteration) if best_iteration is not None else None),
         "probability_metrics": probability_metrics,
         "optimizer_selected": False,
         "optimizer_metrics": None,
@@ -898,6 +956,8 @@ def _write_outputs(
         "selected_calibration_method": selected["calibration_method"],
         "selected_cv_score": selected["cv_score"],
         "selected_cv_std": selected["cv_std"],
+        "selected_best_iteration": selected.get("best_iteration"),
+        "early_stopping": settings["early_stopping"],
         "selected_holdout_probability_metrics": selected["probability_metrics"],
         "selected_optimizer_metrics": selected["optimizer_metrics"],
         "selected_monotonicity": selected["monotonicity"],
@@ -931,8 +991,11 @@ def _write_outputs(
             model_type: {
                 key: value
                 for key, value in selected["parameters"].items()
-                if key != "random_state"
+                if key not in {"random_state", "n_estimators"}
             },
+        },
+        "hpo_diagnostics": {
+            "selected_cv_median_best_iteration": selected.get("best_iteration"),
         },
     }
     if calibration_method != "none":
@@ -1073,6 +1136,8 @@ def run_hyperparameter_search(
         **model_config["fixed_parameters"],
         "random_state": search_config.random_seed,
     }
+    if settings["early_stopping"]["enabled"]:
+        fixed_parameters["n_estimators"] = settings["early_stopping"]["max_estimators"]
     search_space = model_config["search_space"]
 
     def objective(trial: optuna.Trial) -> float:
@@ -1098,7 +1163,7 @@ def run_hyperparameter_search(
             calibration_method="none",
             calibration_cv=settings["calibration_cv"],
         )
-        scores = _score_trial_folds(
+        scores, best_iterations = _score_trial_folds(
             estimator=estimator,
             X=X,
             y=y,
@@ -1106,21 +1171,23 @@ def run_hyperparameter_search(
             cross_validation=cross_validation,
             trial_number=trial.number + 1,
             total_folds=search_config.cv_folds,
+            early_stopping_settings=settings["early_stopping"],
         )
-        stability = _trial_stability(scores)
+        stability = _trial_stability(scores, best_iterations)
         for name, value in stability.items():
             trial.set_user_attr(name, value)
 
         trial_elapsed = time.perf_counter() - trial_started
         logger.info(
             "Trial %s/%s complete | mean=%.6f | std=%.6f | "
-            "min=%.6f | max=%.6f | elapsed=%.1fs",
+            "min=%.6f | max=%.6f | median_best_iteration=%s | elapsed=%.1fs",
             trial.number + 1,
             search_config.n_trials,
             stability["cv_mean"],
             stability["cv_std"],
             stability["cv_min"],
             stability["cv_max"],
+            stability.get("best_iteration_median", "n/a"),
             trial_elapsed,
         )
         return stability["cv_mean"]
@@ -1143,6 +1210,23 @@ def run_hyperparameter_search(
     logger.info("  Cross-validation folds                : %s", search_config.cv_folds)
     logger.info("  Parallel Optuna trials                : %s", search_config.n_jobs)
     logger.info("  Scoring                               : %s", search_config.scoring)
+    logger.info(
+        "  Early stopping enabled                : %s",
+        settings["early_stopping"]["enabled"],
+    )
+    if settings["early_stopping"]["enabled"]:
+        logger.info(
+            "  Early stopping maximum estimators     : %s",
+            settings["early_stopping"]["max_estimators"],
+        )
+        logger.info(
+            "  Early stopping rounds                 : %s",
+            settings["early_stopping"]["stopping_rounds"],
+        )
+        logger.info(
+            "  Early stopping metric                 : %s",
+            settings["early_stopping"]["metric"],
+        )
     logger.info(
         "  Probability shortlist trials          : %s",
         settings["probability_shortlist_top_n"],
@@ -1255,6 +1339,7 @@ def run_hyperparameter_search(
         "optuna_best_score": float(study.best_value),
         "selected_trial": int(selected["trial_number"]),
         "selected_calibration_method": selected["calibration_method"],
+        "selected_best_iteration": selected.get("best_iteration"),
         "best_parameters": selected["parameters"],
         "holdout_probability_metrics": selected["probability_metrics"],
         "optimizer_metrics": selected["optimizer_metrics"],

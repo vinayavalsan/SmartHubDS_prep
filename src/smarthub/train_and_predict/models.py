@@ -182,6 +182,73 @@ def build_lightgbm_model(
     return pipeline
 
 
+def fit_lightgbm_with_early_stopping(
+    pipeline,
+    X_fit,
+    y_fit,
+    X_validation,
+    y_validation,
+    stopping_rounds,
+    eval_metric,
+):
+    """Fit a raw LightGBM pipeline and return its best boosting iteration.
+
+    The validation frame is transformed with the preprocessor fitted only on
+    ``X_fit``. It is used solely to choose the boosting iteration and is never
+    used to fit tree splits or leaf values.
+    """
+    from lightgbm import early_stopping, log_evaluation, record_evaluation
+
+    preprocessor = pipeline.named_steps["preprocessor"]
+    to_numpy = pipeline.named_steps["to_numpy"]
+    classifier = pipeline.named_steps["classifier"]
+
+    transformed_fit = preprocessor.fit_transform(X_fit, y_fit)
+    transformed_fit = to_numpy.fit_transform(transformed_fit, y_fit)
+    transformed_validation = preprocessor.transform(X_validation)
+    transformed_validation = to_numpy.transform(transformed_validation)
+
+    evaluation_history = {}
+    classifier.fit(
+        transformed_fit,
+        y_fit,
+        eval_set=[(transformed_validation, y_validation)],
+        eval_metric=eval_metric,
+        callbacks=[
+            early_stopping(int(stopping_rounds), verbose=False),
+            record_evaluation(evaluation_history),
+            log_evaluation(period=0),
+        ],
+    )
+
+    max_estimators = int(classifier.get_params()["n_estimators"])
+    best_iteration = int(getattr(classifier, "best_iteration_", 0) or 0)
+    if best_iteration <= 0:
+        best_iteration = max_estimators
+
+    validation_history = evaluation_history.get("valid_0", {})
+    metric_history = validation_history.get(eval_metric)
+    if metric_history is None and validation_history:
+        metric_history = next(iter(validation_history.values()))
+    metric_history = list(metric_history or [])
+
+    stopped_iteration = len(metric_history) or best_iteration
+    best_score = None
+    best_scores = getattr(classifier, "best_score_", {}) or {}
+    validation_scores = best_scores.get("valid_0", {})
+    if eval_metric in validation_scores:
+        best_score = float(validation_scores[eval_metric])
+    elif metric_history and 0 < best_iteration <= len(metric_history):
+        best_score = float(metric_history[best_iteration - 1])
+
+    return {
+        "best_iteration": best_iteration,
+        "stopped_iteration": int(stopped_iteration),
+        "best_score": best_score,
+        "stopped_early": int(stopped_iteration) < max_estimators,
+    }
+
+
 def _maybe_calibrate(pipeline, calibration_enabled, calibration_method, calibration_cv):
     """Apply the configured probability calibration when enabled.
 

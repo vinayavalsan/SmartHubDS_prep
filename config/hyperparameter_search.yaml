@@ -40,6 +40,11 @@ hyperparameter_search:
       cv: 3
     output:
       root: data/hyperparameter_tuning
+    early_stopping:
+      enabled: true
+      stopping_rounds: 50
+      max_estimators: 2000
+      metric: binary_logloss
   lead_types:
     6:
       name: auto
@@ -51,11 +56,6 @@ hyperparameter_search:
             n_jobs: 1
             subsample_freq: 1
           search_space:
-            n_estimators:
-              type: int
-              low: 200
-              high: 1000
-              step: 100
             num_leaves:
               type: int
               low: 15
@@ -101,11 +101,6 @@ hyperparameter_search:
             n_jobs: 1
             subsample_freq: 1
           search_space:
-            n_estimators:
-              type: int
-              low: 200
-              high: 1000
-              step: 100
             num_leaves:
               type: int
               low: 15

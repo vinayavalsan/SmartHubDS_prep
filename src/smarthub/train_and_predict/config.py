@@ -88,6 +88,27 @@ class PromotionMonotonicityConfig:
 
 
 @dataclass(frozen=True)
+class EarlyStoppingConfig:
+    """Store LightGBM early-stopping settings."""
+
+    enabled: bool
+    stopping_rounds: int
+    max_estimators: int
+    metric: str
+    validation_fraction: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the configuration values as a dictionary."""
+        return {
+            "enabled": self.enabled,
+            "stopping_rounds": self.stopping_rounds,
+            "max_estimators": self.max_estimators,
+            "metric": self.metric,
+            "validation_fraction": self.validation_fraction,
+        }
+
+
+@dataclass(frozen=True)
 class TrainingConfig:
     """Store resolved settings for one model-training run."""
 
@@ -99,6 +120,7 @@ class TrainingConfig:
     calibration_cv: int | None
     split: dict[str, Any]
     model_parameters: dict[str, Any]
+    early_stopping: EarlyStoppingConfig
     optimizer: OptimizerConfig
     promotion_monotonicity: PromotionMonotonicityConfig
     comparison_artifacts: bool
@@ -487,6 +509,10 @@ def load_training_config(
         "training.calibration",
     )
     split_root = _mapping(training_root.get("split"), "training.split")
+    early_stopping_root = _mapping(
+        training_root.get("early_stopping"),
+        "training.early_stopping",
+    )
     models_root = _mapping(training_root.get("models"), "training.models")
     optimizer_root = _mapping(
         training_root.get("optimizer"),
@@ -569,6 +595,33 @@ def load_training_config(
     else:
         calibration_method = None
         calibration_cv = None
+
+    early_stopping_enabled = early_stopping_root.get("enabled")
+    if not isinstance(early_stopping_enabled, bool):
+        raise TypeError("training.early_stopping.enabled must be a YAML boolean.")
+    early_stopping = EarlyStoppingConfig(
+        enabled=early_stopping_enabled,
+        validation_fraction=_fraction(
+            early_stopping_root.get("validation_fraction"),
+            "training.early_stopping.validation_fraction",
+        ),
+        stopping_rounds=_positive_int(
+            early_stopping_root.get("stopping_rounds"),
+            "training.early_stopping.stopping_rounds",
+        ),
+        max_estimators=_positive_int(
+            early_stopping_root.get("max_estimators"),
+            "training.early_stopping.max_estimators",
+        ),
+        metric=str(early_stopping_root.get("metric", "")).strip(),
+    )
+    if not early_stopping.metric:
+        raise ValueError("training.early_stopping.metric must not be empty.")
+    if early_stopping.enabled and model_type != "lightgbm":
+        raise ValueError(
+            "training.early_stopping is currently supported only for lightgbm."
+        )
+
     model_parameters = copy.deepcopy(
         _mapping(
             models_root[model_type],
@@ -576,6 +629,11 @@ def load_training_config(
         )
     )
     model_parameters["random_state"] = random_seed
+    if early_stopping.enabled and "n_estimators" in model_parameters:
+        raise ValueError(
+            "Remove training.models.lightgbm.n_estimators when early stopping is "
+            "enabled; training.early_stopping.max_estimators is the ceiling."
+        )
 
     optimizer = OptimizerConfig(
         target_cm=_fraction(
@@ -705,6 +763,7 @@ def load_training_config(
             "cv": calibration_cv,
         },
         "selected_model_parameters": copy.deepcopy(model_parameters),
+        "early_stopping": early_stopping.as_dict(),
         "optimizer": optimizer.as_dict(),
         "output": {
             "report_root": str(output["report_root"]),
@@ -735,6 +794,7 @@ def load_training_config(
         calibration_cv=calibration_cv,
         split=selected_split,
         model_parameters=model_parameters,
+        early_stopping=early_stopping,
         optimizer=optimizer,
         promotion_monotonicity=promotion_monotonicity,
         comparison_artifacts=comparison_artifacts,
@@ -884,6 +944,7 @@ class HyperparameterSearchConfig:
     n_jobs: int
     validation_strategy: str
     split: dict[str, Any]
+    early_stopping: EarlyStoppingConfig
     holdout_fraction: float
     probability_shortlist_top_n: int
     optimizer_top_n: int
@@ -1137,6 +1198,10 @@ def load_hyperparameter_search_config(
     models_root = _mapping(hpo_root.get("models"), "models")
     validation = _mapping(hpo_root.get("validation"), "validation")
     split_root = _mapping(hpo_root.get("split"), "split")
+    early_stopping_root = _mapping(
+        hpo_root.get("early_stopping"),
+        "early_stopping",
+    )
     finalists = _mapping(hpo_root.get("finalists"), "finalists")
     optimizer_cfg = _mapping(hpo_root.get("optimizer") or {}, "optimizer")
     calibration_cfg = _mapping(hpo_root.get("calibration") or {}, "calibration")
@@ -1180,6 +1245,25 @@ def load_hyperparameter_search_config(
             raise ValueError("Missing required config: training.split.random.stratify")
         if not isinstance(selected_split["stratify"], bool):
             raise TypeError("training.split.random.stratify must be a YAML boolean.")
+
+    early_stopping_enabled = early_stopping_root.get("enabled")
+    if not isinstance(early_stopping_enabled, bool):
+        raise TypeError("early_stopping.enabled must be a YAML boolean.")
+    early_stopping = EarlyStoppingConfig(
+        enabled=early_stopping_enabled,
+        validation_fraction=None,
+        stopping_rounds=_positive_int(
+            early_stopping_root.get("stopping_rounds"),
+            "early_stopping.stopping_rounds",
+        ),
+        max_estimators=_positive_int(
+            early_stopping_root.get("max_estimators"),
+            "early_stopping.max_estimators",
+        ),
+        metric=str(early_stopping_root.get("metric", "")).strip(),
+    )
+    if not early_stopping.metric:
+        raise ValueError("early_stopping.metric must not be empty.")
 
     holdout_fraction = float(
         get_with_logged_fallback(
@@ -1388,6 +1472,16 @@ def load_hyperparameter_search_config(
         for parameter_name, specification in raw_search_space.items()
     }
 
+    if early_stopping.enabled and selected_model_type != "lightgbm":
+        raise ValueError("early_stopping is currently supported only for lightgbm HPO.")
+    if early_stopping.enabled and (
+        "n_estimators" in fixed_parameters or "n_estimators" in search_space
+    ):
+        raise ValueError(
+            "Remove n_estimators from HPO fixed_parameters/search_space when "
+            "early stopping is enabled; early_stopping.max_estimators is the ceiling."
+        )
+
     model_configs = {
         selected_model_type: {
             "fixed_parameters": fixed_parameters,
@@ -1402,6 +1496,7 @@ def load_hyperparameter_search_config(
     resolved_raw = copy.deepcopy(hpo_root)
     resolved_raw["lead_type_id"] = int(lead_type_id)
     resolved_raw["models"] = copy.deepcopy(model_configs)
+    resolved_raw["early_stopping"] = early_stopping.as_dict()
     resolved_raw["resolved"] = {
         "config_path": str(resolved_path),
         "selected_model": selected_model_type,
@@ -1419,6 +1514,7 @@ def load_hyperparameter_search_config(
         n_jobs=int(search["n_jobs"]),
         validation_strategy=validation_strategy,
         split=selected_split,
+        early_stopping=early_stopping,
         holdout_fraction=holdout_fraction,
         probability_shortlist_top_n=probability_shortlist_top_n,
         optimizer_top_n=optimizer_top_n,

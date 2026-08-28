@@ -209,8 +209,14 @@ class TrainingContext:
     split_settings: Any = None
     train_df: Any = None
     test_df: Any = None
+    early_stopping_fit_df: Any = None
+    early_stopping_validation_df: Any = None
     X_train: Any = None
     y_train: Any = None
+    X_early_stopping_fit: Any = None
+    y_early_stopping_fit: Any = None
+    X_early_stopping_validation: Any = None
+    y_early_stopping_validation: Any = None
     X_test: Any = None
     y_test: Any = None
     feature_summary_df: Any = None
@@ -223,6 +229,7 @@ class TrainingContext:
     model_type: Any = None
     model_params: Any = None
     calibration_enabled: Any = None
+    best_iteration: Any = None
     model: Any = None
 
     # --- stage: evaluate + optimizer ---
@@ -326,6 +333,30 @@ def stage_prepare_data(ctx: TrainingContext) -> TrainingContext:
     return ctx
 
 
+def _split_early_stopping_partition(
+    train_df: pd.DataFrame,
+    validation_fraction: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split the training partition into fit and recent validation slices."""
+    if "created_at" not in train_df.columns:
+        raise ValueError(
+            "LightGBM early stopping requires created_at for a time-ordered "
+            "validation slice."
+        )
+
+    ordered = train_df.sort_values("created_at").reset_index(drop=True)
+    validation_rows = max(1, int(round(len(ordered) * validation_fraction)))
+    split_index = len(ordered) - validation_rows
+    if split_index <= 0:
+        raise ValueError(
+            "Early-stopping validation_fraction leaves no model-fitting rows."
+        )
+    return (
+        ordered.iloc[:split_index].copy(),
+        ordered.iloc[split_index:].copy(),
+    )
+
+
 def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     """Split into train/test and compute feature-coverage diagnostics.
 
@@ -373,6 +404,24 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     ctx.train_df = train_df
     ctx.test_df = test_df
 
+    if training_config.early_stopping.enabled:
+        es_fit_df, es_validation_df = _split_early_stopping_partition(
+            train_df,
+            training_config.early_stopping.validation_fraction,
+        )
+        preprocessing.assert_partition_has_both_classes(
+            es_fit_df,
+            lead_type_name,
+            "Early-stopping fit partition",
+        )
+        preprocessing.assert_partition_has_both_classes(
+            es_validation_df,
+            lead_type_name,
+            "Early-stopping validation partition",
+        )
+        ctx.early_stopping_fit_df = es_fit_df
+        ctx.early_stopping_validation_df = es_validation_df
+
     logger.info("Feature columns: %s", feature_cols)
 
     feature_summary_df, feature_counts_df = (
@@ -404,6 +453,14 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     ctx.y_train = y_train
     ctx.X_test = X_test
     ctx.y_test = y_test
+
+    if training_config.early_stopping.enabled:
+        ctx.X_early_stopping_fit = ctx.early_stopping_fit_df[feature_cols]
+        ctx.y_early_stopping_fit = ctx.early_stopping_fit_df[config.TARGET_COL]
+        ctx.X_early_stopping_validation = ctx.early_stopping_validation_df[feature_cols]
+        ctx.y_early_stopping_validation = ctx.early_stopping_validation_df[
+            config.TARGET_COL
+        ]
 
     logger.info("Train/Test Split")
     logger.info(
@@ -442,6 +499,31 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
         test_df["created_at"].dt.day_name().value_counts().sort_index().items()
     ):
         logger.info("    %-10s : %s", day, f"{count:,}")
+
+    if training_config.early_stopping.enabled:
+        logger.info("Early-Stopping Split")
+        logger.info(
+            "  Fit rows                              : %s",
+            f"{len(ctx.X_early_stopping_fit):,}",
+        )
+        logger.info(
+            "  Validation rows                       : %s",
+            f"{len(ctx.X_early_stopping_validation):,}",
+        )
+        logger.info(
+            "  Validation fraction of train          : %.2f",
+            training_config.early_stopping.validation_fraction,
+        )
+        logger.info(
+            "  Fit date range                        : %s → %s",
+            ctx.early_stopping_fit_df["created_at"].min(),
+            ctx.early_stopping_fit_df["created_at"].max(),
+        )
+        logger.info(
+            "  Validation date range                 : %s → %s",
+            ctx.early_stopping_validation_df["created_at"].min(),
+            ctx.early_stopping_validation_df["created_at"].max(),
+        )
 
     diagnostic_features = feature_diagnostics.coverage_features(
         frame,
@@ -499,10 +581,9 @@ def stage_fit_model(ctx: TrainingContext) -> TrainingContext:
     training_config = ctx.training_config
 
     model_type = training_config.model_type
-    model_params = training_config.model_parameters
+    configured_model_params = dict(training_config.model_parameters)
     calibration_enabled = training_config.calibration_enabled
     ctx.model_type = model_type
-    ctx.model_params = model_params
     ctx.calibration_enabled = calibration_enabled
 
     logger.info("Training Model")
@@ -512,16 +593,96 @@ def stage_fit_model(ctx: TrainingContext) -> TrainingContext:
         calibration_enabled,
     )
 
+    if training_config.early_stopping.enabled:
+        early_stopping_config = training_config.early_stopping
+        search_params = {
+            **configured_model_params,
+            "n_estimators": early_stopping_config.max_estimators,
+        }
+        search_model = models.build_model(
+            model_type,
+            ctx.numeric,
+            ctx.categorical,
+            search_params,
+            calibration_enabled=False,
+            calibration_method=None,
+            calibration_cv=None,
+        )
+        early_stopping_result = models.fit_lightgbm_with_early_stopping(
+            search_model,
+            ctx.X_early_stopping_fit,
+            ctx.y_early_stopping_fit,
+            ctx.X_early_stopping_validation,
+            ctx.y_early_stopping_validation,
+            stopping_rounds=early_stopping_config.stopping_rounds,
+            eval_metric=early_stopping_config.metric,
+        )
+        best_iteration = early_stopping_result["best_iteration"]
+        stopped_iteration = early_stopping_result["stopped_iteration"]
+        best_score = early_stopping_result["best_score"]
+        stopped_early = early_stopping_result["stopped_early"]
+        final_model_params = {
+            **configured_model_params,
+            "n_estimators": best_iteration,
+        }
+        logger.info("Early Stopping")
+        logger.info(
+            "  Maximum estimators                    : %s",
+            f"{early_stopping_config.max_estimators:,}",
+        )
+        logger.info(
+            "  Stopping rounds                       : %s",
+            f"{early_stopping_config.stopping_rounds:,}",
+        )
+        logger.info(
+            "  Metric                                : %s",
+            early_stopping_config.metric,
+        )
+        logger.info(
+            "  Status                                : %s",
+            "TRIGGERED" if stopped_early else "MAX ESTIMATORS REACHED",
+        )
+        logger.info(
+            "  Best iteration                        : %s",
+            f"{best_iteration:,}",
+        )
+        if best_score is not None:
+            logger.info(
+                "  Best validation %s                   : %.6f",
+                early_stopping_config.metric,
+                best_score,
+            )
+        logger.info(
+            "  Training stopped at iteration         : %s",
+            f"{stopped_iteration:,}",
+        )
+        logger.info(
+            "  Rounds after best                     : %s",
+            f"{max(0, stopped_iteration - best_iteration):,}",
+        )
+        logger.info(
+            "  Final model estimators                : %s",
+            f"{best_iteration:,}",
+        )
+        logger.info(
+            "  Final refit rows                      : %s",
+            f"{len(ctx.X_train):,}",
+        )
+        ctx.best_iteration = best_iteration
+    else:
+        final_model_params = configured_model_params
+
     model = models.build_model(
         model_type,
         ctx.numeric,
         ctx.categorical,
-        model_params,
+        final_model_params,
         calibration_enabled=calibration_enabled,
         calibration_method=training_config.calibration_method,
         calibration_cv=training_config.calibration_cv,
     )
     model.fit(ctx.X_train, ctx.y_train)
+    ctx.model_params = final_model_params
     ctx.model = model
     return ctx
 
@@ -662,6 +823,28 @@ def stage_save_reports(ctx: TrainingContext) -> TrainingContext:
         "full_zero_variance_features": list(ctx.full_zero_variance_features),
         "zero_variance_features": list(ctx.zero_variance_features),
         "feature_split_diagnostics": ctx.feature_split_diagnostics,
+        "early_stopping_enabled": training_config.early_stopping.enabled,
+        "early_stopping_validation_fraction": (
+            training_config.early_stopping.validation_fraction
+            if training_config.early_stopping.enabled
+            else None
+        ),
+        "early_stopping_rounds": (
+            training_config.early_stopping.stopping_rounds
+            if training_config.early_stopping.enabled
+            else None
+        ),
+        "early_stopping_max_estimators": (
+            training_config.early_stopping.max_estimators
+            if training_config.early_stopping.enabled
+            else None
+        ),
+        "early_stopping_metric": (
+            training_config.early_stopping.metric
+            if training_config.early_stopping.enabled
+            else None
+        ),
+        "best_iteration": ctx.best_iteration,
     }
 
     logger.info(
@@ -1193,6 +1376,7 @@ def build_result(ctx: TrainingContext) -> dict[str, Any]:
         "lineage": ctx.lineage,
         "feature_cols": list(ctx.feature_cols),
         "split_settings": ctx.split_settings,
+        "best_iteration": ctx.best_iteration,
         "test_set_id": ctx.test_set_id,
         "comparison_artifact_path": manifest.get("comparison_artifact_path"),
     }
