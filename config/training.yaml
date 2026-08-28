@@ -86,11 +86,11 @@ training:
           verbosity: -1
           n_jobs: 1
           subsample_freq: 1
-          num_leaves: 76
-          max_depth: 6
-          learning_rate: 0.0234428383660204
-          min_child_samples: 91
-          subsample: 0.917904486530996
-          colsample_bytree: 0.7020003339613894
-          reg_alpha: 1.0603052101535392e-06
-          reg_lambda: 0.006167571016172181
+          num_leaves: 74
+          max_depth: 4
+          learning_rate: 0.01676274385834696
+          min_child_samples: 24
+          subsample: 0.9372071507683247
+          colsample_bytree: 0.7015232654362487
+          reg_alpha: 3.2830306860572816e-05
+          reg_lambda: 0.956199464029356
