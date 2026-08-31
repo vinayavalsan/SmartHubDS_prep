@@ -98,14 +98,16 @@ def model_feature_columns(
 ) -> tuple[list[str], list[str]]:
     """Return enabled model columns for a lead type in registry order.
 
-    ``binary`` features are returned with numeric features, matching the
-    existing preprocessing behavior. Feature inclusion is controlled only by
+    ``numeric_continuous``, ``numeric_discrete``, and ``binary`` features are
+    returned together as numeric model inputs, matching the existing preprocessing
+    behavior. Feature inclusion is controlled only by
     ``FeatureSpec.enabled`` and ``FeatureSpec.lead_types``.
     """
     lead_type = _lead_type_for_id(lead_type_id)
     specs = _enabled_specs_for_lead_type(lead_type)
 
-    numeric = [spec.name for spec in specs if spec.kind in {"numeric", "binary"}]
+    numeric_kinds = {"numeric_continuous", "numeric_discrete", "binary"}
+    numeric = [spec.name for spec in specs if spec.kind in numeric_kinds]
     categorical = [spec.name for spec in specs if spec.kind == "categorical"]
     return numeric, categorical
 

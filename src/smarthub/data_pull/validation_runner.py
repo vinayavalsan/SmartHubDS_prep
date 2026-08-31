@@ -157,7 +157,10 @@ def validate_raw_kinds(df: pd.DataFrame) -> list[RuleViolation]:
         if name not in df.columns:
             continue
 
-        result = rules.validate_kind(df[name], spec.validation.kind)
+        result = rules.validate_kind(
+            df[name],
+            spec.validation.kind,
+        )
         if result.count <= 0:
             continue
 

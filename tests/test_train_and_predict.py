@@ -17,6 +17,7 @@ from smarthub.feature_engineering.feature_registry import FEATURES, MISSING_CATE
 from smarthub.server import predict
 from smarthub.train_and_predict import (
     config,
+    feature_diagnostics,
     optimizer,
     optimizer_evaluation,
     preprocessing,
@@ -34,7 +35,7 @@ def test_model_feature_columns_auto_vs_home():
     home_features = set(num_home) | set(cat_home)
 
     # auto-only features present for auto, absent for home
-    for col in ("multi_vehicle", "num_vehicles", "home_owner"):
+    for col in ("multi_vehicle", "num_vehicles"):
         assert col in auto_features
         assert col not in home_features
 
@@ -51,6 +52,7 @@ def test_model_feature_columns_auto_vs_home():
         "is_workday",
         "state",
         "traffic_tier",
+        "home_owner",
     ):
         assert col in auto_features
         assert col in home_features
@@ -193,7 +195,7 @@ def test_find_zero_variance_features_reports_without_dropping():
         }
     )
 
-    zero_variance = preprocessing.find_zero_variance_features(
+    zero_variance = feature_diagnostics.find_zero_variance_features(
         frame,
         ["a", "b"],
         ["c", "d"],

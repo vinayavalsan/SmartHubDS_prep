@@ -145,18 +145,14 @@ def test_recommend_bid_threads_lead_ping_id_through_to_log_row(client, log_store
     assert resp.json()["prediction_id"] == row["prediction_id"]
 
 
-def test_recommend_bid_allows_missing_lead_ping_id(client, log_store):
-    # Per DS sync 2026-08-25, lead_ping_id is logging-only and optional: a
-    # request without it must still be scored, and the log row records null.
+def test_recommend_bid_requires_lead_ping_id(client, log_store):
     _promote_constant_model()
     payload = {key: value for key, value in PAYLOAD.items() if key != "lead_ping_id"}
 
     resp = client.post("/recommend_bid", json=payload)
 
-    assert resp.status_code == 200
-    assert resp.json()["lead_ping_id"] is None
-    row = log_store.recent(limit=10)[0]
-    assert row["lead_ping_id"] is None
+    assert resp.status_code == 422
+    assert log_store.recent(limit=10) == []
 
 
 def test_recommend_bid_cold_start_logs_null_model_fields(client, log_store):

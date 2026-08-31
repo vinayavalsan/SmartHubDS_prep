@@ -159,6 +159,13 @@ def _training_payload():
                     "time": {"test_size": 0.2},
                     "random": {"test_size": 0.25, "stratify": True},
                 },
+                "early_stopping": {
+                    "enabled": True,
+                    "validation_fraction": 0.15,
+                    "stopping_rounds": 50,
+                    "max_estimators": 2000,
+                    "metric": "binary_logloss",
+                },
                 "calibration": {
                     "enabled": False,
                     "method": "sigmoid",
@@ -203,7 +210,6 @@ def _training_payload():
                     "model_type": "lightgbm",
                     "models": {
                         "lightgbm": {
-                            "n_estimators": 700,
                             "learning_rate": 0.04,
                         },
                     },
@@ -211,6 +217,7 @@ def _training_payload():
                 1: {
                     "name": "home",
                     "model_type": "logistic_regression",
+                    "early_stopping": {"enabled": False},
                     "models": {
                         "logistic_regression": {
                             "C": 0.5,
@@ -231,12 +238,6 @@ def _hpo_model_config():
             "n_jobs": 1,
         },
         "search_space": {
-            "n_estimators": {
-                "type": "int",
-                "low": 100,
-                "high": 300,
-                "step": 100,
-            },
             "learning_rate": {
                 "type": "float",
                 "low": 0.01,
@@ -273,6 +274,12 @@ def _hpo_payload():
                     "n_jobs": 1,
                 },
                 "validation": {"strategy": "time"},
+                "early_stopping": {
+                    "enabled": True,
+                    "stopping_rounds": 50,
+                    "max_estimators": 2000,
+                    "metric": "binary_logloss",
+                },
                 "split": {
                     "strategy": "time",
                     "time": {"test_size": 0.2},
@@ -312,6 +319,7 @@ def _hpo_payload():
                 1: {
                     "name": "home",
                     "model_type": "logistic_regression",
+                    "early_stopping": {"enabled": False},
                     "models": {"logistic_regression": logistic},
                 },
             },
@@ -351,9 +359,15 @@ def test_training_config_resolves_each_lead_type_independently(tmp_path):
     home = training_config.load_training_config(1, path)
 
     assert auto.model_type == "lightgbm"
-    assert auto.model_parameters["n_estimators"] == 700
+    assert "n_estimators" not in auto.model_parameters
     assert auto.model_parameters["random_state"] == 42
+    assert auto.early_stopping.enabled is True
+    assert auto.early_stopping.validation_fraction == pytest.approx(0.15)
+    assert auto.early_stopping.stopping_rounds == 50
+    assert auto.early_stopping.max_estimators == 2000
+    assert auto.early_stopping.metric == "binary_logloss"
     assert home.model_type == "logistic_regression"
+    assert home.early_stopping.enabled is False
     assert home.model_parameters["C"] == pytest.approx(0.5)
     assert home.model_parameters["random_state"] == 42
 
@@ -444,8 +458,13 @@ def test_hpo_config_resolves_lead_type_model_and_search_space(tmp_path):
 
     assert auto.model_type == "lightgbm"
     assert set(auto.model_configs) == {"lightgbm"}
-    assert "n_estimators" in auto.model_config("lightgbm")["search_space"]
+    assert "n_estimators" not in auto.model_config("lightgbm")["search_space"]
+    assert auto.early_stopping.enabled is True
+    assert auto.early_stopping.stopping_rounds == 50
+    assert auto.early_stopping.max_estimators == 2000
+    assert auto.early_stopping.metric == "binary_logloss"
     assert home.model_type == "logistic_regression"
+    assert home.early_stopping.enabled is False
     assert set(home.model_configs) == {"logistic_regression"}
     assert "C" in home.model_config("logistic_regression")["search_space"]
 
@@ -553,8 +572,8 @@ def test_hpo_config_rejects_invalid_search_space_definition(tmp_path):
     search_space = payload["hyperparameter_search"]["lead_types"][6]["models"][
         "lightgbm"
     ]["search_space"]
-    search_space["n_estimators"]["low"] = 400
-    search_space["n_estimators"]["high"] = 300
+    search_space["learning_rate"]["low"] = 0.2
+    search_space["learning_rate"]["high"] = 0.1
     path = _write_yaml(tmp_path / "hpo.yaml", payload)
 
     with pytest.raises(ValueError, match="low must be less than high"):

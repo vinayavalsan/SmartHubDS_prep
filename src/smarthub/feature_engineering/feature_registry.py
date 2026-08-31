@@ -29,7 +29,7 @@ class FeatureSpec:
     """Definition of one model feature."""
 
     name: str
-    kind: str  # numeric | categorical | binary
+    kind: str  # numeric_continuous | numeric_discrete | categorical | binary
     source: str  # raw | derived
     lead_types: frozenset[str]
     enabled: bool = True
@@ -105,6 +105,16 @@ def _derive_multi_vehicle(frame: pd.DataFrame) -> pd.Series:
     return result
 
 
+def _derive_age_valid(frame: pd.DataFrame) -> pd.Series:
+    """Return whether age is numeric and within the registered valid range."""
+    age = pd.to_numeric(frame["age"], errors="coerce")
+    min_age, max_age = numeric_validation_bounds("age")
+    if min_age is None or max_age is None:
+        raise ValueError("Age validation bounds must define both min and max.")
+
+    return age.notna().mul(age.between(min_age, max_age)).astype("int64")
+
+
 def _derive_age_cohort(frame: pd.DataFrame) -> pd.Series:
     """Clean age and return its categorical age cohort."""
     age = pd.to_numeric(frame["age"], errors="coerce")
@@ -155,7 +165,7 @@ FEATURES: dict[str, FeatureSpec] = {
     # -----------------------------------------------------------------------
     "bid": FeatureSpec(
         name="bid",
-        kind="numeric",
+        kind="numeric_continuous",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
@@ -164,7 +174,7 @@ FEATURES: dict[str, FeatureSpec] = {
     ),
     "age": FeatureSpec(
         name="age",
-        kind="numeric",
+        kind="numeric_discrete",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
@@ -172,7 +182,7 @@ FEATURES: dict[str, FeatureSpec] = {
     ),
     "continuous_coverage_months": FeatureSpec(
         name="continuous_coverage_months",
-        kind="numeric",
+        kind="numeric_discrete",
         source="raw",
         lead_types=frozenset({"auto", "home"}),
         enabled=True,
@@ -225,6 +235,15 @@ FEATURES: dict[str, FeatureSpec] = {
         enabled=False,
         api_input="marital_status",
         derive=_derive_is_married,
+    ),
+    "age_valid": FeatureSpec(
+        name="age_valid",
+        kind="binary",
+        source="derived",
+        lead_types=frozenset({"auto", "home"}),
+        enabled=True,
+        api_input="age",
+        derive=_derive_age_valid,
     ),
     "age_cohort": FeatureSpec(
         name="age_cohort",
@@ -312,12 +331,28 @@ FEATURES: dict[str, FeatureSpec] = {
         enabled=True,
         api_input="current_carrier",
     ),
+    "home_owner": FeatureSpec(
+        name="home_owner",
+        kind="binary",
+        source="raw",
+        lead_types=frozenset({"auto", "home"}),
+        enabled=True,
+        api_input="home_owner",
+    ),
+    "device_type": FeatureSpec(
+        name="device_type",
+        kind="categorical",
+        source="raw",
+        lead_types=frozenset({"auto", "home"}),
+        enabled=True,
+        api_input="device_type",
+    ),
     # -----------------------------------------------------------------------
     # Auto-only features
     # -----------------------------------------------------------------------
     "num_vehicles": FeatureSpec(
         name="num_vehicles",
-        kind="numeric",
+        kind="numeric_discrete",
         source="raw",
         lead_types=frozenset({"auto"}),
         enabled=True,
@@ -325,7 +360,7 @@ FEATURES: dict[str, FeatureSpec] = {
     ),
     "num_drivers": FeatureSpec(
         name="num_drivers",
-        kind="numeric",
+        kind="numeric_discrete",
         source="raw",
         lead_types=frozenset({"auto"}),
         enabled=True,
@@ -333,7 +368,7 @@ FEATURES: dict[str, FeatureSpec] = {
     ),
     "num_auto_violations": FeatureSpec(
         name="num_auto_violations",
-        kind="numeric",
+        kind="numeric_discrete",
         source="raw",
         lead_types=frozenset({"auto"}),
         enabled=True,
@@ -341,7 +376,7 @@ FEATURES: dict[str, FeatureSpec] = {
     ),
     "num_auto_accidents": FeatureSpec(
         name="num_auto_accidents",
-        kind="numeric",
+        kind="numeric_discrete",
         source="raw",
         lead_types=frozenset({"auto"}),
         enabled=True,
@@ -355,14 +390,6 @@ FEATURES: dict[str, FeatureSpec] = {
         enabled=True,
         api_input="num_vehicles",
         derive=_derive_multi_vehicle,
-    ),
-    "home_owner": FeatureSpec(
-        name="home_owner",
-        kind="binary",
-        source="raw",
-        lead_types=frozenset({"auto"}),
-        enabled=True,
-        api_input="home_owner",
     ),
     "dui": FeatureSpec(
         name="dui",
@@ -385,7 +412,7 @@ FEATURES: dict[str, FeatureSpec] = {
     # -----------------------------------------------------------------------
     "num_home_claims": FeatureSpec(
         name="num_home_claims",
-        kind="numeric",
+        kind="numeric_discrete",
         source="raw",
         lead_types=frozenset({"home"}),
         enabled=True,
