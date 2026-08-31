@@ -65,7 +65,7 @@ def test_leads_select_lead_type_filter():
     assert "lead_pings.lead_type_id IN (6, 1)" in sql_both
 
 
-def test_expected_revenue_join_lead_type_filter():
+def test_expected_revenue_query_lead_type_filter():
     """Expected-revenue query applies one-or-many lead-type filters."""
     sql = _compiled_sql(
         leads_with_expected_revenue_select(
@@ -75,7 +75,8 @@ def test_expected_revenue_join_lead_type_filter():
         )
     )
     assert "lead_pings.lead_type_id IN (1)" in sql
-    assert "lead_ping_listings" in sql
+    assert "lead_pings.exp_rev" in sql
+    assert "lead_ping_listings" not in sql
 
 
 def test_leads_select_excludes_pii_columns():
@@ -91,28 +92,34 @@ def test_leads_select_accepts_datetime_objects():
     assert "FROM lead_pings" in _compiled_sql(stmt)
 
 
-def test_expected_revenue_join_query():
-    """Expected-revenue query joins the listings aggregate with a left join."""
+def test_expected_revenue_query_uses_lead_pings_exp_rev():
+    """Expected revenue comes from lead_pings.exp_rev with no listing join."""
     sql = _compiled_sql(
         leads_with_expected_revenue_select("2026-06-07 00:00:00", "2026-06-20 00:00:00")
     )
-    # joins the listings aggregate and exposes expected revenue
-    assert "lead_ping_listings" in sql
-    assert "sum(lead_ping_listings.est_payout)" in sql
-    assert "expected_revenue" in sql
-    assert "LEFT OUTER JOIN" in sql
-    # default selected-only filter applied
-    assert "lead_ping_listings.selected" in sql
+    assert "lead_pings.exp_rev" in sql
+    assert "lead_ping_listings" not in sql
+    assert "LEFT OUTER JOIN" not in sql
 
 
-def test_expected_revenue_join_all_listings():
-    """selected_only=False drops the listings selected filter."""
-    sql = _compiled_sql(
+def test_expected_revenue_query_selected_only_is_compatibility_only():
+    """selected_only no longer changes SQL because revenue is on lead_pings."""
+    sql_default = _compiled_sql(
         leads_with_expected_revenue_select(
-            "2026-06-07 00:00:00", "2026-06-20 00:00:00", selected_only=False
+            "2026-06-07 00:00:00",
+            "2026-06-20 00:00:00",
         )
     )
-    assert "lead_ping_listings.selected" not in sql
+    sql_all = _compiled_sql(
+        leads_with_expected_revenue_select(
+            "2026-06-07 00:00:00",
+            "2026-06-20 00:00:00",
+            selected_only=False,
+        )
+    )
+    assert sql_default == sql_all
+    assert "lead_pings.exp_rev" in sql_all
+    assert "lead_ping_listings" not in sql_all
 
 
 def test_listing_fk_points_to_lead_pings():
@@ -126,8 +133,8 @@ def test_coerce_leads_dtypes_stable_schema():
     df = pd.DataFrame(
         {
             "id": ["1", "2"],
-            "home_property_type": [None, None],  # all-null string col
-            "bid": ["12.00", "25.00"],  # numeric-as-string
+            "home_property_type": [None, None],
+            "bid": ["12.00", "25.00"],
             "age": [44, None],
             "created_at": ["2026-06-20 01:00:00", "2026-06-20 02:00:00"],
         }
@@ -139,6 +146,5 @@ def test_coerce_leads_dtypes_stable_schema():
     assert str(out["age"].dtype) == "Int64"
     assert "datetime64" in str(out["created_at"].dtype)
 
-    # a later pull with real home strings coerces cleanly to the same dtype
     df2 = df.assign(home_property_type=["Single Family Home", "Condominium"])
     assert coerce_leads_dtypes(df2)["home_property_type"].dtype == "string"

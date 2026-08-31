@@ -81,6 +81,19 @@ def slack_group(report: ValidationReport) -> tuple[str, dict]:
             else "none"
         ),
         "exp_rev coverage": _pct(m.get("exp_rev_coverage")),
+        "Won leads": f"{m.get('won_count', 0):,}",
+        "Sold leads": f"{m.get('sold_count', 0):,}",
+        "Sold among won": (
+            f"{m.get('sold_among_won_count', 0):,} "
+            f"({_pct(m.get('sold_among_won_rate'))})"
+        ),
+        "Sold leads with revenue comparison": (
+            f"{m.get('sold_revenue_comparison_count', 0):,}"
+        ),
+        "Sold rev < expected": (
+            f"{m.get('sold_realized_revenue_below_expected_count', 0):,} "
+            f"({_pct(m.get('sold_realized_revenue_below_expected_rate'))})"
+        ),
         "pst_hour populated": _pct(m.get("pst_hour_populated")),
         "age implausible": _pct(m.get("age_implausible_rate")),
         "won=false rows": m.get("won_false_count", 0),
@@ -179,6 +192,22 @@ def to_markdown(report: ValidationReport, lead_type_name: str) -> str:
         "| --- | --- |",
         f"| bid = 0 rate | {_pct(m.get('bid_zero_rate'))} |",
         f"| exp_rev coverage | {_pct(m.get('exp_rev_coverage'))} |",
+        f"| won leads | {m.get('won_count', 0):,} |",
+        f"| sold leads | {m.get('sold_count', 0):,} |",
+        (
+            f"| sold among won leads | "
+            f"{m.get('sold_among_won_count', 0):,} "
+            f"({_pct(m.get('sold_among_won_rate'))}) |"
+        ),
+        (
+            f"| sold leads with revenue comparison | "
+            f"{m.get('sold_revenue_comparison_count', 0):,} |"
+        ),
+        (
+            f"| sold leads: realized revenue < expected revenue | "
+            f"{m.get('sold_realized_revenue_below_expected_count', 0):,} "
+            f"({_pct(m.get('sold_realized_revenue_below_expected_rate'))}) |"
+        ),
         f"| pst_hour populated | {_pct(m.get('pst_hour_populated'))} |",
         f"| age implausible | {_pct(m.get('age_implausible_rate'))} |",
         f"| won = false rows | {m.get('won_false_count', 0):,} |",
