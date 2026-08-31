@@ -650,8 +650,8 @@ if _FASTAPI_AVAILABLE:
         # log/join purposes, so they stay OPTIONAL — a missing one must not block
         # a bid. account_id is a grouping parent of campaign_id (the campaign
         # carries the predictive signal), so it adds no model value on its own.
-        account_id: int
-        lead_ping_id: int
+        account_id: int | None = None
+        lead_ping_id: int | None = None
 
         # Response control (NOT a feature -- never affects the bid). When true,
         # the response also returns the full decision payload the prediction log
