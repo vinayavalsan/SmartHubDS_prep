@@ -645,13 +645,16 @@ if _FASTAPI_AVAILABLE:
         traffic_tier: str
         created_at: datetime
 
-        # Logging-only identifiers (per DS sync 2026-08-25): account_id and
-        # lead_ping_id are never predictive features and are used only for
-        # log/join purposes, so they stay OPTIONAL — a missing one must not block
-        # a bid. account_id is a grouping parent of campaign_id (the campaign
-        # carries the predictive signal), so it adds no model value on its own.
+        # Traceability identifiers. Neither is a predictive feature.
+        # lead_ping_id is REQUIRED: it is the join key that links a prediction
+        # back to its raw lead/outcome for post-bid monitoring (the monitoring
+        # dataset is built by joining smarthub_prediction_log.lead_ping_id to
+        # lead_pings.id), so a prediction without it can't be evaluated.
+        # account_id stays OPTIONAL — it's only a grouping parent of campaign_id
+        # (which carries the predictive signal), so a missing one must not block
+        # a bid.
+        lead_ping_id: int
         account_id: int | None = None
-        lead_ping_id: int | None = None
 
         # Response control (NOT a feature -- never affects the bid). When true,
         # the response also returns the full decision payload the prediction log
