@@ -35,6 +35,10 @@ def _unknown_frame():
 
 @pytest.mark.parametrize("model_type", ["xgboost", "lightgbm"])
 def test_tree_models_keep_registry_categoricals_native(model_type):
+    # These tree libs are the `ml` extra, not installed in the base CI env
+    # (pip install .[dev,validation]); skip rather than error there, same
+    # convention as the fastapi-gated serving tests.
+    pytest.importorskip(model_type)
     params = {"n_estimators": 5}
     if model_type == "xgboost":
         params.update({"tree_method": "hist", "verbosity": 0})
@@ -78,6 +82,7 @@ def test_logistic_regression_unknown_category_still_scores():
 
 
 def test_native_category_vocabulary_survives_joblib_round_trip(tmp_path):
+    pytest.importorskip("lightgbm")  # `ml` extra; skip in the base CI env
     model = models.build_model(
         "lightgbm",
         ["bid", "age"],
@@ -99,6 +104,7 @@ def test_native_category_vocabulary_survives_joblib_round_trip(tmp_path):
 
 
 def test_lightgbm_early_stopping_uses_fit_vocabulary_for_validation():
+    pytest.importorskip("lightgbm")  # `ml` extra; skip in the base CI env
     pipeline = models.build_lightgbm_model(
         ["bid", "age"],
         ["source_type_id", "traffic_tier"],
