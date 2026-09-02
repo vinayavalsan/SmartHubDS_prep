@@ -653,6 +653,48 @@ explicitly, so it can't reason backwards about whether a different bid would
 have won more or less often. Configurable in `config/smarthub.yaml (explain section)`:
 `llm_model`, `ollama_host`, `top_n_factors`, `timeout_seconds`.
 
+### API authentication (per-client API keys)
+
+`/recommend_bid` and `/explain_bid` are protected by **per-client API keys**;
+`/health` stays open as a probe. A client sends its key as
+`Authorization: Bearer <key>` (or `X-API-Key: <key>`); a missing/invalid key
+gets `401`. Client-facing details are in
+[docs/API_INTEGRATION.md](./docs/API_INTEGRATION.md).
+
+Keys are stored **hashed (SHA-256)** in the shared Postgres (table
+`smarthub_api_key`) and verified against an in-memory cache, so the check costs
+microseconds and never adds a DB round trip to the bid path (SHA-256, not
+bcrypt/argon2 — the keys are 256-bit random secrets, so a slow password hash
+would add 50–300 ms for no security gain). Code: `smarthub/server/auth.py`.
+
+Enforcement is **off by default** and turned on with
+`SMARTHUB_API_AUTH_ENABLED=true` in `.env`, so local/dev and the existing tests
+are unaffected until you enable it. The key store shares the prediction-log DB
+by default (`SMARTHUB_AUTH_DB_URL` overrides); the cache TTL is
+`SMARTHUB_API_KEY_CACHE_TTL` (default 60s — the window in which a revocation
+takes effect).
+
+Issue, list, and revoke keys with the `smarthub-apikey` console script (run it
+where the DB is reachable, e.g. inside the `serve` container):
+
+```bash
+smarthub-apikey create --client anton --note "prod bid client"   # prints the key ONCE
+smarthub-apikey create --client anton --expires-in-days 90        # optional expiry
+smarthub-apikey list
+smarthub-apikey revoke --client anton      # or: --key-id <id>
+```
+
+Keys can carry an **expiry** (`--expires-in-days`; omit for a non-expiring key).
+An expired key is rejected with `401`, checked against the current time at
+verify (so expiry is effective immediately, independent of the cache TTL);
+`list` shows each key as `active` / `expired` / `revoked`.
+
+The raw key is shown only at creation — store it in a secret manager and share
+it over a secure channel; a lost key is reissued, never recovered. Recommended
+outer layer: keep TLS on nginx (the key rides on every request) and, if the
+client has a stable egress IP, an IP allowlist (nginx `allow/deny` or the
+instance security group) in front of the key check.
+
 ### Prediction logging
 
 Every `/recommend_bid` and `/explain_bid` call — success or failure — is
@@ -701,6 +743,81 @@ LLM narrative, those stay `/explain_bid`-only) via a second background task,
 scheduled to run after the logging insert above. Expect a brief window
 where a freshly-logged `/recommend_bid` row still has `shap_explanation:
 null` before that task fills it in.
+
+### Monitoring dataset (`--include-prediction-logs`)
+
+An **optional** extension of the data pull that stitches each logged
+prediction back to what actually happened to that lead, producing a
+per-prediction **monitoring dataset** the `monitoring_app` reads straight from
+storage — so the dashboard never has to query the prediction-log DB itself.
+Off by default: without the flag the pull is byte-for-byte unchanged, and
+`predictions_app.py`/live serving are untouched.
+
+What it does when enabled: reads prediction-log rows from Postgres
+(`smarthub_prediction_log`) for the pull window, joins them to the raw
+leads/outcomes already pulled from Redshift on **`lead_ping_id = lead_pings.id`**
+(so `lead_ping_id` is now a **mandatory** field on `/recommend_bid` — it's the
+join key), and persists the result as `prediction_monitoring`. One row per
+`prediction_id`, carrying the prediction fields (recommended bid, predicted
+win rate/profit/CM, model name/version, TAT…) plus the matched outcome as
+`lead_won` / `lead_rev` / `lead_exp_rev`.
+
+- **Incremental & idempotent.** Fetch is windowed on `created_at [since, until)`
+  and, in the flow, reuses the raw pull's watermark window. The persist
+  **upserts on `prediction_id`**, so overlapping/re-pulled windows don't
+  duplicate and outcomes that resolve *after* the prediction was made fill in
+  on a later pull (a prediction whose lead outcome isn't available yet keeps
+  null `lead_*` columns until then). Predictions with no `lead_ping_id` are
+  dropped (nothing to evaluate against).
+- **Backend-aware.** Honours `STORAGE_BACKEND` — writes `prediction_monitoring`
+  as Parquet under `data/raw_datasets/monitoring_datasets/prediction_monitoring.parquet`
+  (the prod config) and/or as a DuckDB table. The join reads only the leads the
+  pulled predictions reference (a bounded lookup, not a wide time scan), so it
+  stays memory-flat.
+- **Never breaks the pull.** The prediction-log step is wrapped so a
+  logging-DB hiccup logs a warning and no-ops rather than failing the raw pull.
+
+CLI (ad-hoc / backfill — same window flags as a normal pull):
+
+```bash
+smarthub-pull --lead-type-id 6 \
+    --min-created-at "2026-09-01 00:00:00" \
+    --max-created-at "2026-09-02 00:00:00" \
+    --include-prediction-logs
+```
+
+Prefect (scheduled): `data_pull_flow(..., include_prediction_logs=True)` runs
+the same join as a `pull-prediction-logs` task after `update_watermark`, on the
+raw pull's window — so it inherits the pull's watermark and cadence, no separate
+schedule needed. Turn it on by setting the parameter on the existing
+**`data-pull`** deployment in `prefect.yaml` (the shared `parameters:` block
+applies to both the auto and home schedules):
+
+```yaml
+  - name: data-pull
+    entrypoint: src/smarthub/data_pull/flow.py:data_pull_flow
+    ...
+    parameters:
+      overlap_hours: 1
+      default_lookback_hours: 168
+      with_expected_revenue: true
+      selected_only: true
+      include_prediction_logs: true   # <-- enables the monitoring join on every scheduled pull
+```
+
+The worker re-runs `prefect deploy --all` on boot (see
+`docker/worker-entrypoint.sh`), so a worker restart picks up the change; to
+apply it without a restart, run `prefect deploy --all` in the worker container.
+The current schedule is every 4h (auto `0 */4 * * *`, home `15 */4 * * *`); no
+extra timer is required since the join piggybacks on that pull. Leave the
+parameter out (or `false`) to keep the pull unchanged.
+
+The `monitoring_app` reads the dataset back via
+`io.load_monitoring_window(days=N)`. Consumes the shared Postgres credentials
+(`SMARTHUB_PREDICTION_LOG_DB_URL`, defaults to the in-stack
+`prefect/prefect@postgres:5432/prefect`). Code lives in
+`data_pull/prediction_logs.py`; persistence/read in `core/storage.py`
+(`save_monitoring` / `load_monitoring`) and `core/io.py`.
 
 ## Slack notifications
 

@@ -619,8 +619,10 @@ def bid_curve_around(
 
 
 try:
-    from fastapi import BackgroundTasks, FastAPI, HTTPException
+    from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
     from pydantic import BaseModel, Field, model_validator
+
+    from smarthub.server.auth import require_api_key
 
     _FASTAPI_AVAILABLE = True
 except ImportError:  # pragma: no cover - API dependencies are optional
@@ -1134,7 +1136,7 @@ if _FASTAPI_AVAILABLE:
                 exc_info=True,
             )
 
-    @app.post("/recommend_bid")
+    @app.post("/recommend_bid", dependencies=[Depends(require_api_key)])
     def recommend_bid(request: BidRequest, background_tasks: BackgroundTasks):
         """Return the expected-profit-maximizing bid for one request.
 
@@ -1360,7 +1362,7 @@ if _FASTAPI_AVAILABLE:
             lead_ping_id=row.get("lead_ping_id"),
         )
 
-    @app.post("/explain_bid")
+    @app.post("/explain_bid", dependencies=[Depends(require_api_key)])
     def explain_bid_route(request: ExplainRequest):
         """Explain an already-computed prediction, by id (production mode).
 

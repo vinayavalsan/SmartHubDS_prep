@@ -161,6 +161,7 @@ def run(
     with_expected_revenue: bool = True,
     selected_only: bool = True,
     lead_type_ids: Sequence[int] | None = None,
+    include_prediction_logs: bool = False,
 ) -> pd.DataFrame:
     """End-to-end pull: load config, fetch, validate, persist.
 
@@ -180,6 +181,10 @@ def run(
         Aggregate expected revenue over selected listings only.
     lead_type_ids : Sequence[int] | None
         Restrict to one or more lead types.
+    include_prediction_logs : bool
+        When ``True``, also pull prediction-log rows for the same window, join
+        them to the raw leads/outcomes, and persist the monitoring dataset. The
+        default (``False``) leaves the pull behaviour unchanged.
 
     Returns
     -------
@@ -206,6 +211,15 @@ def run(
     )
     results = storage.save_pull(leads_df, StorageSettings.from_env())
     logger.info("Persisted pull: %s", results)
+
+    if include_prediction_logs:
+        from smarthub.data_pull.prediction_logs import pull_and_persist_prediction_logs
+
+        ids = list(lead_type_ids or [None])
+        for lead_type_id in ids:
+            pull_and_persist_prediction_logs(
+                min_created_at, max_created_at, lead_type_id
+            )
     return leads_df
 
 
@@ -285,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             with_expected_revenue=not args.no_expected_revenue,
             selected_only=not args.all_listings,
             lead_type_ids=args.lead_type_ids,
+            include_prediction_logs=args.include_prediction_logs,
         )
     except ConfigError as exc:
         logger.error("Configuration error: %s", exc)

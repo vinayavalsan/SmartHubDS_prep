@@ -78,6 +78,15 @@ def build_pull_parser() -> argparse.ArgumentParser:
         help="Lead type ID to pull. Repeat to pull multiple lead types.",
     )
     parser.add_argument(
+        "--include-prediction-logs",
+        action="store_true",
+        help=(
+            "Also pull prediction-log rows for the window, join them to the raw "
+            "leads/outcomes, and persist the monitoring dataset for "
+            "monitoring_app. Off by default (pull behaviour unchanged)."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default=None,
         help="Logging level (default: env LOG_LEVEL or INFO).",
