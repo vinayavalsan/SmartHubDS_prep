@@ -158,6 +158,21 @@ def test_recommend_bid_requires_lead_ping_id(client, log_store):
     assert log_store.recent(limit=10) == []
 
 
+def test_recommend_bid_no_viable_bid_returns_200_null(client, log_store):
+    # When expected_revenue is too low to clear the floor at the target margin,
+    # the optimizer produces no candidate bids and returns np.nan values. The
+    # response must be a clean 200 with recommended_bid: null -- NOT a 500 from
+    # NaN hitting Starlette's allow_nan=False JSON encoder (regression guard).
+    _promote_constant_model()
+
+    resp = client.post("/recommend_bid", json={**PAYLOAD, "expected_revenue": 0.10})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["recommended_bid"] is None
+    assert body["recommended_bid_predicted_win_rate"] is None
+
+
 def test_recommend_bid_cold_start_logs_null_model_fields(client, log_store):
     # No model ever saved/promoted -- true cold start.
     resp = client.post("/recommend_bid", json=PAYLOAD)

@@ -1331,7 +1331,14 @@ if _FASTAPI_AVAILABLE:
                 result.get("recommended_bid_predicted_win_rate"),
             )
 
-        return result
+        # Sanitize before returning: the "no viable bid" path yields np.nan for
+        # recommended_bid / win_rate / profit (optimizer.empty_result), and
+        # Starlette's JSON encoder runs with allow_nan=False -- an un-sanitized
+        # NaN 500s the request at serialization time (after the handler already
+        # succeeded). _json_safe maps non-finite floats to None, so this returns
+        # the documented 200 with recommended_bid: null. Same guard /explain_bid
+        # already applies to its SHAP payload.
+        return _json_safe(result)
 
     def _prediction_output_from_log(row: dict):
         """Rebuild a ``server.explain.PredictionOutput`` from a logged row."""

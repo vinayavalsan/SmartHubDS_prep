@@ -395,3 +395,19 @@ def test_load_model_and_manifest_env_override_has_no_manifest(tmp_path, monkeypa
     model, manifest = predict.load_model_and_manifest(lead_type_id("auto"))
     assert model.win_rate == pytest.approx(0.7)
     assert manifest is None
+
+
+def test_json_safe_sanitizes_no_viable_bid_result():
+    """The 'no viable bid' path returns np.nan for the bid fields
+    (optimizer.empty_result); _json_safe must map those to None so the
+    /recommend_bid response serializes as 200 + recommended_bid: null instead
+    of 500-ing on Starlette's allow_nan=False encoder. Regression guard for the
+    NaN-serialization bug found via the API smoke test."""
+    raw = optimizer.empty_result(75.0)
+    assert np.isnan(raw["recommended_bid"])  # precondition: it really is NaN
+
+    safe = predict._json_safe(raw)
+    assert safe["recommended_bid"] is None
+    assert safe["recommended_bid_predicted_win_rate"] is None
+    assert safe["recommended_bid_expected_profit"] is None
+    assert safe["max_bid"] == 75.0  # finite values pass through untouched
