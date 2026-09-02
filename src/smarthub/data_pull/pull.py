@@ -217,9 +217,23 @@ def run(
 
         ids = list(lead_type_ids or [None])
         for lead_type_id in ids:
-            pull_and_persist_prediction_logs(
-                min_created_at, max_created_at, lead_type_id
-            )
+            try:
+                pull_and_persist_prediction_logs(
+                    min_created_at, max_created_at, lead_type_id
+                )
+            except Exception as exc:  # noqa: BLE001 - never fail the raw pull
+                # The prediction-log DB (Postgres) may be unreachable -- e.g. a
+                # local run with no DB connection. That must NOT fail the pull:
+                # the raw leads are already persisted above. Log and move on, so
+                # `--include-prediction-logs` is safe to pass anywhere. (Mirrors
+                # the Prefect flow's pull_prediction_logs task, which is wrapped
+                # for the same reason.)
+                logger.warning(
+                    "Prediction-log pull skipped for lead_type_id=%s (%s); "
+                    "the raw pull already persisted successfully.",
+                    lead_type_id,
+                    exc,
+                )
     return leads_df
 
 
