@@ -145,18 +145,32 @@ def test_recommend_bid_threads_lead_ping_id_through_to_log_row(client, log_store
     assert resp.json()["prediction_id"] == row["prediction_id"]
 
 
-def test_recommend_bid_allows_missing_lead_ping_id(client, log_store):
-    # Per DS sync 2026-08-25, lead_ping_id is logging-only and optional: a
-    # request without it must still be scored, and the log row records null.
+def test_recommend_bid_requires_lead_ping_id(client, log_store):
+    # lead_ping_id is required: it's the join key linking a prediction to its
+    # raw lead/outcome for post-bid monitoring, so a request without it is
+    # rejected (422) and nothing is logged.
     _promote_constant_model()
     payload = {key: value for key, value in PAYLOAD.items() if key != "lead_ping_id"}
 
     resp = client.post("/recommend_bid", json=payload)
 
+    assert resp.status_code == 422
+    assert log_store.recent(limit=10) == []
+
+
+def test_recommend_bid_no_viable_bid_returns_200_null(client, log_store):
+    # When expected_revenue is too low to clear the floor at the target margin,
+    # the optimizer produces no candidate bids and returns np.nan values. The
+    # response must be a clean 200 with recommended_bid: null -- NOT a 500 from
+    # NaN hitting Starlette's allow_nan=False JSON encoder (regression guard).
+    _promote_constant_model()
+
+    resp = client.post("/recommend_bid", json={**PAYLOAD, "expected_revenue": 0.10})
+
     assert resp.status_code == 200
-    assert resp.json()["lead_ping_id"] is None
-    row = log_store.recent(limit=10)[0]
-    assert row["lead_ping_id"] is None
+    body = resp.json()
+    assert body["recommended_bid"] is None
+    assert body["recommended_bid_predicted_win_rate"] is None
 
 
 def test_recommend_bid_cold_start_logs_null_model_fields(client, log_store):

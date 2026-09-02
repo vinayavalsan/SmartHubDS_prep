@@ -619,8 +619,10 @@ def bid_curve_around(
 
 
 try:
-    from fastapi import BackgroundTasks, FastAPI, HTTPException
+    from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
     from pydantic import BaseModel, Field, model_validator
+
+    from smarthub.server.auth import require_api_key
 
     _FASTAPI_AVAILABLE = True
 except ImportError:  # pragma: no cover - API dependencies are optional
@@ -645,13 +647,16 @@ if _FASTAPI_AVAILABLE:
         traffic_tier: str
         created_at: datetime
 
-        # Logging-only identifiers (per DS sync 2026-08-25): account_id and
-        # lead_ping_id are never predictive features and are used only for
-        # log/join purposes, so they stay OPTIONAL — a missing one must not block
-        # a bid. account_id is a grouping parent of campaign_id (the campaign
-        # carries the predictive signal), so it adds no model value on its own.
+        # Traceability identifiers. Neither is a predictive feature.
+        # lead_ping_id is REQUIRED: it is the join key that links a prediction
+        # back to its raw lead/outcome for post-bid monitoring (the monitoring
+        # dataset is built by joining smarthub_prediction_log.lead_ping_id to
+        # lead_pings.id), so a prediction without it can't be evaluated.
+        # account_id stays OPTIONAL — it's only a grouping parent of campaign_id
+        # (which carries the predictive signal), so a missing one must not block
+        # a bid.
+        lead_ping_id: int
         account_id: int | None = None
-        lead_ping_id: int | None = None
 
         # Response control (NOT a feature -- never affects the bid). When true,
         # the response also returns the full decision payload the prediction log
@@ -1131,7 +1136,7 @@ if _FASTAPI_AVAILABLE:
                 exc_info=True,
             )
 
-    @app.post("/recommend_bid")
+    @app.post("/recommend_bid", dependencies=[Depends(require_api_key)])
     def recommend_bid(request: BidRequest, background_tasks: BackgroundTasks):
         """Return the expected-profit-maximizing bid for one request.
 
@@ -1326,7 +1331,14 @@ if _FASTAPI_AVAILABLE:
                 result.get("recommended_bid_predicted_win_rate"),
             )
 
-        return result
+        # Sanitize before returning: the "no viable bid" path yields np.nan for
+        # recommended_bid / win_rate / profit (optimizer.empty_result), and
+        # Starlette's JSON encoder runs with allow_nan=False -- an un-sanitized
+        # NaN 500s the request at serialization time (after the handler already
+        # succeeded). _json_safe maps non-finite floats to None, so this returns
+        # the documented 200 with recommended_bid: null. Same guard /explain_bid
+        # already applies to its SHAP payload.
+        return _json_safe(result)
 
     def _prediction_output_from_log(row: dict):
         """Rebuild a ``server.explain.PredictionOutput`` from a logged row."""
@@ -1357,7 +1369,7 @@ if _FASTAPI_AVAILABLE:
             lead_ping_id=row.get("lead_ping_id"),
         )
 
-    @app.post("/explain_bid")
+    @app.post("/explain_bid", dependencies=[Depends(require_api_key)])
     def explain_bid_route(request: ExplainRequest):
         """Explain an already-computed prediction, by id (production mode).
 

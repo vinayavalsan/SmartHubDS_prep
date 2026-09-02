@@ -26,48 +26,85 @@ import statistics
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 import requests
 
-# Sample /recommend_bid request (matches server/manual_api_check.py).
+_CREATED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+# Pool of REAL lead ids sampled from the leads store, used as lead_ping_id so the
+# predictions join to real leads/outcomes in the monitoring dataset. Falls back
+# to synthetic ids if the store isn't reachable (e.g. running outside a container
+# with data). Loaded lazily and cached.
+_LEAD_ID_POOL: list[int] | None = None
+
+
+def _lead_ids() -> list[int]:
+    global _LEAD_ID_POOL
+    if _LEAD_ID_POOL is None:
+        try:
+            from smarthub.core import storage
+            from smarthub.core.config import StorageSettings
+
+            leads = storage.load_window_raw(
+                StorageSettings.from_env(), 30, columns=["id", "lead_type_id"]
+            )
+            import pandas as pd
+
+            ids = (
+                pd.to_numeric(
+                    leads.loc[leads["lead_type_id"] == 6, "id"], errors="coerce"
+                )
+                .dropna()
+                .astype("int64")
+                .tolist()
+            )
+            _LEAD_ID_POOL = ids or list(range(1, 5001))
+        except Exception:
+            _LEAD_ID_POOL = list(range(1, 5001))
+    return _LEAD_ID_POOL
+
+
+# Sample /recommend_bid request matching the CURRENT required contract
+# (expected_revenue, lead_type_id, campaign_id, source_type_id, traffic_tier,
+# state, created_at, lead_ping_id). Optional lead features included for realism.
 PAYLOAD = {
     "expected_revenue": 25.00,
     "target_cm": 0.25,
     "min_bid": 0.00,
     "bid_step": 0.25,
-    "campaign_id": 12345,
     "lead_type_id": 6,
-    "created_hour": 14,
-    "created_dayofweek": 2,
+    "campaign_id": 40088,
+    "source_type_id": 574,
+    "traffic_tier": "tier_2",
     "state": "TX",
+    "created_at": _CREATED_AT,
+    "lead_ping_id": 1,
     "insured": "true",
     "home_owner": "false",
     "dui": "false",
     "num_vehicles": 2,
-    "num_drivers": 2,
-    "num_auto_violations": 0,
     "num_auto_accidents": 0,
-    "continuous_coverage_months": 24,
-    "military_affiliation": "false",
-    "gender": "Female",
-    "marital_status": "Single",
     "age": 34,
 }
 
 
 def gen_payload() -> dict:
     """Randomized but valid /recommend_bid request (auto lead type) so a run
-    sweeps the model across scenarios instead of repeating one input."""
+    sweeps the model across scenarios. Uses a real lead id as lead_ping_id so the
+    prediction joins to a real lead/outcome in the monitoring dataset."""
     return {
         "expected_revenue": round(random.uniform(5, 60), 2),
         "target_cm": round(random.uniform(0.15, 0.40), 3),
         "min_bid": 0.00,
         "bid_step": 0.25,
-        "campaign_id": random.choice([12345, 22221, 33310, 40088]),
         "lead_type_id": 6,
-        "created_hour": random.randint(0, 23),
-        "created_dayofweek": random.randint(0, 6),
+        "campaign_id": random.choice([12345, 22221, 33310, 40088]),
+        "source_type_id": random.choice([21, 24, 54, 574, 25051]),
+        "traffic_tier": random.choice(["tier_1", "tier_2", "tier_3"]),
         "state": random.choice(["TX", "CA", "FL", "NY", "OH", "GA", "PA", "IL"]),
+        "created_at": _CREATED_AT,
+        "lead_ping_id": random.choice(_lead_ids()),
         "insured": random.choice(["true", "false"]),
         "home_owner": random.choice(["true", "false"]),
         "dui": random.choice(["true", "false"]),

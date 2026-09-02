@@ -91,6 +91,26 @@ def load_leads_window(days: int) -> pd.DataFrame:
     return transforms.prepare_leads_frame(raw)
 
 
+def load_monitoring_window(days: int | None = None) -> pd.DataFrame:
+    """Load the persisted prediction-monitoring dataset for ``monitoring_app``.
+
+    This is the joined prediction-log + lead/outcome data written by the
+    ``--include-prediction-logs`` pull. Reads straight from storage — no
+    prediction-log DB connection required.
+
+    Inputs
+    ------
+    days : int | None
+        Trailing window by ``created_at``; full dataset when ``None``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Monitoring rows (empty when the pull has not populated it yet).
+    """
+    return storage.load_monitoring(StorageSettings.from_env(), days=days)
+
+
 def save_leads(df: pd.DataFrame, path: str | os.PathLike[str] | None = None) -> Path:
     """Write the leads frame to Parquet, creating parent dirs as needed.
 

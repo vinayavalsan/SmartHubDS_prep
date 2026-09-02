@@ -641,6 +641,178 @@ def save_pull(df: pd.DataFrame, settings: StorageSettings) -> dict[str, object]:
     return results
 
 
+MONITORING_TABLE = "prediction_monitoring"
+MONITORING_KEY = "prediction_id"
+
+
+def read_leads_outcomes(
+    lead_ids,
+    settings: StorageSettings | None = None,
+    columns=("id", "won", "rev", "exp_rev"),
+    table: str = LEADS_TABLE,
+    path: str | os.PathLike[str] | None = None,
+) -> pd.DataFrame:
+    """Fetch outcome rows for a specific set of lead ids (memory-flat).
+
+    Used by the prediction-log join: only the leads referenced by the pulled
+    predictions are read, so memory is bounded by the (small) prediction window
+    rather than a wide time window scan.
+
+    Inputs
+    ------
+    lead_ids : Iterable[int]
+        Lead ids to fetch (``lead_pings.id`` values); de-duplicated internally.
+    columns : Sequence[str]
+        Columns to project (must include ``id``).
+    table : str
+        Source table.
+    path : str | os.PathLike[str] | None
+        DuckDB file path; default location when omitted.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Matching rows (empty frame with ``columns`` when nothing matches).
+    """
+    ids = sorted({int(x) for x in lead_ids if pd.notna(x)})
+    if not ids:
+        return pd.DataFrame(columns=list(columns))
+
+    settings = settings or StorageSettings.from_env()
+    duck_path = path or settings.duckdb_path
+
+    # Honour the configured backend (a stale leads.duckdb may exist on disk even
+    # when STORAGE_BACKEND=parquet — don't read outcomes from it). DuckDB is only
+    # the query engine; it reads Parquet directly and stays memory-flat.
+    if settings.use_duckdb and duckdb_exists(table=table, path=duck_path):
+        con = _connect(duck_path)
+        try:
+            cols_sql = _projection(con, table, list(columns))
+            con.register("wanted_ids", pd.DataFrame({"wid": ids}))
+            return con.execute(
+                f'SELECT {cols_sql} FROM "{table}" SEMI JOIN wanted_ids ON id = wid'
+            ).df()
+        finally:
+            con.close()
+
+    if settings.use_parquet and parquet_exists(settings.parquet_dir):
+        glob = str(paths.resolve(settings.parquet_dir) / "*" / "*" / "*.parquet")
+        con = duckdb.connect()
+        try:
+            available = set(
+                con.execute(
+                    f"SELECT * FROM read_parquet('{glob}', union_by_name=true) LIMIT 0"
+                )
+                .df()
+                .columns
+            )
+            proj = ", ".join(c for c in columns if c in available) or "id"
+            con.register("wanted_ids", pd.DataFrame({"wid": ids}))
+            return con.execute(
+                f"SELECT {proj} FROM read_parquet('{glob}', union_by_name=true) "
+                f"SEMI JOIN wanted_ids ON id = wid"
+            ).df()
+        finally:
+            con.close()
+
+    return pd.DataFrame(columns=list(columns))
+
+
+def _monitoring_parquet_path(settings: StorageSettings) -> Path:
+    """Single-file Parquet location for the monitoring dataset.
+
+    Placed alongside the raw leads Parquet dataset (sibling directory) so it
+    lives with the rest of the pull's storage and stays isolated per config.
+    """
+    return (
+        paths.resolve(settings.parquet_dir).parent
+        / "monitoring_datasets"
+        / "prediction_monitoring.parquet"
+    )
+
+
+def save_monitoring(df: pd.DataFrame, settings: StorageSettings) -> dict[str, object]:
+    """Upsert the joined monitoring dataset, keyed on ``prediction_id``.
+
+    Honours the configured backend so it matches the raw pull: DuckDB when
+    enabled (native upsert), Parquet when enabled (read-merge-rewrite, atomic).
+    The upsert is what lets a later pull fill in an outcome that resolved after
+    the prediction was made, rather than appending duplicates. No-op on empty.
+
+    Returns row counts / locations written.
+    """
+    if df is None or df.empty:
+        return {"monitoring_rows": 0}
+
+    result: dict[str, object] = {}
+    if settings.use_duckdb:
+        result["monitoring_rows"] = append_duckdb(
+            df, table=MONITORING_TABLE, key=MONITORING_KEY, path=settings.duckdb_path
+        )
+        result["duckdb_path"] = str(duckdb_path(settings.duckdb_path))
+    if settings.use_parquet:
+        target = _monitoring_parquet_path(settings)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            existing = pd.read_parquet(target)
+            # Align columns so concat doesn't warn on all-NA-column dtype changes.
+            all_cols = existing.columns.union(df.columns)
+            combined = pd.concat(
+                [existing.reindex(columns=all_cols), df.reindex(columns=all_cols)],
+                ignore_index=True,
+            )
+        else:
+            combined = df
+        combined = _dedupe(combined, key=MONITORING_KEY)
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".parquet.tmp")
+        os.close(fd)
+        combined.to_parquet(tmp, index=False)
+        os.replace(tmp, target)
+        result["monitoring_rows"] = int(len(combined))
+        result["parquet_path"] = str(target)
+    return result
+
+
+def load_monitoring(
+    settings: StorageSettings,
+    days: int | None = None,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Load the persisted monitoring dataset for ``monitoring_app``.
+
+    Reads from whichever backend the pull wrote (DuckDB preferred, else
+    Parquet). ``days`` restricts to a trailing window by ``created_at``.
+
+    Returns an empty frame when nothing has been persisted yet.
+    """
+    if settings.use_duckdb and duckdb_exists(
+        table=MONITORING_TABLE, path=settings.duckdb_path
+    ):
+        if days is None:
+            return read_duckdb_table(
+                MONITORING_TABLE, path=settings.duckdb_path, columns=columns
+            )
+        return read_duckdb_window(
+            days,
+            table=MONITORING_TABLE,
+            time_col="created_at",
+            path=settings.duckdb_path,
+            columns=columns,
+        )
+
+    if settings.use_parquet:
+        target = _monitoring_parquet_path(settings)
+        if target.exists():
+            df = pd.read_parquet(target, columns=columns)
+            if days is not None and "created_at" in df.columns:
+                created = pd.to_datetime(df["created_at"], errors="coerce")
+                if created.notna().any():
+                    cutoff = created.max() - pd.Timedelta(days=days)
+                    df = df[created >= cutoff]
+            return df
+    return pd.DataFrame()
+
+
 def load_leads_raw(
     settings: StorageSettings, columns: list[str] | None = None
 ) -> pd.DataFrame:

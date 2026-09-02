@@ -219,6 +219,27 @@ def update_watermark(df: pd.DataFrame, var_name: str, window_max: str) -> str:
     return new_value
 
 
+@task(name="pull-prediction-logs")
+def pull_prediction_logs(min_s: str, max_s: str, lead_type_id: int) -> dict:
+    """Pull prediction logs for the window, join to raw outcomes, persist.
+
+    Reuses the same watermark-driven window as the raw pull (so it stays
+    incremental); the monitoring persist upserts on ``prediction_id``, making
+    re-pulled/overlapping windows idempotent. Never raises out of the flow — a
+    prediction-log hiccup must not fail the raw pull.
+    """
+    logger = get_run_logger()
+    try:
+        from smarthub.data_pull.prediction_logs import (
+            pull_and_persist_prediction_logs,
+        )
+
+        return pull_and_persist_prediction_logs(min_s, max_s, lead_type_id)
+    except Exception as exc:  # noqa: BLE001 - never break the raw pull
+        logger.warning("Prediction-log pull skipped (error): %s", exc)
+        return {"prediction_rows": 0, "monitoring_rows": 0, "error": str(exc)}
+
+
 @flow(name="smarthub-data-pull", on_failure=[notifications.flow_failure_hook])
 def data_pull_flow(
     lead_type_id: int = 6,
@@ -226,6 +247,7 @@ def data_pull_flow(
     default_lookback_hours: float = 168.0,
     with_expected_revenue: bool = True,
     selected_only: bool = True,
+    include_prediction_logs: bool = False,
 ) -> dict:
     """Scheduled pull for ONE lead type: resolve, fetch, persist, watermark.
 
@@ -266,6 +288,10 @@ def data_pull_flow(
     quality = validate(raw_df, df, lead_type_id)
     result = persist(df)
     watermark = update_watermark(df, var_name, max_s)
+
+    if include_prediction_logs:
+        predlog = pull_prediction_logs(min_s, max_s, lead_type_id)
+        logger.info("[%s] prediction-log monitoring: %s", lead_type_name, predlog)
 
     logger.info(
         "[%s] persisted %s; watermark now %s", lead_type_name, result, watermark
