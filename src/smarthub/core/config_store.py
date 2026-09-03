@@ -36,8 +36,15 @@ ENVIRONMENTS = ("staging", "prod")
 
 
 def config_db_url() -> str:
-    """Return the config DB URL from the environment, or the default."""
-    return os.getenv("SMARTHUB_CONFIG_DB_URL", DEFAULT_CONFIG_DB_URL)
+    """Return the config DB URL from the environment, or the default.
+
+    When the optional DB SSH tunnel is enabled (``SMARTHUB_DB_SSH_TUNNEL``), the
+    URL is rewritten to the tunnel's localhost endpoint so a local run can reach
+    the EC2 Postgres.
+    """
+    from smarthub.core.db_tunnel import resolve_db_url
+
+    return resolve_db_url(os.getenv("SMARTHUB_CONFIG_DB_URL", DEFAULT_CONFIG_DB_URL))
 
 
 class ConfigError(ValueError):
