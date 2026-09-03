@@ -15,7 +15,8 @@ means and what Anton is solving), see [CONTEXT.md](./docs/CONTEXT.md).
 │   ├── feature_engineering/      # STEP 2: features + flow (Prefect)
 │   ├── train_and_predict/        # STEP 3: train, registry, optimizer, explain, flow (Prefect)
 │   ├── server/                   # FastAPI bid-recommendation API (predict.py) -- see docker/Dockerfile.serve
-│   └── monitoring/               # Streamlit multipage app (leads, monitoring, config)
+│   ├── monitoring/               # Streamlit multipage app (leads, monitoring, config)
+│   └── model_diagnostics/        # STANDALONE post-training diagnostics app (by MLflow run_id)
 ├── config/                       # smarthub.yaml (task configs) + holidays.json (is_workday calendar)
 ├── docker/                       # Dockerfile.app, Dockerfile.worker, Dockerfile.serve,
 │                                 #   worker-entrypoint.sh, nginx/nginx.conf
@@ -455,6 +456,35 @@ registry.rollback("auto")                      # repoint at the prior version
 registry.rollback("auto", to_version="v1_2026-07-01T050000Z")  # or a specific one
 ```
 
+### Post-training model diagnostics (separate app)
+
+A **standalone** Streamlit app (`smarthub.model_diagnostics`) for reviewing a
+training run's evaluation artifacts (the held-out bid-optimizer diagnostics) —
+kept deliberately separate from the production monitoring dashboards. It runs as
+its own `model-diagnostics` service on a **dedicated port** —
+**http://localhost:8511** — not a page inside the monitoring app.
+
+- **One app for every run.** It lists MLflow training runs and gives a dropdown
+  to pick one; evaluation artifacts are loaded by **MLflow `run_id`** (it
+  downloads the run's `reports/` artifacts via `MlflowClient`), not by walking
+  `data/model_evaluations`. Because it addresses artifacts by run, the artifact
+  store stays transparent — local `mlruns` file store today, S3 later, no code
+  change. A local-folder mode remains as a dev fallback.
+- **Deep link from MLflow.** Opening `…:8511/?run_id=<mlflow_run_id>`
+  preselects that run (you can still switch). Set
+  `SMARTHUB_MODEL_DIAGNOSTICS_URL` in `.env` and each training run gets an MLflow
+  tag `model_diagnostics_url = <base>?run_id=<run_id>`, so you can jump straight
+  from a run in the MLflow UI to its diagnostics.
+- **Config.** The service reads run metadata from the shared Postgres `mlflow`
+  DB (`SMARTHUB_MLFLOW_TRACKING_URI`) and mounts `./data` for the file-store
+  artifacts. Open on the internal network, like the other dashboards.
+
+Run it locally:
+
+```bash
+streamlit run src/smarthub/model_diagnostics/app.py
+```
+
 ### Run a stage manually (no schedule / no worker)
 
 The whole pipeline runs on the Prefect schedule, but you can also run any stage
@@ -818,6 +848,21 @@ The `monitoring_app` reads the dataset back via
 `prefect/prefect@postgres:5432/prefect`). Code lives in
 `data_pull/prediction_logs.py`; persistence/read in `core/storage.py`
 (`save_monitoring` / `load_monitoring`) and `core/io.py`.
+
+**Reaching the DB from a local run.** The stack Postgres (which holds
+`smarthub_prediction_log`) isn't exposed publicly, so a local
+`data-pull --include-prediction-logs` can't connect by default. Turn on the
+optional SSH tunnel (`core/db_tunnel.py`): set `SMARTHUB_DB_SSH_TUNNEL=true` in
+`.env` (it reuses `SSH_HOST` / `SSH_PRIVATE_KEY_PATH`, override with
+`SMARTHUB_DB_SSH_*`), and `prediction_log_db_url()` / `config_db_url()` are
+transparently rewritten to a localhost port forwarded to the remote Postgres —
+no other change needed. It requires Postgres reachable on the SSH host, so
+publish it on the EC2 loopback (add `ports: ["127.0.0.1:5432:5432"]` to the
+`postgres` service and recreate it). Off by default; prod and tests are
+unaffected. Note `monitoring_app` itself reads the persisted parquet, not the
+DB — the tunnel is only needed to *build* that parquet locally (or just copy
+`data/raw_datasets/monitoring_datasets/prediction_monitoring.parquet` off EC2
+once the scheduled pull has produced it).
 
 ## Slack notifications
 

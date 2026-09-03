@@ -245,6 +245,46 @@ services:
     volumes:
       - ./data:/app/data
 
+  # Post-training model diagnostics -- a SEPARATE Streamlit app from the
+  # monitoring dashboard above, for reviewing model-evaluation artifacts after a
+  # production training run. Dedicated port/URL; NOT a page in the monitoring
+  # app. Loads evaluation artifacts by MLflow run_id (dropdown), so one hosted
+  # app covers every run; open it as `?run_id=<id>` to preselect a run (the
+  # MLflow deep-link tag points here). Uses the worker image (has mlflow), reads
+  # run metadata from the shared Postgres `mlflow` DB, and mounts ./data for the
+  # file-store artifacts (transparent if artifacts later move to S3).
+  model-diagnostics:
+    container_name: smarthub-model-diagnostics
+    restart: unless-stopped
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
+    tty: true
+    stdin_open: true
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      # MLflow metadata (run list) -- the shared Postgres `mlflow` DB, same as
+      # mlflow-ui's backend store. Artifacts resolve from each run's own
+      # artifact_location (the ./data/mlruns file store mounted below).
+      SMARTHUB_MLFLOW_TRACKING_URI: postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
+    command:
+      - streamlit
+      - run
+      - src/smarthub/model_diagnostics/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8502
+      - --server.headless=true
+      - --server.fileWatcherType=none
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8511:8502"                 # http://localhost:8511  (Model diagnostics)
+    volumes:
+      - ./data:/app/data
+
   # Local LLM for /explain_bid's plain-English narrative (and, since
   # 2026-07-23, nothing else -- /recommend_bid's background SHAP enrichment
   # deliberately skips the LLM call, see docs/CHANGELOG.md). No `ports:` --
