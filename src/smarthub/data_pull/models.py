@@ -24,7 +24,6 @@ from sqlalchemy import (
     Numeric,
     Select,
     String,
-    func,
     select,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -47,8 +46,7 @@ class LeadPing(Base):
     """A row in ``public.lead_pings`` — one ping (lead offer) and our bid back.
 
     ``account_id`` here is the **upstream partner**; ``bid`` is what we pay the
-    partner; ``rev`` is our realized revenue. Expected revenue is *not* on this
-    table — it is derived from ``lead_ping_listings.est_payout`` (see below).
+    partner; ``rev`` is our realized revenue; ``exp_rev`` is our expected revenue.
     """
 
     __tablename__ = "lead_pings"
@@ -217,6 +215,27 @@ def coerce_leads_dtypes(df: pd.DataFrame) -> pd.DataFrame:
             out[name] = pd.to_numeric(out[name], errors="coerce").astype("float64")
         elif isinstance(col_type, (Date, DateTime)):
             out[name] = pd.to_datetime(out[name], errors="coerce")
+
+    # Canonical revenue aliases come directly from lead_pings.
+    if "exp_rev" in out.columns:
+        out["expected_revenue"] = pd.to_numeric(out["exp_rev"], errors="coerce")
+    if "rev" in out.columns:
+        out["realized_revenue"] = pd.to_numeric(out["rev"], errors="coerce").fillna(0.0)
+
+    # Canonical realized-economics rule:
+    # a cost is incurred only when the lead was sold to at least one buyer.
+    #
+    #     sold     = 1 when accepted_listings > 0, else 0
+    #     bid_cost = sold * bid
+    #     profit   = realized_revenue - bid_cost
+    if {"accepted_listings", "rev", "bid"}.issubset(out.columns):
+        accepted_listings = pd.to_numeric(out["accepted_listings"], errors="coerce")
+        realized_revenue = pd.to_numeric(out["rev"], errors="coerce").fillna(0.0)
+        bid = pd.to_numeric(out["bid"], errors="coerce")
+        out["sold"] = accepted_listings.fillna(0).gt(0).astype("Int64")
+        out["bid_cost"] = out["sold"].astype("float64") * bid
+        out["profit"] = realized_revenue - out["bid_cost"]
+
     return out
 
 
@@ -254,78 +273,21 @@ def leads_select(
     return stmt.order_by(LeadPing.created_at)
 
 
-def expected_revenue_subquery(selected_only: bool = True):
-    """Per-ping expected revenue aggregated from the listings.
-
-    Sums ``est_payout`` (expected buyer payment = expected revenue) and
-    ``payout`` (realized) per ``lead_ping_id``. ASSUMPTION (confirm with the
-    team): expected revenue is the sum over ``selected = 'true'`` listings; set
-    ``selected_only=False`` to sum over all listings instead. See CONTEXT.md §4
-    open questions.
-
-    Inputs
-    ------
-    selected_only : bool
-        Sum over selected listings only when ``True``; all listings otherwise.
-
-    Returns
-    -------
-    sqlalchemy.Subquery
-        Subquery aliased ``listing_expected_revenue``.
-    """
-    stmt = select(
-        LeadPingListing.lead_ping_id.label("lead_ping_id"),
-        func.sum(LeadPingListing.est_payout).label("expected_revenue"),
-        func.sum(LeadPingListing.payout).label("realized_payout"),
-        func.count().label("num_selected_listings"),
-    ).group_by(LeadPingListing.lead_ping_id)
-    if selected_only:
-        stmt = stmt.where(LeadPingListing.selected == TRUE_TOKEN)
-    return stmt.subquery("listing_expected_revenue")
-
-
 def leads_with_expected_revenue_select(
     min_created_at: DateLike,
     max_created_at: DateLike,
     selected_only: bool = True,
     lead_type_ids: LeadTypeIds = None,
 ) -> Select:
-    """Leads query LEFT JOINed to per-ping expected revenue from the listings.
+    """Build the leads query used by the pull pipeline.
 
-    Adds ``expected_revenue``, ``realized_payout`` and
-    ``num_selected_listings`` columns. Pings with no matching listings get
-    NULLs (outer join).
-
-    Inputs
-    ------
-    min_created_at : str | datetime
-        Inclusive lower bound for ``created_at``.
-    max_created_at : str | datetime
-        Exclusive upper bound for ``created_at``.
-    selected_only : bool
-        Aggregate expected revenue over selected listings only.
-    lead_type_ids : int | Sequence[int] | None
-        Restrict to one or more lead types. ``None`` applies no lead-type filter.
-
-    Returns
-    -------
-    sqlalchemy.Select
-        Ordered SELECT with the expected-revenue columns joined in.
+    ``expected_revenue`` is sourced from ``lead_pings.exp_rev`` during dtype
+    coercion. ``selected_only`` is retained for call-site compatibility but no
+    listing join is required.
     """
-    lower, upper = _as_datetime(min_created_at), _as_datetime(max_created_at)
-    subq = expected_revenue_subquery(selected_only)
-    stmt = (
-        select(
-            *LEADS_COLUMNS,
-            subq.c.expected_revenue,
-            subq.c.realized_payout,
-            subq.c.num_selected_listings,
-        )
-        .outerjoin(subq, subq.c.lead_ping_id == LeadPing.id)
-        .where(LeadPing.created_at >= lower)
-        .where(LeadPing.created_at < upper)
+    del selected_only
+    return leads_select(
+        min_created_at=min_created_at,
+        max_created_at=max_created_at,
+        lead_type_ids=lead_type_ids,
     )
-    if lead_type_ids is not None:
-        ids = [lead_type_ids] if isinstance(lead_type_ids, int) else list(lead_type_ids)
-        stmt = stmt.where(LeadPing.lead_type_id.in_(ids))
-    return stmt.order_by(LeadPing.created_at)

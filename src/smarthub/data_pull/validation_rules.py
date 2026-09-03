@@ -34,7 +34,10 @@ EXPECTED_COLUMNS: tuple[str, ...] = tuple(field_registry.field_names())
 ALLOWED_DERIVED_COLUMNS: frozenset[str] = frozenset(
     {
         "expected_revenue",
-        "realized_payout",
+        "realized_revenue",
+        "sold",
+        "bid_cost",
+        "profit",
         "num_selected_listings",
     }
 )
@@ -388,6 +391,49 @@ def cross_field_checks(df: pd.DataFrame) -> dict[str, int]:
         accepted = _lower(df["accepted"]).isin({"true", "t", "1", "yes", "y"})
         out["accepted_but_won_null"] = int((accepted & (won == "")).sum())
 
+    # Historical acquisition cost must not exceed the expected revenue available
+    # for the lead. Cost is incurred only when the lead was sold to at least one
+    # buyer (`accepted_listings > 0`), and `bid_cost` is derived accordingly.
+    if present("bid_cost") and present("expected_revenue"):
+        bid_cost = pd.to_numeric(df["bid_cost"], errors="coerce")
+        expected_revenue = pd.to_numeric(df["expected_revenue"], errors="coerce")
+        known = bid_cost.notna() & expected_revenue.notna()
+        out["bid_cost_exceeds_expected_revenue"] = int(
+            (known & bid_cost.gt(expected_revenue)).sum()
+        )
+
+    # Flag negative historical profit. Profit is derived during the data pull as
+    # realized_revenue - bid_cost, where bid_cost = sold * bid. A negative value
+    # on a sold lead is a real marketplace outcome, but is still useful to quantify.
+    if present("profit"):
+        profit = pd.to_numeric(df["profit"], errors="coerce")
+        out["negative_profit"] = int((profit.notna() & profit.lt(0)).sum())
+
+    # A won lead can legitimately produce no realized revenue when it is never
+    # sold downstream, so `won` alone is not a revenue-integrity condition.
+    # If the lead *was* sold (`accepted_listings > 0`) but realized no revenue,
+    # flag it for investigation.
+    if present("sold") and present("realized_revenue"):
+        sold = pd.to_numeric(df["sold"], errors="coerce")
+        realized_revenue = pd.to_numeric(df["realized_revenue"], errors="coerce")
+        known = sold.notna() & realized_revenue.notna()
+        out["sold_with_no_realized_revenue"] = int(
+            (known & sold.eq(1) & realized_revenue.le(0)).sum()
+        )
+
+        # Realized revenue must only exist for leads that were actually sold.
+        # This is the direct business-integrity form of the invariant
+        # realized_revenue == sold * realized_revenue.
+        out["realized_revenue_without_sale"] = int(
+            (known & sold.eq(0) & realized_revenue.gt(0)).sum()
+        )
+
+    # `realized_revenue < expected_revenue` is not a data-quality violation:
+    # expected revenue is an up-front reject-discounted estimate across matched
+    # buyers, while realized revenue reflects the buyers who actually accepted.
+    # Likewise, a sold lead can legitimately realize less revenue than its bid;
+    # that outcome is captured by the separate `negative_profit` metric above.
+
     # num_vehicles and multi_vehicle must agree when both are present.
     # Missing values are handled separately by the missingness rules.
     if present("num_vehicles") and present("multi_vehicle"):
@@ -456,6 +502,53 @@ def batch_metrics(df: pd.DataFrame) -> dict:
     if "exp_rev" in df.columns:
         er = pd.to_numeric(df["exp_rev"], errors="coerce")
         m["exp_rev_coverage"] = _rate(int((er > 0).sum()), n)
+
+    # Diagnostic only: realized revenue can legitimately come in below expected
+    # revenue when a ping is matched to multiple buyers but fewer buyers actually
+    # accept. Track this on sold leads rather than treating it as a validation
+    # violation.
+    if "realized_revenue" in df.columns and "expected_revenue" in df.columns:
+        realized_revenue = pd.to_numeric(df["realized_revenue"], errors="coerce")
+        expected_revenue = pd.to_numeric(df["expected_revenue"], errors="coerce")
+
+        if "sold" in df.columns:
+            sold = pd.to_numeric(df["sold"], errors="coerce").eq(1)
+        elif "accepted_listings" in df.columns:
+            accepted_listings = pd.to_numeric(df["accepted_listings"], errors="coerce")
+            sold = accepted_listings.gt(0)
+        else:
+            sold = pd.Series(False, index=df.index)
+
+        known = realized_revenue.notna() & expected_revenue.notna()
+        sold_known = sold & known
+        below_expected = sold_known & realized_revenue.lt(expected_revenue)
+
+        sold_count = int(sold.sum())
+        sold_known_count = int(sold_known.sum())
+        below_expected_count = int(below_expected.sum())
+        sold_no_revenue = sold & realized_revenue.fillna(0.0).le(0)
+        sold_no_revenue_count = int(sold_no_revenue.sum())
+        m["sold_count"] = sold_count
+        m["sold_with_no_realized_revenue_count"] = sold_no_revenue_count
+        m["sold_with_no_realized_revenue_rate"] = (
+            float(sold_no_revenue_count / sold_count) if sold_count else 0.0
+        )
+
+        if "won" in df.columns:
+            won = auction.won_true_mask(df)
+            won_count = int(won.sum())
+            sold_and_won_count = int((sold & won).sum())
+            m["won_count"] = won_count
+            m["sold_among_won_count"] = sold_and_won_count
+            m["sold_among_won_rate"] = (
+                float(sold_and_won_count / won_count) if won_count else 0.0
+            )
+
+        m["sold_revenue_comparison_count"] = sold_known_count
+        m["sold_realized_revenue_below_expected_count"] = below_expected_count
+        m["sold_realized_revenue_below_expected_rate"] = (
+            float(below_expected_count / sold_known_count) if sold_known_count else 0.0
+        )
     if "pst_hour" in df.columns:
         m["pst_hour_populated"] = _rate(int((~_null_or_blank(df["pst_hour"])).sum()), n)
     if "age" in df.columns:
