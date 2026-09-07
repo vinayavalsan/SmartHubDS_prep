@@ -317,7 +317,7 @@ def log_summary(summary: OptimizerSummary):
         "  Rows evaluated                     : %s", f"{summary.optimizer_rows:,}"
     )
     logger.info("  Target CM                          : %.4f", summary.target_cm)
-    logger.info("Observed Production Policy (held-out rows)")
+    logger.info("Expected-value Metrics on Observed Historical Wins")
     logger.info(
         "  Wins / win rate                    : %s / %.4f",
         f"{summary.observed_policy_wins:,}",
@@ -328,11 +328,11 @@ def log_summary(summary: OptimizerSummary):
         summary.observed_policy_total_expected_revenue,
     )
     logger.info(
-        "  Bid cost on observed wins          : %.4f",
+        "  Historical bid cost on observed wins: %.4f",
         summary.observed_policy_total_bid_cost,
     )
     logger.info(
-        "  Observed profit on historical wins : %.4f",
+        "  Expected profit on observed wins   : %.4f",
         summary.observed_policy_total_expected_profit,
     )
     logger.info(

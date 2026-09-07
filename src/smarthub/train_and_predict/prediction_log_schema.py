@@ -64,9 +64,15 @@ def prediction_log_db_url() -> str:
     -------
     str
         ``$SMARTHUB_PREDICTION_LOG_DB_URL`` when set, else the shared
-        Postgres default (mirrors ``smarthub.core.config_store``).
+        Postgres default (mirrors ``smarthub.core.config_store``). When the
+        optional DB SSH tunnel is enabled (``SMARTHUB_DB_SSH_TUNNEL``), the URL
+        is transparently rewritten to the tunnel's localhost endpoint so a local
+        run can reach the EC2 Postgres.
     """
-    return os.getenv("SMARTHUB_PREDICTION_LOG_DB_URL", DEFAULT_PREDICTION_LOG_DB_URL)
+    from smarthub.core.db_tunnel import resolve_db_url
+
+    url = os.getenv("SMARTHUB_PREDICTION_LOG_DB_URL", DEFAULT_PREDICTION_LOG_DB_URL)
+    return resolve_db_url(url)
 
 
 _metadata = MetaData()

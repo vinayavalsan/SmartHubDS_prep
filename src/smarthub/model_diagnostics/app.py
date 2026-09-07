@@ -1,11 +1,14 @@
-"""Interactive SmartHub model diagnostics.
+"""Interactive SmartHub post-training model diagnostics.
+
+Standalone Streamlit app for reviewing model-evaluation artifacts after a
+production training run — kept separate from the regular SmartHub monitoring
+dashboards (``smarthub.monitoring``). Evaluation artifacts are loaded per MLflow
+``run_id`` (with a local ``data/model_evaluations`` fallback for dev). Never
+reruns the model.
 
 Run from the repository root with:
 
-    streamlit run analysis/streamlit_app.py
-
-The app searches model_evaluations recursively for saved
-bid_optimizer_test_rows.csv artifacts and never reruns the model.
+    streamlit run src/smarthub/model_diagnostics/app.py
 """
 
 from __future__ import annotations
@@ -16,7 +19,9 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from model_diagnostics import (
+from plotly.subplots import make_subplots
+
+from smarthub.model_diagnostics.diagnostics import (
     FeatureDiagnosticConfig,
     apply_feature_bucket,
     apply_outcome_filter,
@@ -28,7 +33,6 @@ from model_diagnostics import (
     resolve_feature_analysis_kind,
     validate_optimizer_frame,
 )
-from plotly.subplots import make_subplots
 
 DEFAULT_MODEL_EVALUATION_ROOT = Path("data/model_evaluations")
 
@@ -54,6 +58,103 @@ def load_evaluation_artifact(path: str) -> pd.DataFrame:
     frame = pd.read_csv(path)
     validate_optimizer_frame(frame)
     return frame
+
+
+# --- MLflow-run source ------------------------------------------------------
+# Evaluation artifacts are addressed by MLflow run_id (see mlflow_runs.py), so a
+# single hosted app covers every training run and the artifact store stays
+# transparent. A local-folder mode is kept as a dev fallback.
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def _cached_run_options() -> list[tuple[str, str]]:
+    """Return ``[(label, run_id), ...]`` for the MLflow run dropdown (newest first)."""
+    from smarthub.model_diagnostics import mlflow_runs
+
+    return [(r.label, r.run_id) for r in mlflow_runs.list_runs()]
+
+
+@st.cache_data(show_spinner="Downloading run artifacts…")
+def _cached_optimizer_csv(run_id: str) -> str:
+    """Download + locate a run's optimizer evaluation CSV (cached per run_id)."""
+    from smarthub.model_diagnostics import mlflow_runs
+
+    return mlflow_runs.optimizer_csv_path(run_id)
+
+
+def _query_run_id() -> str | None:
+    """Read ``?run_id=`` from the URL so an MLflow deep-link preselects that run."""
+    try:
+        value = st.query_params.get("run_id")
+    except Exception:  # pragma: no cover - older Streamlit fallback
+        value = (st.experimental_get_query_params().get("run_id") or [None])[0]
+    return value or None
+
+
+def _select_from_mlflow() -> pd.DataFrame | None:
+    """Sidebar: pick an MLflow run and load its optimizer evaluation frame."""
+    try:
+        options = _cached_run_options()
+    except Exception as exc:  # noqa: BLE001 - surface, don't crash the page
+        st.sidebar.error(f"Could not reach MLflow: {exc}")
+        return None
+    if not options:
+        st.sidebar.warning("No MLflow training runs found.")
+        return None
+
+    run_ids = [run_id for _label, run_id in options]
+    requested = _query_run_id()
+    default_index = run_ids.index(requested) if requested in run_ids else 0
+
+    with st.sidebar:
+        choice = st.selectbox(
+            "MLflow run",
+            options=list(range(len(options))),
+            index=default_index,
+            format_func=lambda i: options[i][0],
+            help="Choose a training run. Opened from MLflow, the ?run_id= "
+            "run is preselected.",
+        )
+    run_id = run_ids[choice]
+    if requested and requested not in run_ids:
+        st.sidebar.info(
+            f"Run `{requested}` from the link wasn't found — showing the "
+            "latest instead."
+        )
+    st.caption(f"MLflow run: `{run_id}`")
+
+    try:
+        csv_path = _cached_optimizer_csv(run_id)
+        return load_evaluation_artifact(csv_path)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Unable to load evaluation artifact for run `{run_id}`: {exc}")
+        return None
+
+
+def _select_from_local() -> pd.DataFrame | None:
+    """Sidebar: pick a local optimizer artifact (dev fallback)."""
+    with st.sidebar:
+        root = st.text_input(
+            "Model evaluation folder",
+            value=str(DEFAULT_MODEL_EVALUATION_ROOT),
+        )
+        artifacts = discover_evaluation_artifacts(root)
+        if not artifacts:
+            st.warning(
+                "No bid_optimizer_test_rows.csv files were found under "
+                f"{Path(root).expanduser()}."
+            )
+            return None
+        artifact = st.selectbox(
+            "Evaluation artifact",
+            options=artifacts,
+            index=len(artifacts) - 1,
+        )
+    try:
+        return load_evaluation_artifact(artifact)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Unable to load evaluation artifact: {exc}")
+        return None
 
 
 def _ordered_labels(summary: pd.DataFrame) -> list[str]:
@@ -644,28 +745,20 @@ def main() -> None:
     )
 
     with st.sidebar:
-        root = st.text_input(
-            "Model evaluation folder",
-            value=str(DEFAULT_MODEL_EVALUATION_ROOT),
-        )
-        artifacts = discover_evaluation_artifacts(root)
-        if not artifacts:
-            st.warning(
-                "No bid_optimizer_test_rows.csv files were found under "
-                f"{Path(root).expanduser()}."
-            )
-            st.stop()
-
-        artifact = st.selectbox(
-            "Evaluation artifact",
-            options=artifacts,
-            index=len(artifacts) - 1,
+        st.header("Evaluation source")
+        source = st.radio(
+            "Load artifacts from",
+            options=["MLflow run", "Local folder"],
+            index=0,
+            help="MLflow: pick a training run by run_id. "
+            "Local: read data/model_evaluations (dev).",
         )
 
-    try:
-        frame = load_evaluation_artifact(artifact)
-    except Exception as exc:
-        st.error(f"Unable to load evaluation artifact: {exc}")
+    if source == "MLflow run":
+        frame = _select_from_mlflow()
+    else:
+        frame = _select_from_local()
+    if frame is None:
         st.stop()
 
     features = available_feature_columns(frame)
@@ -781,7 +874,6 @@ def main() -> None:
     )
 
     st.write(
-        f"**Artifact:** `{artifact}`  \n"
         f"**Rows after outcome filter:** {len(outcome_filtered):,}  \n"
         f"**Rows after recommendation filter:** {len(recommendation_filtered):,}  \n"
         f"**Optimizer recommendation:** `{recommendation_filter}`  \n"

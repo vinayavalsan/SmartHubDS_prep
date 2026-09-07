@@ -65,6 +65,21 @@ def _is_loggable_number(value):
     return isinstance(value, (int, float)) and not math.isnan(float(value))
 
 
+def _model_diagnostics_url(run_id):
+    """Build the hosted model-diagnostics deep link for a run, or None.
+
+    Uses ``SMARTHUB_MODEL_DIAGNOSTICS_URL`` (e.g.
+    ``http://<host>:8511``) as the base and appends ``?run_id=<run_id>`` so the
+    diagnostics app preselects this run. Returns ``None`` when the base URL is
+    not configured, so the tag is simply omitted.
+    """
+    base = os.getenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", "").strip()
+    if not base:
+        return None
+    sep = "&" if "?" in base else "?"
+    return f"{base.rstrip('/')}{sep}run_id={run_id}"
+
+
 def _resolve_tracking_uri(tracking_db_path):
     """Resolve MLflow's backend store (metadata) URI.
 
@@ -212,6 +227,13 @@ def log_training_run(
             name="model",
             serialization_format="pickle",
         )
+        # Deep link to the hosted model-diagnostics app for this exact run, so a
+        # reviewer can jump straight from MLflow to the diagnostics for it. Only
+        # set when the app's base URL is configured
+        # (SMARTHUB_MODEL_DIAGNOSTICS_URL); harmless no-op otherwise.
+        diagnostics_url = _model_diagnostics_url(run.info.run_id)
+        if diagnostics_url:
+            mlflow.set_tag("model_diagnostics_url", diagnostics_url)
         return {
             "mlflow_run_id": run.info.run_id,
             "mlflow_experiment_id": experiment_id,
