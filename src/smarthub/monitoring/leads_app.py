@@ -1,7 +1,7 @@
-"""Streamlit dashboard for exploring raw lead-ping data.
+"""SmartHub Leads dashboard.
 
-Run with:
-    streamlit run src/smarthub/monitoring/leads_app.py
+This module loads eligible lead data, adds derived features and business metrics,
+and renders lead-level summaries, filters, funnels, and diagnostic plots.
 """
 
 from __future__ import annotations
@@ -10,19 +10,47 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from smarthub.core import auction, io, storage, transforms
+from smarthub.core import auction, io, storage
+from smarthub.core import transforms as core_transforms
 from smarthub.core.config import StorageSettings
 from smarthub.core.lead_types import lead_type_name
-from smarthub.core.transforms import (
+from smarthub.feature_engineering.feature_registry import FEATURES
+from smarthub.monitoring import _ui
+from smarthub.monitoring.transforms import (
+    add_historical_business_metrics,
     aggregate_leads,
     build_metric_plot_data,
     cumulative_winrate_curves,
     funnel_counts,
 )
-from smarthub.feature_engineering.feature_registry import FEATURES
-from smarthub.monitoring import _ui
 
 # set_page_config is called by the entry (app.py or the __main__ guard below).
+
+
+# The Leads page is intentionally model-agnostic. Prediction outputs and other
+# ML-derived fields belong on Performance / Predictions, never here.
+_ML_COLUMNS = {
+    "model_expected_revenue",
+    "prediction_expected_revenue",
+    "recommended_bid",
+    "recommended_bid_predicted_win_rate",
+    "recommended_bid_predicted_revenue",
+    "recommended_bid_predicted_bid_cost",
+    "recommended_bid_predicted_profit",
+    "recommended_bid_predicted_cm",
+    "recommended_bid_predicted_revenue_on_sold",
+    "recommended_bid_predicted_profit_on_sold",
+    "ml_predicted_revenue",
+    "ml_predicted_bid_cost",
+    "ml_predicted_profit",
+    "prediction_id",
+    "model_name",
+    "model_version",
+    "model_type",
+    "training_table_version",
+    "decision_path",
+    "shap_explanation",
+}
 
 
 def _registry_derived_feature_names(df=None):
@@ -55,16 +83,31 @@ def _is_numeric_plot_feature(df, column):
         "binary",
     }:
         return True
-    if column in {"bid", "rev", "payout", "profit"}:
+    if column in {
+        "bid",
+        "rev",
+        "realized_revenue",
+        "bid_cost",
+        "realized_profit",
+        "expected_revenue",
+        "expected_profit",
+    }:
         return True
     return column in df.columns and pd.api.types.is_numeric_dtype(df[column])
 
 
 def _numeric_plot_axis_options(df):
     """Return numeric plot axes, including registry-derived numeric features."""
-    preferred = [
-        column for column in ("profit", "bid", "payout", "rev") if column in df.columns
-    ]
+    preferred_names = (
+        "realized_profit",
+        "realized_revenue",
+        "bid_cost",
+        "expected_profit",
+        "expected_revenue",
+        "bid",
+        "rev",
+    )
+    preferred = [column for column in preferred_names if column in df.columns]
     registry_names = [
         spec.name
         for spec in FEATURES.values()
@@ -120,7 +163,11 @@ def _prepare_monitoring_leads_frame(df):
     fields, adds every registry-derived feature, and computes dashboard metrics
     without removing any additional rows.
     """
-    out = df.drop(columns=transforms.LEADS_DROP_COLS, errors="ignore").copy()
+    out = df.drop(
+        columns=list(core_transforms.LEADS_DROP_COLS)
+        + ["realized_payout", "payout", "profit"],
+        errors="ignore",
+    ).copy()
 
     id_cols = (
         "campaign_id",
@@ -144,25 +191,34 @@ def _prepare_monitoring_leads_frame(df):
         out["created_at"] = pd.to_datetime(out["created_at"], utc=True)
 
     if "won" in out.columns:
-        out["won"] = transforms.normalize_won(out["won"])
+        out["won"] = core_transforms.normalize_won(out["won"])
 
-    if "rev" in out.columns:
-        out["rev"] = out["rev"].fillna(0.0)
-    if {"won", "bid"}.issubset(out.columns):
-        out["payout"] = out["won"].astype("float64") * out["bid"]
-    if {"rev", "payout"}.issubset(out.columns):
-        out["profit"] = out["rev"] - out["payout"]
+    # Add canonical per-lead business metrics.
+    out = add_historical_business_metrics(out)
+    out = out.drop(columns=list(_ML_COLUMNS), errors="ignore")
 
     return out
 
 
 @st.cache_data
 def load_data(days: int):
-    """Load recent leads and apply the feature-engineering eligibility rules.
+    """Load recent eligible leads for dashboard analysis.
 
-    The dashboard uses only the two shared row filters that define a usable
-    auction observation for feature engineering: remove errored pings, then
-    remove auction-ineligible rows. No additional row filtering is applied.
+    Inputs
+    ------
+    days : int
+        Number of recent days to load from raw storage.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Eligible lead rows with display fields, derived features, and canonical
+        business metrics.
+
+    Raises
+    ------
+    io.DataNotFoundError
+        Raised when the requested raw data window cannot be loaded.
     """
     try:
         raw = storage.load_window_raw(StorageSettings.from_env(), days)
@@ -175,17 +231,17 @@ def load_data(days: int):
 
 
 def ordered_state_list(df) -> list[str]:
-    """List distinct states with ``"NAvail"`` sorted last.
+    """Return distinct states with ``"NAvail"`` ordered last.
 
     Inputs
     ------
-    df : pd.DataFrame
-        Leads data with a ``state`` column.
+    df : pandas.DataFrame
+        Leads data containing a ``state`` column.
 
     Returns
     -------
     list[str]
-        Sorted state codes, with ``"NAvail"`` appended when present.
+        Sorted state values with ``"NAvail"`` appended when present.
     """
     states = sorted([s for s in df["state"].dropna().unique() if s != "NAvail"])
     if "NAvail" in df["state"].values:
@@ -273,11 +329,11 @@ def _figure_type_1(plot_df, feature_col, metric_col, legend_col):
 
 
 def display_plot_type_1(df):
-    """Render the Plot Type 1 controls and charts (metric by any feature).
+    """Render metric-by-feature plots for the filtered leads.
 
     Inputs
     ------
-    df : pd.DataFrame
+    df : pandas.DataFrame
         Filtered leads data to plot.
     """
     st.markdown("### Plot Type 1")
@@ -321,7 +377,7 @@ def display_plot_type_1(df):
         plot_df = _build_plot_type_1_data(df, feature_col, metric_col, legend_col)
         st.plotly_chart(
             _figure_type_1(plot_df, feature_col, metric_col, legend_col),
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -404,12 +460,12 @@ def _figure_type_2(plot_df, metric_col, legend_col, freq_label):
 
 
 def display_plot_type_2(df):
-    """Render the Plot Type 2 controls and time-series charts.
+    """Render time-series metric plots for the filtered leads.
 
     Inputs
     ------
-    df : pd.DataFrame
-        Filtered leads data; requires a ``created_at`` column.
+    df : pandas.DataFrame
+        Filtered leads data containing ``created_at``.
     """
     st.markdown("### Plot Type 2 - Time Series")
     if "created_at" not in df.columns:
@@ -445,7 +501,7 @@ def display_plot_type_2(df):
         plot_df = _build_plot_type_2_data(df, freq_label, metric_col, legend_col)
         st.plotly_chart(
             _figure_type_2(plot_df, metric_col, legend_col, freq_label),
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -545,12 +601,12 @@ def _figure_type_3(
 
 
 def display_plot_type_3(df):
-    """Render the Plot Type 3 controls and numeric-bucketed charts.
+    """Render numeric-feature bucket plots for the filtered leads.
 
     Inputs
     ------
-    df : pd.DataFrame
-        Filtered leads data with at least one numeric feature.
+    df : pandas.DataFrame
+        Filtered leads data containing numeric features.
     """
     st.markdown("### Plot Type 3 - Numeric Feature Series")
     x_axis_options = _numeric_plot_axis_options(df)
@@ -609,7 +665,7 @@ def display_plot_type_3(df):
             _figure_type_3(
                 plot_df, x_label, bucket_upper_col, metric_col, legend_col, size_lbl
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -652,12 +708,12 @@ def _winrate_curve_figure(curves, title, show_delta):
 
 
 def display_plot_type_4(df):
-    """Render the Plot Type 4 controls and cumulative win-rate curves.
+    """Render cumulative win-rate curves across bid thresholds.
 
     Inputs
     ------
-    df : pd.DataFrame
-        Filtered leads data; requires ``bid`` and ``won`` columns.
+    df : pandas.DataFrame
+        Filtered leads data containing ``bid`` and ``won``.
     """
     st.markdown("### Plot Type 4 - Cumulative win-rate curves")
     st.caption(
@@ -696,7 +752,7 @@ def display_plot_type_4(df):
             return
         st.plotly_chart(
             _winrate_curve_figure(curves, f"Win rate vs bid ({size_lbl})", show_delta),
-            use_container_width=True,
+            width="stretch",
         )
     else:
         for value in sorted(df[legend_col].dropna().unique().tolist()):
@@ -707,27 +763,24 @@ def display_plot_type_4(df):
                 _winrate_curve_figure(
                     curves, f"{legend_col} = {value} ({size_lbl})", show_delta
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
 
 def display_funnel(df):
-    """Render the accept/reject funnel chart.
+    """Render opportunity, won, and sold funnel counts.
 
     Inputs
     ------
-    df : pd.DataFrame
-        Filtered leads data.
+    df : pandas.DataFrame
+        Filtered leads data to summarize.
     """
     st.markdown("### Accept / reject funnel")
     funnel = funnel_counts(df)
     fig = px.funnel(funnel, x="count", y="stage")
     fig.update_layout(yaxis_title=None)
-    st.plotly_chart(_ui.style_figure(fig), use_container_width=True)
-    st.caption(
-        "Stages use unambiguous counts; exact accept/reject semantics are pending "
-        "confirmation (CONTEXT §4)."
-    )
+    st.plotly_chart(_ui.style_figure(fig), width="stretch")
+    st.caption("Lead volume from auction opportunity through win and downstream sale.")
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +818,7 @@ def _render_filters(df):
         "campaign_id", options=["All campaign_ids"] + campaigns, index=0
     )
 
-    # Additional dimension filters (Kiran: partner / bidding strategy / insured)
+    # Additional dimension filters.
     for col, label in (
         ("account_id", "account_id (partner)"),
         ("bidding_strategy_id", "bidding_strategy_id"),
@@ -787,9 +840,9 @@ def _render_filters(df):
 
     st.sidebar.subheader("States")
     col1, col2 = st.sidebar.columns(2)
-    if col1.button("Select All", use_container_width=True):
+    if col1.button("Select All", width="stretch"):
         st.session_state.selected_states = available_states.copy()
-    if col2.button("Deselect All", use_container_width=True):
+    if col2.button("Deselect All", width="stretch"):
         st.session_state.selected_states = []
 
     selected_states = st.sidebar.multiselect(
@@ -820,16 +873,46 @@ def _render_metrics(df):
     c3.metric("Campaigns", df["campaign_id"].nunique())
     c4.metric("States", df["state"].nunique())
 
+    # Historical realized business performance.
+    realized_revenue = (
+        float(df["realized_revenue"].sum()) if "realized_revenue" in df.columns else 0.0
+    )
+    bid_cost = float(df["bid_cost"].sum()) if "bid_cost" in df.columns else 0.0
+    realized_profit = (
+        float(df["realized_profit"].sum()) if "realized_profit" in df.columns else 0.0
+    )
+    measured_win_rate = (
+        float(df["won"].mean()) if len(df) and "won" in df.columns else 0.0
+    )
+
     c1, c2, c3, c4 = st.columns(4)
-    rev_sum = df["rev"].sum()
-    c1.metric("Revenue", round(rev_sum, 2))
-    c2.metric("Profit", round(df["profit"].sum(), 2))
-    c3.metric("CM", round(df["profit"].sum() / rev_sum, 2) if rev_sum else 0)
-    c4.metric("Win Rate", round(df["won"].mean(), 2) if len(df) else 0)
+    c1.metric("Realized Revenue", round(realized_revenue, 2))
+    c2.metric("Bid Cost", round(bid_cost, 2))
+    c3.metric("Realized Profit", round(realized_profit, 2))
+    c4.metric(
+        "Realized CM",
+        round(realized_profit / realized_revenue, 4) if realized_revenue else 0.0,
+    )
+
+    expected_revenue = (
+        float(pd.to_numeric(df["expected_revenue"], errors="coerce").fillna(0.0).sum())
+        if "expected_revenue" in df.columns
+        else 0.0
+    )
+    expected_profit = (
+        float(pd.to_numeric(df["expected_profit"], errors="coerce").fillna(0.0).sum())
+        if "expected_profit" in df.columns
+        else 0.0
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Expected Revenue", round(expected_revenue, 2))
+    c2.metric("Expected Profit", round(expected_profit, 2))
+    c3.metric("Measured Win Rate", round(measured_win_rate, 4))
 
 
 def main():
-    """Run the Leads dashboard page (load, filter, and plot)."""
+    """Render the SmartHub Leads dashboard."""
     st.title("SmartHub Leads")
     cw1, cw2 = st.columns([1, 3])
     with cw1:
@@ -868,10 +951,10 @@ def main():
     )
 
     st.subheader("Aggregated Data")
-    st.dataframe(aggregate_leads(filtered_df, aggregate_by), use_container_width=True)
+    st.dataframe(aggregate_leads(filtered_df, aggregate_by), width="stretch")
 
-    st.subheader("Raw Data")
-    st.dataframe(filtered_df.head(5000), use_container_width=True)
+    st.subheader("Lead-Level Data")
+    st.dataframe(filtered_df.head(5000), width="stretch")
 
     st.subheader("Funnel")
     display_funnel(filtered_df)
