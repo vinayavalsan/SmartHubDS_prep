@@ -13,6 +13,7 @@ _METRIC_REQUIRED_COLS = {
     "profit": ["profit"],
     "cm": ["profit", "rev"],
     "winrate": ["won", "id"],
+    "revenue_realization_fraction": ["revenue_realization_fraction"],
 }
 
 # Columns that make sensible legend / grouping dimensions. A whitelist avoids

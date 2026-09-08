@@ -170,6 +170,8 @@ def build_metric_plot_data(
     elif metric_col == "winrate":
         plot_df = grouped.agg(won=("won", "sum"), count=("id", "count")).reset_index()
         plot_df["value"] = win_rate(plot_df["won"], plot_df["count"])
+    elif metric_col == "revenue_realization_fraction":
+        plot_df = grouped[metric_col].mean().reset_index(name="value")
     else:
         plot_df = grouped[metric_col].sum().reset_index(name="value")
 
@@ -425,8 +427,8 @@ def add_historical_business_metrics(df: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pandas.DataFrame
-        Copy containing normalized win, sold, expected, realized, cost, and profit
-        fields used by monitoring.
+        Copy containing normalized win, sold, expected, realized, cost, profit,
+        and revenue-realization fields used by monitoring.
     """
     out = df.copy()
     if "created_at" in out.columns:
@@ -470,6 +472,10 @@ def add_historical_business_metrics(df: pd.DataFrame) -> pd.DataFrame:
     out["realized_revenue"] = sold * raw_revenue
     out["bid_cost"] = sold * bid
     out["realized_profit"] = sold * (raw_revenue - bid)
+
+    valid_realization = sold.gt(0) & expected_revenue.gt(0)
+    realization = raw_revenue / expected_revenue.where(expected_revenue.gt(0))
+    out["revenue_realization_fraction"] = realization.where(valid_realization)
     return out
 
 
