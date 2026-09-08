@@ -51,4 +51,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # each worker's own startup eager-load; there's no shared state to coordinate.
 # All workers bind the same port (SO_REUSEPORT-style preforking), so nginx's
 # single `server serve:8000` upstream entry doesn't need to change.
-CMD ["sh", "-c", "uvicorn smarthub.server.app:app --host 0.0.0.0 --port 8000 --workers ${SERVE_WORKERS:-4}"]
+#
+# SERVE_LIMIT_CONCURRENCY caps in-flight requests PER WORKER: above it uvicorn
+# returns 503 immediately instead of unboundedly queueing (which is what turns
+# the concurrency knee into a p99 cliff -- see the closed-loop sweep in
+# scripts/concurrency_sweep.py). Default 8/worker (x4 workers = 32 aggregate)
+# was chosen from that sweep: throughput saturates ~aggregate-16 and p99 stays
+# ~550ms at aggregate-32, but blows past the 1s TAT by aggregate-64. Tune per
+# node (the absolute knee is CPU-bound, so re-run the sweep on the real box).
+CMD ["sh", "-c", "uvicorn smarthub.server.app:app --host 0.0.0.0 --port 8000 --workers ${SERVE_WORKERS:-4} --limit-concurrency ${SERVE_LIMIT_CONCURRENCY:-8}"]
