@@ -75,6 +75,99 @@ def _pct(values: list[float], p: float) -> float:
     return v[k]
 
 
+def _run_soak(endpoint: str, payload: dict, headers: dict, args) -> None:
+    """Open-loop SOAK: dispatch at a steady --rpm for --duration, then report.
+
+    Unlike the burst (which hammers flat-out), this fires at a fixed rate so it
+    models real production traffic. A healthy soak is ~all 200s with p99 < SLO
+    and no 429/503 -- i.e. the service holds up at that rate without tripping
+    any limit.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    interval = 60.0 / args.rpm
+    statuses: Counter = Counter()
+    ok_lat: list[float] = []
+    lock = threading.Lock()
+    session_local = threading.local()
+
+    def fire() -> None:
+        sess = getattr(session_local, "s", None)
+        if sess is None:
+            sess = requests.Session()
+            session_local.s = sess
+        t0 = time.perf_counter()
+        try:
+            r = sess.post(endpoint, json=payload, headers=headers, timeout=args.timeout)
+            dt = (time.perf_counter() - t0) * 1000.0
+            with lock:
+                statuses[str(r.status_code)] += 1
+                if r.status_code == 200:
+                    ok_lat.append(dt)
+        except Exception as exc:  # noqa: BLE001
+            with lock:
+                statuses[type(exc).__name__] += 1
+
+    print(f">> endpoint:   {endpoint}")
+    print(f">> auth:       {'Bearer key' if args.key else 'NONE'}")
+    print(f">> SOAK:       {args.rpm}/min ({args.rpm/60:.1f}/s) for "
+          f"{args.duration:.0f}s\n")
+
+    started = time.perf_counter()
+    sent = 0
+    # Pool big enough to never be the bottleneck at this rate + latency headroom.
+    pool_size = max(64, int(args.rpm / 60 * args.timeout) + 16)
+    with ThreadPoolExecutor(max_workers=pool_size) as pool:
+        next_at = started
+        while time.perf_counter() - started < args.duration:
+            now = time.perf_counter()
+            if now >= next_at:
+                pool.submit(fire)
+                sent += 1
+                next_at += interval
+            else:
+                time.sleep(min(interval, next_at - now))
+    wall = time.perf_counter() - started
+
+    total = sum(statuses.values())
+    ok = statuses.get("200", 0)
+    r429 = statuses.get("429", 0)
+    r503 = statuses.get("503", 0)
+
+    print("---- status mix ----")
+    for code, n in sorted(statuses.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f"  {code:<16} {n:>6}  ({n/total*100:.1f}%)" if total else code)
+    print(f"\nsent:        {sent}   completed: {total}")
+    print(f"wall:        {wall:.1f}s   effective rate: {total/wall:.1f}/s "
+          f"(target {args.rpm/60:.1f}/s)")
+    if ok_lat:
+        print(
+            f"200 latency: p50={_pct(ok_lat,50):.0f}  p95={_pct(ok_lat,95):.0f}  "
+            f"p99={_pct(ok_lat,99):.0f}  max={max(ok_lat):.0f} ms  "
+            f"(mean={statistics.mean(ok_lat):.0f})"
+        )
+        within = sum(1 for x in ok_lat if x <= 1000) / len(ok_lat) * 100
+        print(f"within 1s:   {within:.2f}%")
+
+    print("\n---- verdict ----")
+    p99 = _pct(ok_lat, 99) if ok_lat else float("nan")
+    if ok and (r429 + r503) == 0 and p99 <= 1000:
+        print(f"  => PASS: sustained {args.rpm/60:.0f}/s cleanly — p99 {p99:.0f}ms "
+              "< 1s, no 429/503.")
+    elif r429 or r503:
+        print(f"  => Limits tripped at this rate: {r429} x429, {r503} x503. "
+              "You're at/above the per-IP (50 r/s) cap — lower --rpm or raise the "
+              "nginx rate for a pure service soak.")
+    elif ok and p99 > 1000:
+        print(f"  => WARN: p99 {p99:.0f}ms exceeds the 1s SLO at {args.rpm/60:.0f}/s "
+              "even without rejections — service is the bottleneck, not the limit.")
+    else:
+        print("  => FAIL: little/nothing served. Check auth (401?) / target URL.")
+
+    print(f"\nCleanup sentinel rows:  DELETE FROM prediction_log WHERE "
+          f"lead_ping_id = {args.sentinel};")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Verify bid-path rate/concurrency limits")
     ap.add_argument("--url", required=True, help="base URL (serve:8000 or nginx)")
@@ -88,11 +181,29 @@ def main() -> None:
     ap.add_argument("--timeout", type=float, default=15.0)
     ap.add_argument("--key", default=None, help="API key (Bearer). Omit if auth off.")
     ap.add_argument("--sentinel", type=int, default=DEFAULT_SENTINEL_LEAD_PING_ID)
+    ap.add_argument(
+        "--rpm",
+        type=int,
+        default=None,
+        help="SOAK mode: dispatch at this steady requests/min for --duration "
+        "instead of a flat-out burst. Keep under the nginx per-IP cap (50 r/s = "
+        "3000 rpm) so a soak measures the service, not the rate limiter.",
+    )
+    ap.add_argument(
+        "--duration",
+        type=float,
+        default=300.0,
+        help="SOAK mode: seconds to sustain --rpm (default 300 = 5 min).",
+    )
     args = ap.parse_args()
 
     endpoint = args.url.rstrip("/") + args.path
     payload = _payload(args.sentinel)
     headers = {"Authorization": f"Bearer {args.key}"} if args.key else {}
+
+    if args.rpm:
+        _run_soak(endpoint, payload, headers, args)
+        return
 
     statuses: Counter = Counter()
     ok_lat: list[float] = []  # ms, 200s only
