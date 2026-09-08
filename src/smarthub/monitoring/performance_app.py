@@ -75,6 +75,7 @@ _STYLE_MAP = {
     "expected_profit_on_sold": dict(color="#ff7f0e", dash="dot"),
     "recommended_bid_predicted_profit_on_sold": dict(color="#ff7f0e", dash="dash"),
     "expected_revenue_on_wins": dict(color="#1f77b4", dash="dot"),
+    "bid_on_wins": dict(color="#000000", dash="dot"),
     "recommended_bid_predicted_revenue": dict(color="#1f77b4", dash="dash"),
     "expected_profit_on_wins": dict(color="#ff7f0e", dash="dot"),
     "recommended_bid_predicted_profit": dict(color="#ff7f0e", dash="dash"),
@@ -85,6 +86,7 @@ _STYLE_MAP = {
     "p_sold_given_won": dict(color="#ff7f0e", dash="solid"),
     # CM family.
     "realized_cm": dict(color="#9467bd", dash="solid"),
+    "expected_cm_on_sold": dict(color="#9467bd", dash="dash"),
     "expected_cm_on_wins": dict(color="#9467bd", dash="dot"),
     "recommended_bid_predicted_cm": dict(color="#9467bd", dash="dash"),
     # Volume metrics.
@@ -102,6 +104,7 @@ _METRIC_LABELS = {
     "realized_profit": "Realized Profit",
     "expected_profit_on_sold": "Expected Profit — Sold Leads",
     "expected_revenue_on_wins": "Expected Revenue — Won Leads",
+    "bid_on_wins": "Bid — Won Leads",
     "expected_profit_on_wins": "Observed Expected Profit — Won Leads",
     "recommended_bid_predicted_revenue": "ML Predicted Revenue — All Leads",
     "recommended_bid_predicted_profit": "ML Predicted Profit — Recommended Bid",
@@ -111,6 +114,7 @@ _METRIC_LABELS = {
     "profit_realization_rate": "Profit Realization Rate",
     "p_sold_given_won": "P(Sold | Won)",
     "realized_cm": "Realized CM",
+    "expected_cm_on_sold": "Expected CM on Sold Leads",
     "expected_cm_on_wins": "Expected CM on Wins",
     "recommended_bid_predicted_cm": "ML Predicted CM",
     "num_opportunities": "Opportunities",
@@ -144,10 +148,12 @@ _FEATURE_EXCLUDE = {
     "expected_profit_on_sold",
     "expected_revenue_on_wins",
     "expected_profit_on_wins",
+    "bid_on_wins",
     "measured_winrate",
     "p_sold_given_won",
     "profit_realization_rate",
     "realized_cm",
+    "expected_cm_on_sold",
     "expected_cm_on_wins",
     "num_opportunities",
     "num_won",
@@ -397,6 +403,8 @@ def _with_outcome_expected_metrics(frame: pd.DataFrame) -> pd.DataFrame:
     working["_expected_profit_on_sold"] = sold * profit
     working["_expected_revenue_on_wins"] = won * revenue
     working["_expected_profit_on_wins"] = won * profit
+    bid = pd.to_numeric(working.get("bid"), errors="coerce").fillna(0.0)
+    working["_bid_on_wins"] = won * bid
     return working
 
 
@@ -433,6 +441,7 @@ def _build_feature_summary(
             realized_profit=("realized_profit", "sum"),
             expected_revenue_on_wins=("_expected_revenue_on_wins", "sum"),
             expected_profit_on_wins=("_expected_profit_on_wins", "sum"),
+            bid_on_wins=("_bid_on_wins", "sum"),
         )
         .reset_index()
     )
@@ -610,6 +619,7 @@ def plot_metric_block(
     *,
     x_col: str = "datetime_min",
     x_label: str | None = None,
+    legendonly_columns: set[str] | None = None,
 ) -> None:
     """Render an overlaid line chart for a selected metric group.
 
@@ -649,6 +659,8 @@ def plot_metric_block(
             trace.line.dash = style["dash"]
             trace.line.width = 2.5
         trace.name = _METRIC_LABELS.get(metric_key, metric_key)
+        if legendonly_columns and metric_key in legendonly_columns:
+            trace.visible = "legendonly"
 
     fig.update_layout(
         title=title,
@@ -698,6 +710,35 @@ def _add_volume_lead_counts(
     return historical_agg.merge(
         volume_counts, on=merge_keys, how="left", validate="one_to_one"
     )
+
+
+def _add_won_revenue_metrics(
+    historical_agg: pd.DataFrame,
+    df: pd.DataFrame,
+    *,
+    freq: str,
+    group_col: str | None,
+) -> pd.DataFrame:
+    """Add won-lead bid and expected revenue to time-based aggregates."""
+    if historical_agg.empty:
+        return historical_agg
+
+    work = _with_outcome_expected_metrics(df)
+    groupers = [pd.Grouper(key="datetime_min", freq=freq)]
+    if group_col:
+        groupers.append(group_col)
+
+    won_metrics = (
+        work.groupby(groupers, observed=False)
+        .agg(
+            bid_on_wins=("_bid_on_wins", "sum"),
+            expected_revenue_on_wins=("_expected_revenue_on_wins", "sum"),
+        )
+        .reset_index()
+    )
+    merge_keys = ["datetime_min"] + ([group_col] if group_col else [])
+    base = historical_agg.drop(columns=["expected_revenue_on_wins"], errors="ignore")
+    return base.merge(won_metrics, on=merge_keys, how="left", validate="one_to_one")
 
 
 def _assign_count_bins(
@@ -819,6 +860,10 @@ def _aggregate_historical_by_count(
         agg["realized_profit"],
         agg["realized_revenue"],
     )
+    agg["expected_cm_on_sold"] = transforms.contribution_margin(
+        agg["expected_profit_on_sold"],
+        agg["expected_revenue_on_sold"],
+    )
     agg["expected_cm_on_wins"] = transforms.contribution_margin(
         agg["expected_profit_on_wins"],
         agg["expected_revenue_on_wins"],
@@ -936,6 +981,83 @@ def _render_historical_kpis(df: pd.DataFrame) -> None:
         "Expected CM — Sold Leads",
         "—" if np.isnan(expected_cm) else f"{expected_cm:.3%}",
     )
+
+
+def _render_revenue_bias(df: pd.DataFrame) -> None:
+    """Render realized-vs-expected revenue bias for sold leads."""
+    sold = pd.to_numeric(df.get("sold"), errors="coerce").fillna(0).gt(0)
+    work = df.loc[sold].copy()
+    if work.empty:
+        st.info("No sold leads are available for revenue-bias analysis.")
+        return
+
+    work["expected_revenue"] = pd.to_numeric(
+        work.get("expected_revenue"), errors="coerce"
+    )
+    work["realized_revenue"] = pd.to_numeric(
+        work.get("realized_revenue"), errors="coerce"
+    )
+    work = work.dropna(subset=["datetime_min", "expected_revenue", "realized_revenue"])
+    if work.empty:
+        st.info("No sold leads have complete expected and realized revenue values.")
+        return
+
+    expected_total = float(work["expected_revenue"].sum())
+    realized_total = float(work["realized_revenue"].sum())
+    bias = (
+        (realized_total - expected_total) / expected_total if expected_total else np.nan
+    )
+
+    st.markdown("#### Revenue Bias — Sold Leads")
+    st.caption(
+        "Revenue bias = (realized revenue - expected revenue) / expected revenue. "
+        "Negative values indicate realized revenue is below expectation."
+    )
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Expected Revenue", f"${expected_total:,.2f}")
+    c2.metric("Realized Revenue", f"${realized_total:,.2f}")
+    c3.metric("Revenue Bias", "—" if np.isnan(bias) else f"{bias:+.2%}")
+
+    daily = (
+        work.set_index("datetime_min")
+        .resample("D")[["expected_revenue", "realized_revenue"]]
+        .sum()
+        .reset_index()
+    )
+    daily["revenue_bias"] = np.where(
+        daily["expected_revenue"] != 0.0,
+        (daily["realized_revenue"] - daily["expected_revenue"])
+        / daily["expected_revenue"],
+        np.nan,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=daily["datetime_min"],
+            y=daily["revenue_bias"],
+            mode="lines+markers",
+            name="Revenue bias",
+            customdata=np.column_stack(
+                [daily["expected_revenue"], daily["realized_revenue"]]
+            ),
+            hovertemplate=(
+                "%{x}<br>Revenue bias: %{y:.2%}<br>"
+                "Expected revenue: $%{customdata[0]:,.2f}<br>"
+                "Realized revenue: $%{customdata[1]:,.2f}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(y=0.0, line_dash="dash")
+    fig.update_layout(
+        title="Revenue Bias Over Time — Sold Leads",
+        xaxis_title="Date",
+        yaxis_title="Revenue bias",
+        hovermode="x unified",
+    )
+    fig.update_yaxes(tickformat=".1%", showgrid=True)
+    fig.update_xaxes(showgrid=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def _render_ml_kpis(df: pd.DataFrame) -> None:
@@ -1273,11 +1395,21 @@ def main():
                 freq=_BIN_MAP[bin_size],
                 group_col=group_col,
             )
+            historical_agg = _add_won_revenue_metrics(
+                historical_agg,
+                df,
+                freq=_BIN_MAP[bin_size],
+                group_col=group_col,
+            )
             historical_agg["p_sold_given_won"] = np.where(
                 pd.to_numeric(historical_agg["num_won"], errors="coerce") > 0,
                 pd.to_numeric(historical_agg["num_sold"], errors="coerce")
                 / pd.to_numeric(historical_agg["num_won"], errors="coerce"),
                 np.nan,
+            )
+            historical_agg["expected_cm_on_sold"] = transforms.contribution_margin(
+                historical_agg["expected_profit_on_sold"],
+                historical_agg["expected_revenue_on_sold"],
             )
             historical_agg["profit_realization_rate"] = np.where(
                 pd.to_numeric(
@@ -1313,6 +1445,7 @@ def main():
                     group_col=group_col,
                 )
                 merge_keys = ["datetime_min"] + ([group_col] if group_col else [])
+
             else:
                 count_type = "won" if bin_type == "Won count" else "opportunity"
                 ml_agg = _aggregate_ml_by_count(
@@ -1326,6 +1459,15 @@ def main():
                 )
                 merge_keys = [count_bin_col] + ([group_col] if group_col else [])
 
+            if not ml_agg.empty and {
+                "recommended_bid_predicted_revenue",
+                "recommended_bid_predicted_profit",
+            }.issubset(ml_agg.columns):
+                ml_agg["recommended_bid_predicted_bid_cost"] = (
+                    ml_agg["recommended_bid_predicted_revenue"]
+                    - ml_agg["recommended_bid_predicted_profit"]
+                )
+
             if ml_agg.empty:
                 st.info(
                     "ML metrics are not available for the selected filters; "
@@ -1337,6 +1479,7 @@ def main():
                     column
                     for column in (
                         "recommended_bid_predicted_revenue",
+                        "recommended_bid_predicted_bid_cost",
                         "recommended_bid_predicted_profit",
                         "recommended_bid_predicted_win_rate",
                         "recommended_bid_predicted_cm",
@@ -1350,7 +1493,7 @@ def main():
                     validate="one_to_one",
                 )
 
-        def _plot_group(cols, title, y_label):
+        def _plot_group(cols, title, y_label, *, legendonly_columns=None):
             if group_col is None:
                 plot_metric_block(
                     agg,
@@ -1359,6 +1502,7 @@ def main():
                     y_label,
                     x_col=x_col,
                     x_label=x_label,
+                    legendonly_columns=legendonly_columns,
                 )
                 return
 
@@ -1388,13 +1532,20 @@ def main():
                     y_label,
                     x_col=x_col,
                     x_label=x_label,
+                    legendonly_columns=legendonly_columns,
                 )
 
         sold_revenue_cols = [
             "bid_cost",
             "realized_revenue",
             "expected_revenue_on_sold",
+            "bid_on_wins",
+            "expected_revenue_on_wins",
         ]
+        sold_revenue_legendonly = {
+            "bid_on_wins",
+            "expected_revenue_on_wins",
+        }
         sold_profit_cols = [
             "realized_profit",
             "expected_profit_on_sold",
@@ -1402,9 +1553,14 @@ def main():
         ml_revenue_comparison_cols = [
             "recommended_bid_predicted_revenue",
             "expected_revenue_on_wins",
+            "recommended_bid_predicted_bid_cost",
         ]
         winrate_cols = ["measured_winrate"]
-        cm_cols = ["realized_cm", "expected_cm_on_wins"]
+        cm_cols = [
+            "realized_cm",
+            "expected_cm_on_sold",
+            "expected_cm_on_wins",
+        ]
 
         if show_ml_metrics:
             winrate_cols.append("recommended_bid_predicted_win_rate")
@@ -1422,6 +1578,7 @@ def main():
                     sold_revenue_cols,
                     "Sold Leads — Bid Cost, Realized Revenue, and Expected Revenue",
                     "Amount ($)",
+                    legendonly_columns=sold_revenue_legendonly,
                 )
                 _plot_group(
                     sold_profit_cols,
@@ -1434,7 +1591,11 @@ def main():
                     "Win rate",
                 )
                 _plot_group(
-                    ["realized_cm", "expected_cm_on_wins"],
+                    [
+                        "realized_cm",
+                        "expected_cm_on_sold",
+                        "expected_cm_on_wins",
+                    ],
                     "Contribution Margin",
                     "CM",
                 )
@@ -1454,6 +1615,7 @@ def main():
                     "P(Sold | Won) = Sold Leads / Won Leads",
                     "Probability",
                 )
+                _render_revenue_bias(df)
 
             with ml_tab:
                 st.caption(
@@ -1501,6 +1663,7 @@ def main():
                 sold_revenue_cols,
                 "Sold Leads — Bid Cost, Realized Revenue, and Expected Revenue",
                 "Amount ($)",
+                legendonly_columns=sold_revenue_legendonly,
             )
         elif selected_metric == "Sold Lead Profit":
             _plot_group(
