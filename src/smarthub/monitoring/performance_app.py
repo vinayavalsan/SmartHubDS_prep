@@ -1044,10 +1044,14 @@ def main():
         days = st.number_input(
             "History window (days)",
             min_value=1,
-            max_value=60,
-            value=30,
+            max_value=7,
+            value=1,
             step=1,
             key="mon_days",
+            help=(
+                "Days of history to load. Kept short (default 1) so the page "
+                "loads fast; widen up to 7 for a longer trend."
+            ),
         )
     with bin_type_col:
         bin_type = st.selectbox(
@@ -1061,8 +1065,13 @@ def main():
             bin_size = st.selectbox(
                 "Bin size",
                 options=list(_BIN_MAP.keys()),
-                index=3,
+                index=1,
                 key="mon_bin_size",
+                help=(
+                    "Time-bucket width for the trend charts. With a 1-day "
+                    "window use a sub-day bin (1hr/6hr/12hr) to see intraday "
+                    "trend; 'day'/'week' only make sense over multi-day windows."
+                ),
             )
             count_per_bin = None
         else:
