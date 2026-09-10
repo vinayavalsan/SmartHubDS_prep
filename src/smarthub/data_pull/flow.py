@@ -360,18 +360,16 @@ def _notify_success(
     rows = int(len(df))
     parquet_paths = result.get("parquet_paths") or []
     parquet_txt = ", ".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
-    duration_s = int((_utc_now_naive() - started_at).total_seconds())
 
     # Trimmed: row count + window live in the headline; keep only the new
-    # watermark, run duration, and the data-quality group. (Full volume/watermark
-    # detail is in the Prefect markdown artifact this flow also publishes.)
+    # watermark and the data-quality group. (Full volume/watermark detail is in
+    # the Prefect markdown artifact this flow also publishes.)
     headline = f"*{rows:,} rows* · `{min_s}` → `{max_s}`"
     groups = [
         (
             "Pull",
             {
                 "Watermark": f"→ `{new_wm}`",
-                "Duration": f"{duration_s}s",
             },
         ),
     ]
