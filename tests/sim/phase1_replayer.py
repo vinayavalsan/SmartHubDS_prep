@@ -36,6 +36,7 @@ Run
     python phase1_replayer.py --minutes 10 --burst-prob 0.6 --burst-frac-min 0.4 \
         --burst-frac-max 0.6 --data snapshot.parquet
 """
+
 from __future__ import annotations
 
 import argparse
@@ -73,7 +74,7 @@ def load_rows(path: str | None, n_needed: int, rng: random.Random) -> list[dict]
         lead_type = rng.choice([6, 6, 6, 1])  # mostly auto (6), some home (1)
         rows.append(
             {
-                "id": 900_000_000 + i,             # -> lead_ping_id
+                "id": 900_000_000 + i,  # -> lead_ping_id
                 "lead_type_id": lead_type,
                 "campaign_id": rng.choice([40088, 40122, 51007, 60231]),
                 "source_type_id": rng.choice([574, 588, 601, 620]),
@@ -112,16 +113,18 @@ def build_payload(row: dict) -> dict:
 # --------------------------------------------------------------------------- #
 @dataclass
 class BurstConfig:
-    rate_min: int = 100          # requests per minute, lower bound
-    rate_max: int = 150          # requests per minute, upper bound
-    burst_prob: float = 0.5      # chance a given minute contains a burst
+    rate_min: int = 100  # requests per minute, lower bound
+    rate_max: int = 150  # requests per minute, upper bound
+    burst_prob: float = 0.5  # chance a given minute contains a burst
     burst_frac_min: float = 0.3  # burst = this..that fraction of the minute's load
     burst_frac_max: float = 0.6
-    burst_jitter_s: float = 0.08 # spread of a burst around its instant (std, seconds)
-    max_bursts: int = 1          # bursts per minute (set >1 for multi-spike minutes)
+    burst_jitter_s: float = 0.08  # spread of a burst around its instant (std, seconds)
+    max_bursts: int = 1  # bursts per minute (set >1 for multi-spike minutes)
 
 
-def build_minute_offsets(rng: random.Random, cfg: BurstConfig) -> tuple[list[float], dict]:
+def build_minute_offsets(
+    rng: random.Random, cfg: BurstConfig
+) -> tuple[list[float], dict]:
     """Return (sorted arrival offsets in [0,60), info) for ONE minute.
 
     total N ~ Uniform(rate_min, rate_max).
@@ -138,7 +141,7 @@ def build_minute_offsets(rng: random.Random, cfg: BurstConfig) -> tuple[list[flo
     while n_bursts < cfg.max_bursts and remaining > 0 and rng.random() < cfg.burst_prob:
         frac = rng.uniform(cfg.burst_frac_min, cfg.burst_frac_max)
         burst_n = min(remaining, max(1, round(frac * n)))
-        t0 = rng.uniform(0.0, 60.0)                     # the "single point of time"
+        t0 = rng.uniform(0.0, 60.0)  # the "single point of time"
         for _ in range(burst_n):
             t = t0 + rng.gauss(0.0, cfg.burst_jitter_s)  # near-simultaneous
             offsets.append(min(59.999, max(0.0, t)))
@@ -153,8 +156,9 @@ def build_minute_offsets(rng: random.Random, cfg: BurstConfig) -> tuple[list[flo
     return offsets, info
 
 
-def build_schedule(rng: random.Random, minutes: int,
-                   cfg: BurstConfig) -> tuple[list[float], list[dict]]:
+def build_schedule(
+    rng: random.Random, minutes: int, cfg: BurstConfig
+) -> tuple[list[float], list[dict]]:
     """Absolute arrival offsets (seconds from start) + per-minute composition."""
     schedule: list[float] = []
     infos: list[dict] = []
@@ -185,11 +189,15 @@ def print_verify(infos: list[dict]) -> None:
             burst_pcts.extend(b["pct"] for b in info["bursts"])
             print(f"  min {m:>2} | N={n:>3} | BURST → {parts}  + {sc} scattered")
         else:
-            print(f"  min {m:>2} | N={n:>3} | no burst — all {sc} scattered "
-                  f"(pure Poisson)")
+            print(
+                f"  min {m:>2} | N={n:>3} | no burst — all {sc} scattered "
+                f"(pure Poisson)"
+            )
     avg = (sum(burst_pcts) / len(burst_pcts)) if burst_pcts else 0.0
-    print(f"\n  summary: {burst_minutes}/{len(infos)} minutes had a burst; "
-          f"avg burst share {avg:.0f}% of that minute.")
+    print(
+        f"\n  summary: {burst_minutes}/{len(infos)} minutes had a burst; "
+        f"avg burst share {avg:.0f}% of that minute."
+    )
     print("------------------------------------------------------------------")
 
 
@@ -199,8 +207,8 @@ def print_verify(infos: list[dict]) -> None:
 @dataclass
 class Stats:
     sent: int = 0
-    per_second: Counter = field(default_factory=Counter)   # arrivals per wall-second
-    drift_ms: list[float] = field(default_factory=list)    # scheduled vs actual dispatch
+    per_second: Counter = field(default_factory=Counter)  # arrivals per wall-second
+    drift_ms: list[float] = field(default_factory=list)  # scheduled vs actual dispatch
     inflight: int = 0
     max_inflight: int = 0
 
@@ -219,8 +227,13 @@ async def send_stub(stats: Stats, speed: float = 1.0, sim_latency_range=(0.01, 0
         stats.inflight -= 1
 
 
-async def run(schedule: list[float], rows: list[dict], stats: Stats,
-              sender=send_stub, speed: float = 1.0) -> None:
+async def run(
+    schedule: list[float],
+    rows: list[dict],
+    stats: Stats,
+    sender=send_stub,
+    speed: float = 1.0,
+) -> None:
     """Fire each request at scheduled_offset/speed. Reporting buckets use the
     real (un-compressed) scheduled second, so the histogram is meaningful at
     any --speed."""
@@ -229,23 +242,25 @@ async def run(schedule: list[float], rows: list[dict], stats: Stats,
     tasks: list[asyncio.Task] = []
     last_min = -1
     for i, offset in enumerate(schedule):
-        cur_min = int(offset // 60)            # progress heartbeat each scheduled minute
+        cur_min = int(offset // 60)  # progress heartbeat each scheduled minute
         if cur_min != last_min:
-            print(f"  ...running: minute {cur_min + 1} — {i} requests fired so far",
-                  flush=True)
+            print(
+                f"  ...running: minute {cur_min + 1} — {i} requests fired so far",
+                flush=True,
+            )
             last_min = cur_min
         target = offset / speed
         wait = target - (loop.time() - start)
         if wait > 0:
-            await asyncio.sleep(wait)          # sleep until this arrival's instant
+            await asyncio.sleep(wait)  # sleep until this arrival's instant
         actual = loop.time() - start
         stats.drift_ms.append((actual - target) * 1000.0)
-        stats.per_second[int(offset)] += 1     # bucket by real scheduled second
+        stats.per_second[int(offset)] += 1  # bucket by real scheduled second
         stats.sent += 1
         row = rows[i % len(rows)]
-        _payload = build_payload(row)          # built now (used for real by phase 2)
+        build_payload(row)  # built now (used for real by phase 2)
         tasks.append(asyncio.create_task(sender(stats, speed)))  # fire, don't await
-    await asyncio.gather(*tasks)               # let in-flight requests finish
+    await asyncio.gather(*tasks)  # let in-flight requests finish
 
 
 # --------------------------------------------------------------------------- #
@@ -262,30 +277,46 @@ def report(counts_by_sec: dict, minutes: int, stats: Stats | None = None) -> Non
     nonzero = [c for c in counts if c]
     label = "MEASURED" if stats is not None else "PLANNED"
     print(f"\n================  ARRIVAL DISTRIBUTION ({label})  ================")
-    print(f"total requests : {total}  over {minutes} min "
-          f"({total / minutes:.1f}/min avg)")
-    print(f"per-second     : max {mx}  |  mean(active s) "
-          f"{(sum(nonzero)/len(nonzero) if nonzero else 0):.1f}  |  idle seconds "
-          f"{seconds - len(nonzero)}/{seconds}")
+    print(
+        f"total requests : {total}  over {minutes} min "
+        f"({total / minutes:.1f}/min avg)"
+    )
+    print(
+        f"per-second     : max {mx}  |  mean(active s) "
+        f"{(sum(nonzero)/len(nonzero) if nonzero else 0):.1f}  |  idle seconds "
+        f"{seconds - len(nonzero)}/{seconds}"
+    )
     if stats is not None and stats.drift_ms:
         drift = sorted(stats.drift_ms)
         p99 = drift[min(len(drift) - 1, int(0.99 * len(drift)))]
-        print(f"schedule drift : p50 {drift[len(drift)//2]:.1f}ms  "
-              f"p99 {p99:.1f}ms   (how late the scheduler fired vs plan)")
-        print(f"max concurrent : {stats.max_inflight}  in-flight at once "
-              f"(the spikes)")
+        print(
+            f"schedule drift : p50 {drift[len(drift)//2]:.1f}ms  "
+            f"p99 {p99:.1f}ms   (how late the scheduler fired vs plan)"
+        )
+        print(
+            f"max concurrent : {stats.max_inflight}  in-flight at once " f"(the spikes)"
+        )
     else:
-        print("               : add --dispatch to actually fire the schedule and "
-              "measure drift + peak concurrency")
+        print(
+            "               : add --dispatch to actually fire the schedule and "
+            "measure drift + peak concurrency"
+        )
 
     # compact per-second sparkline histogram, 60s per row
     blocks = " ▁▂▃▄▅▆▇█"
     print("\nper-second arrivals (each char = 1s; height ∝ count, '#' = peak second):")
     for m in range(minutes):
-        row = counts[m * 60:(m + 1) * 60]
+        row = counts[m * 60 : (m + 1) * 60]
         line = "".join(
-            " " if c == 0 else "#" if c == mx and mx > 0
-            else blocks[max(1, min(8, round(8 * c / mx)))] if mx else " "
+            (
+                " "
+                if c == 0
+                else (
+                    "#"
+                    if c == mx and mx > 0
+                    else blocks[max(1, min(8, round(8 * c / mx)))] if mx else " "
+                )
+            )
             for c in row
         )
         print(f"  min {m:>2} |{line}| {sum(row):>3}")
@@ -293,43 +324,64 @@ def report(counts_by_sec: dict, minutes: int, stats: Stats | None = None) -> Non
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Phase-1 bursty arrival replayer (dry-run)")
-    ap.add_argument("--data", default=None, help="parquet/CSV snapshot; omit for synthetic")
+    ap = argparse.ArgumentParser(
+        description="Phase-1 bursty arrival replayer (dry-run)"
+    )
+    ap.add_argument(
+        "--data", default=None, help="parquet/CSV snapshot; omit for synthetic"
+    )
     ap.add_argument("--minutes", type=int, default=5)
     ap.add_argument("--rate-min", type=int, default=100)
     ap.add_argument("--rate-max", type=int, default=150)
     ap.add_argument("--burst-prob", type=float, default=0.5)
     ap.add_argument("--burst-frac-min", type=float, default=0.3)
     ap.add_argument("--burst-frac-max", type=float, default=0.6)
-    ap.add_argument("--burst-jitter", type=float, default=0.08, help="burst spread std (s)")
+    ap.add_argument(
+        "--burst-jitter", type=float, default=0.08, help="burst spread std (s)"
+    )
     ap.add_argument("--max-bursts", type=int, default=1)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--dispatch", action="store_true",
-                    help="actually FIRE the schedule (real-time, open-loop). "
-                         "Default: off — just analyse the distribution and exit instantly.")
-    ap.add_argument("--speed", type=float, default=1.0,
-                    help="with --dispatch: time compression (e.g. 30 = 30x faster)")
-    ap.add_argument("--verify", action="store_true",
-                    help="print the intended per-minute burst/scatter composition")
+    ap.add_argument(
+        "--dispatch",
+        action="store_true",
+        help="actually FIRE the schedule (real-time, open-loop). "
+        "Default: off — just analyse the distribution and exit instantly.",
+    )
+    ap.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="with --dispatch: time compression (e.g. 30 = 30x faster)",
+    )
+    ap.add_argument(
+        "--verify",
+        action="store_true",
+        help="print the intended per-minute burst/scatter composition",
+    )
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
     cfg = BurstConfig(
-        rate_min=args.rate_min, rate_max=args.rate_max,
-        burst_prob=args.burst_prob, burst_frac_min=args.burst_frac_min,
-        burst_frac_max=args.burst_frac_max, burst_jitter_s=args.burst_jitter,
+        rate_min=args.rate_min,
+        rate_max=args.rate_max,
+        burst_prob=args.burst_prob,
+        burst_frac_min=args.burst_frac_min,
+        burst_frac_max=args.burst_frac_max,
+        burst_jitter_s=args.burst_jitter,
         max_bursts=args.max_bursts,
     )
 
     schedule, infos = build_schedule(rng, args.minutes, cfg)  # real offsets
     rows = load_rows(args.data, n_needed=len(schedule), rng=rng)
 
-    print(f"Scheduled {len(schedule)} requests over {args.minutes} min "
-          f"(seed={args.seed}, burst_prob={cfg.burst_prob}, DRY-RUN: no real HTTP).")
+    print(
+        f"Scheduled {len(schedule)} requests over {args.minutes} min "
+        f"(seed={args.seed}, burst_prob={cfg.burst_prob}, DRY-RUN: no real HTTP)."
+    )
     if args.verify:
         print_verify(infos)
 
-    counts = Counter(int(o) for o in schedule)   # planned per-second distribution
+    counts = Counter(int(o) for o in schedule)  # planned per-second distribution
 
     if not args.dispatch:
         # Default: analyse the schedule and exit immediately — no real-time wait.
@@ -338,8 +390,10 @@ def main() -> None:
 
     # --dispatch: actually fire the schedule open-loop (real-time or --speed).
     est_wall = (args.minutes * 60.0) / args.speed
-    print(f"\nDispatching in REAL TIME: ~{est_wall:.0f}s wall-clock "
-          f"({est_wall/60:.1f} min at speed={args.speed}x). Ctrl-C to stop.")
+    print(
+        f"\nDispatching in REAL TIME: ~{est_wall:.0f}s wall-clock "
+        f"({est_wall/60:.1f} min at speed={args.speed}x). Ctrl-C to stop."
+    )
     stats = Stats()
     t0 = time.time()
     asyncio.run(run(schedule, rows, stats, speed=args.speed))

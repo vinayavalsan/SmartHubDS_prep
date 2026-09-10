@@ -228,8 +228,7 @@ def _notify_success(lead_type_name, lead_type_id, version, metadata, path) -> No
     # (age-missing, traffic_tier-distinct) — those live in the Prefect artifact.
     # Kept a compact Rows + Build (with expected_revenue coverage folded in).
     headline = (
-        f"*{row_count:,} training rows* · `{version}` "
-        f"(win rate {won_rate_str})"
+        f"*{row_count:,} training rows* · `{version}` " f"(win rate {won_rate_str})"
     )
     rows_summary = f"{raw_rows:,} → {row_count:,} (dropped {dropped:,} errored/no-bid)"
     groups = [

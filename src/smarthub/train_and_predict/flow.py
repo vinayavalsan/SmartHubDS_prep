@@ -417,9 +417,7 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     diag_base = os.getenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", "").strip()
     run_id = result.get("training_run_id")
     diag = (
-        f"<{diag_base}?run_id={run_id}|diagnostics> · "
-        if diag_base and run_id
-        else ""
+        f"<{diag_base}?run_id={run_id}|diagnostics> · " if diag_base and run_id else ""
     )
     notifications.notify_success_grouped(
         "train-model",

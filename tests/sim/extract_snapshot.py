@@ -11,7 +11,7 @@ It reuses the project's own pull code, so it connects and types data EXACTLY lik
 ``smarthub-pull``:
   * ``PullSettings.from_env()``    -- SSH + Redshift creds from env / .env
   * ``fetch_leads(...)``           -- SSH tunnel (or direct-VPC) + Redshift query
-  * ``coerce_leads_dtypes(...)``   -- stable ORM dtypes + ``expected_revenue`` (=exp_rev)
+  * ``coerce_leads_dtypes(...)``   -- stable ORM dtypes + ``expected_revenue``
 
 Run on the EC2 host (same environment as the pipeline)::
 
@@ -40,6 +40,7 @@ Notes
 * Output goes under ``data/`` by default, which is git-ignored -- the snapshot
   is data, not code.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -190,41 +191,78 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Bulk lead_pings -> single Parquet snapshot (chunked, low-memory)."
     )
-    ap.add_argument("--out", default="data/sim/snapshot.parquet",
-                    help="output Parquet path (default under git-ignored data/)")
-    ap.add_argument("--months", type=int, default=4,
-                    help="pull the last N months ending at --max-created-at/now "
-                         "(ignored when both --min/--max are given)")
+    ap.add_argument(
+        "--out",
+        default="data/sim/snapshot.parquet",
+        help="output Parquet path (default under git-ignored data/)",
+    )
+    ap.add_argument(
+        "--months",
+        type=int,
+        default=4,
+        help="pull the last N months ending at --max-created-at/now "
+        "(ignored when both --min/--max are given)",
+    )
     ap.add_argument("--min-created-at", default=None, help="YYYY-MM-DD HH:MM:SS")
-    ap.add_argument("--max-created-at", default=None,
-                    help="YYYY-MM-DD HH:MM:SS (default: today 00:00)")
-    ap.add_argument("--chunk-days", type=int, default=7,
-                    help="pull window size per chunk (default 7)")
-    ap.add_argument("--lead-type-ids", type=int, nargs="*", default=[6, 1],
-                    help="lead types to pull (default: 6=auto 1=home)")
-    ap.add_argument("--all-lead-types", action="store_true",
-                    help="pull every lead type (overrides --lead-type-ids)")
-    ap.add_argument("--plan-only", action="store_true",
-                    help="print the chunk windows and exit without pulling")
+    ap.add_argument(
+        "--max-created-at",
+        default=None,
+        help="YYYY-MM-DD HH:MM:SS (default: today 00:00)",
+    )
+    ap.add_argument(
+        "--chunk-days",
+        type=int,
+        default=7,
+        help="pull window size per chunk (default 7)",
+    )
+    ap.add_argument(
+        "--lead-type-ids",
+        type=int,
+        nargs="*",
+        default=[6, 1],
+        help="lead types to pull (default: 6=auto 1=home)",
+    )
+    ap.add_argument(
+        "--all-lead-types",
+        action="store_true",
+        help="pull every lead type (overrides --lead-type-ids)",
+    )
+    ap.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="print the chunk windows and exit without pulling",
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args(argv)
     configure_logging(args.log_level)
 
-    max_ts = (pd.Timestamp(args.max_created_at) if args.max_created_at
-              else pd.Timestamp.now().normalize())
-    min_ts = (pd.Timestamp(args.min_created_at) if args.min_created_at
-              else max_ts - pd.DateOffset(months=args.months))
+    max_ts = (
+        pd.Timestamp(args.max_created_at)
+        if args.max_created_at
+        else pd.Timestamp.now().normalize()
+    )
+    min_ts = (
+        pd.Timestamp(args.min_created_at)
+        if args.min_created_at
+        else max_ts - pd.DateOffset(months=args.months)
+    )
     if min_ts >= max_ts:
         raise SystemExit(f"min ({min_ts}) must be before max ({max_ts}).")
 
     lead_type_ids = None if args.all_lead_types else (args.lead_type_ids or None)
 
     windows = list(iter_chunks(min_ts, max_ts, args.chunk_days))
-    print(f"Window : {min_ts.strftime(_DT)} -> {max_ts.strftime(_DT)}  "
-          f"({(max_ts - min_ts).days} days, {len(windows)} chunks of "
-          f"{args.chunk_days}d)", flush=True)
-    print(f"Types  : {lead_type_ids if lead_type_ids is not None else 'all'}   "
-          f"Out: {args.out}", flush=True)
+    print(
+        f"Window : {min_ts.strftime(_DT)} -> {max_ts.strftime(_DT)}  "
+        f"({(max_ts - min_ts).days} days, {len(windows)} chunks of "
+        f"{args.chunk_days}d)",
+        flush=True,
+    )
+    print(
+        f"Types  : {lead_type_ids if lead_type_ids is not None else 'all'}   "
+        f"Out: {args.out}",
+        flush=True,
+    )
 
     if args.plan_only:
         for i, (a, b) in enumerate(windows, 1):
