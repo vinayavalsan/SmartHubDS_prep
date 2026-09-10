@@ -360,30 +360,16 @@ def _notify_success(
     rows = int(len(df))
     parquet_paths = result.get("parquet_paths") or []
     parquet_txt = ", ".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
-    duck = f"`{result['duckdb_path']}`" if result.get("duckdb_path") else "—"
 
-    headline = f":inbox_tray: *{rows:,} rows pulled* · `{min_s}` → `{max_s}`"
+    # Trimmed: row count + window live in the headline; keep only the new
+    # watermark and the data-quality group. (Full volume/watermark detail is in
+    # the Prefect markdown artifact this flow also publishes.)
+    headline = f"*{rows:,} rows* · `{min_s}` → `{max_s}`"
     groups = [
         (
-            "Volume",
+            "Pull",
             {
-                "Rows fetched": f"{rows:,}",
-                "DuckDB rows (total)": result.get("duckdb_rows", "—"),
-                "Parquet rows (written)": result.get("parquet_rows", "—"),
-            },
-        ),
-        (
-            "Watermark",
-            {
-                "Before": f"`{prev_wm}`",
-                "After": f"`{new_wm}`",
-            },
-        ),
-        (
-            "Run (UTC)",
-            {
-                "Started": started_at.strftime("%Y-%m-%d %H:%M:%S"),
-                "Finished": _utc_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
+                "Watermark": f"→ `{new_wm}`",
             },
         ),
     ]
@@ -394,7 +380,7 @@ def _notify_success(
         subject=f"{lead_type_name} ({lead_type_id})",
         headline=headline,
         groups=groups,
-        footer_extra=f"parquet {parquet_txt} · duckdb {duck}",
+        footer_extra=f"table {parquet_txt}",
     )
 
 

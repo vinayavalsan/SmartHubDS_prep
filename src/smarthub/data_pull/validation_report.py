@@ -57,7 +57,6 @@ def slack_group(report: ValidationReport) -> tuple[str, dict]:
     """
     m = report.metrics
     fields = {
-        "Status": _status_line(report),
         "Pulled / validated rows": (
             f"{report.total_rows:,} / {report.validated_rows:,}"
         ),
@@ -75,11 +74,6 @@ def slack_group(report: ValidationReport) -> tuple[str, dict]:
             else "none"
         ),
         "Cross-field flags": _cross_field_summary(report),
-        "Constant / single-value cols": (
-            ", ".join(sorted(report.constant_columns))
-            if report.constant_columns
-            else "none"
-        ),
         "exp_rev coverage": _pct(m.get("exp_rev_coverage")),
         "Won leads": f"{m.get('won_count', 0):,}",
         "Sold leads": f"{m.get('sold_count', 0):,}",

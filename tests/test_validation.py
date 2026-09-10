@@ -151,7 +151,7 @@ def test_report_renderers_do_not_crash():
     assert "Data quality — auto" in md
     title, fields = vreport.slack_group(rep)
     assert title == "Data quality"
-    assert "Status" in fields and "Cross-field flags" in fields
+    assert "Pulled / validated rows" in fields and "Cross-field flags" in fields
 
 
 def test_validate_never_mutates_input():

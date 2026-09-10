@@ -44,14 +44,15 @@ def test_enabled_with_webhook(monkeypatch):
 
 
 def test_success_payload(capture_slack):
-    """Success payload has header, field section, context, and fallback text."""
+    """Success payload: a section (title + code block) and a context footer."""
     ok = n.notify_success("data-pull", {"Lead type": "auto (6)", "Rows fetched": 42})
     assert ok is True
     payload = capture_slack["payload"]
-    # header + at least one field section + context
     kinds = [b["type"] for b in payload["blocks"]]
-    assert "header" in kinds and "context" in kinds
-    assert ":white_check_mark:" in payload["blocks"][0]["text"]["text"]
+    assert kinds[0] == "section" and kinds[-1] == "context"
+    body = payload["blocks"][0]["text"]["text"]
+    assert ":white_check_mark:" in body
+    assert "```" in body  # values render inside a monospace code block
     # values are carried in the fallback text too
     assert "auto (6)" in payload["text"]
     assert "42" in payload["text"]
@@ -122,7 +123,7 @@ def test_flow_failure_hook_swallows_bad_input(monkeypatch):
 
 
 def test_grouped_payload_structure(capture_slack):
-    """Grouped payload renders header, one divider per non-empty group, context."""
+    """Grouped payload: title + headline outside, fields flattened into a box."""
     ok = n.notify_success_grouped(
         "train-model",
         subject="auto (6)",
@@ -137,23 +138,20 @@ def test_grouped_payload_structure(capture_slack):
     assert ok is True
     payload = capture_slack["payload"]
     kinds = [b["type"] for b in payload["blocks"]]
-    # header, a headline section, 3 dividers (one per non-empty group), context
-    assert kinds[0] == "header"
-    assert kinds.count("divider") == 3
-    assert kinds[-1] == "context"
-    # subject shows in the header; empty field skipped; footer in context
-    assert "auto (6)" in payload["blocks"][0]["text"]["text"]
-    assert "Empty" not in payload["text"]
+    # No header/dividers anymore: just one section (title+headline+box) + context
+    assert kinds == ["section", "context"]
+    body = payload["blocks"][0]["text"]["text"]
+    assert "auto (6)" in body  # subject in the title line
+    assert "Promoted to serving" in body  # headline rendered outside the box
+    assert "```" in body  # fields flattened into a code block
+    assert "Empty" not in payload["text"]  # empty value skipped
     assert "military_affiliation" in payload["text"]
     ctx = payload["blocks"][-1]["elements"][0]["text"]
-    assert "v4.pkl" in ctx
-    # group titles render as bold section text
-    dumped = json.dumps(payload)
-    assert "*Model*" in dumped and "*Performance (held-out)*" in dumped
+    assert "v4.pkl" in ctx  # footer in the context block
 
 
-def test_grouped_payload_skips_empty_group(capture_slack):
-    """A group with no non-empty values is dropped entirely."""
+def test_grouped_payload_skips_empty_values(capture_slack):
+    """Empty values contribute no rows; group titles are flattened away."""
     n.notify_success_grouped(
         "train-model",
         groups=[
@@ -162,6 +160,6 @@ def test_grouped_payload_skips_empty_group(capture_slack):
         ],
     )
     payload = capture_slack["payload"]
-    dumped = json.dumps(payload)
-    assert "*Real*" in dumped
-    assert "*AllEmpty*" not in dumped  # group with no values is dropped entirely
+    assert "a: 1" in payload["text"]  # the real field renders
+    assert "x:" not in payload["text"]  # empty fields add no rows
+    assert "y:" not in payload["text"]

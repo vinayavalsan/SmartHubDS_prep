@@ -224,9 +224,11 @@ def _notify_success(lead_type_name, lead_type_id, version, metadata, path) -> No
     row_count = metadata.get("row_count") or 0
     dropped = metadata.get("dropped_rows") or 0
 
+    # Trimmed: dropped the Time-mix group and the diagnostic Coverage fields
+    # (age-missing, traffic_tier-distinct) — those live in the Prefect artifact.
+    # Kept a compact Rows + Build (with expected_revenue coverage folded in).
     headline = (
-        f":bar_chart: *{row_count:,} training rows* · `{version}` "
-        f"(win rate {won_rate_str})"
+        f"*{row_count:,} training rows* · `{version}` " f"(win rate {won_rate_str})"
     )
     rows_summary = f"{raw_rows:,} → {row_count:,} (dropped {dropped:,} errored/no-bid)"
     groups = [
@@ -237,25 +239,6 @@ def _notify_success(lead_type_name, lead_type_id, version, metadata, path) -> No
                 "Wins / losses": (
                     f"{metadata.get('wins'):,} / {metadata.get('losses'):,}"
                 ),
-                "Win rate": won_rate_str,
-            },
-        ),
-        (
-            "Coverage",
-            {
-                "expected_revenue coverage": _pct(
-                    metadata.get("expected_revenue_coverage")
-                ),
-                "age missing": _pct(metadata.get("age_missing_rate")),
-                "traffic_tier distinct": metadata.get("traffic_tier_distinct"),
-            },
-        ),
-        (
-            "Time mix",
-            {
-                "weekday share": _pct(metadata.get("weekday_share")),
-                "weekend share": _pct(metadata.get("weekend_share")),
-                "workday share (is_workday)": _pct(metadata.get("workday_rate")),
             },
         ),
         (
@@ -263,6 +246,9 @@ def _notify_success(lead_type_name, lead_type_id, version, metadata, path) -> No
             {
                 "Training window (days)": metadata.get("training_window_days"),
                 "Feature count": len(feats),
+                "expected_revenue coverage": _pct(
+                    metadata.get("expected_revenue_coverage")
+                ),
                 "Data range (created_at)": (
                     f"`{metadata.get('data_min_created_at')}` → "
                     f"`{metadata.get('data_max_created_at')}`"
@@ -275,7 +261,7 @@ def _notify_success(lead_type_name, lead_type_id, version, metadata, path) -> No
         subject=f"{lead_type_name} ({lead_type_id})",
         headline=headline,
         groups=groups,
-        footer_extra=f"{_DAY_DEFS} · table `{path}`",
+        footer_extra=f"table `{path}`",
     )
 
 
