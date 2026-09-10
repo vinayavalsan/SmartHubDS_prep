@@ -16,6 +16,8 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from smarthub.core import io
+from smarthub.data_pull.field_registry import RAW_FIELD_REGISTRY
+from smarthub.feature_engineering.feature_registry import FEATURES
 from smarthub.monitoring import transforms
 
 _BIN_MAP = {"1hr": "1h", "6hr": "6h", "12hr": "12h", "day": "D", "week": "W-MON"}
@@ -53,6 +55,7 @@ HISTORICAL_METRIC_GROUPS = {
     ],
     "Win Rate": ["measured_winrate"],
     "Profit Realization Rate": ["profit_realization_rate"],
+    "Revenue Realization Fraction": ["revenue_realization_fraction"],
     "P(Sold | Won)": ["p_sold_given_won"],
     "CM": ["realized_cm", "expected_cm_on_wins"],
     "Number of opportunities, won, and sold leads": [
@@ -75,6 +78,7 @@ _STYLE_MAP = {
     "expected_profit_on_sold": dict(color="#ff7f0e", dash="dot"),
     "recommended_bid_predicted_profit_on_sold": dict(color="#ff7f0e", dash="dash"),
     "expected_revenue_on_wins": dict(color="#1f77b4", dash="dot"),
+    "bid_on_wins": dict(color="#000000", dash="dot"),
     "recommended_bid_predicted_revenue": dict(color="#1f77b4", dash="dash"),
     "expected_profit_on_wins": dict(color="#ff7f0e", dash="dot"),
     "recommended_bid_predicted_profit": dict(color="#ff7f0e", dash="dash"),
@@ -82,9 +86,11 @@ _STYLE_MAP = {
     "measured_winrate": dict(color="#2ca02c", dash="solid"),
     "recommended_bid_predicted_win_rate": dict(color="#2ca02c", dash="dash"),
     "profit_realization_rate": dict(color="#9467bd", dash="solid"),
+    "revenue_realization_fraction": dict(color="#17becf", dash="solid"),
     "p_sold_given_won": dict(color="#ff7f0e", dash="solid"),
     # CM family.
     "realized_cm": dict(color="#9467bd", dash="solid"),
+    "expected_cm_on_sold": dict(color="#9467bd", dash="dash"),
     "expected_cm_on_wins": dict(color="#9467bd", dash="dot"),
     "recommended_bid_predicted_cm": dict(color="#9467bd", dash="dash"),
     # Volume metrics.
@@ -102,6 +108,7 @@ _METRIC_LABELS = {
     "realized_profit": "Realized Profit",
     "expected_profit_on_sold": "Expected Profit — Sold Leads",
     "expected_revenue_on_wins": "Expected Revenue — Won Leads",
+    "bid_on_wins": "Bid — Won Leads",
     "expected_profit_on_wins": "Observed Expected Profit — Won Leads",
     "recommended_bid_predicted_revenue": "ML Predicted Revenue — All Leads",
     "recommended_bid_predicted_profit": "ML Predicted Profit — Recommended Bid",
@@ -109,8 +116,10 @@ _METRIC_LABELS = {
     "measured_winrate": "Measured Win Rate",
     "recommended_bid_predicted_win_rate": "ML Predicted Win Rate",
     "profit_realization_rate": "Profit Realization Rate",
+    "revenue_realization_fraction": "Revenue Realization Fraction",
     "p_sold_given_won": "P(Sold | Won)",
     "realized_cm": "Realized CM",
+    "expected_cm_on_sold": "Expected CM on Sold Leads",
     "expected_cm_on_wins": "Expected CM on Wins",
     "recommended_bid_predicted_cm": "ML Predicted CM",
     "num_opportunities": "Opportunities",
@@ -144,10 +153,13 @@ _FEATURE_EXCLUDE = {
     "expected_profit_on_sold",
     "expected_revenue_on_wins",
     "expected_profit_on_wins",
+    "bid_on_wins",
     "measured_winrate",
     "p_sold_given_won",
     "profit_realization_rate",
+    "revenue_realization_fraction",
     "realized_cm",
+    "expected_cm_on_sold",
     "expected_cm_on_wins",
     "num_opportunities",
     "num_won",
@@ -333,16 +345,19 @@ def _feature_columns(frame: pd.DataFrame) -> list[str]:
 
 
 def _feature_kind(frame: pd.DataFrame, feature: str) -> str:
-    """Classify a live feature as categorical, discrete, or continuous."""
-    if feature == "id" or feature.endswith("_id"):
+    """Return plotting kind from the feature or raw-field registry."""
+    if feature in FEATURES:
+        registry_kind = FEATURES[feature].kind
+    elif feature in RAW_FIELD_REGISTRY:
+        registry_kind = RAW_FIELD_REGISTRY[feature].validation.kind
+    else:
         return "categorical"
-    series = frame[feature]
-    if not pd.api.types.is_numeric_dtype(series):
-        return "categorical"
-    unique_count = pd.to_numeric(series, errors="coerce").nunique(dropna=True)
-    if unique_count <= 20:
+
+    if registry_kind == "numeric_continuous":
+        return "continuous"
+    if registry_kind == "numeric_discrete":
         return "discrete"
-    return "continuous"
+    return "categorical"
 
 
 def _feature_buckets(
@@ -397,6 +412,8 @@ def _with_outcome_expected_metrics(frame: pd.DataFrame) -> pd.DataFrame:
     working["_expected_profit_on_sold"] = sold * profit
     working["_expected_revenue_on_wins"] = won * revenue
     working["_expected_profit_on_wins"] = won * profit
+    bid = pd.to_numeric(working.get("bid"), errors="coerce").fillna(0.0)
+    working["_bid_on_wins"] = won * bid
     return working
 
 
@@ -433,6 +450,7 @@ def _build_feature_summary(
             realized_profit=("realized_profit", "sum"),
             expected_revenue_on_wins=("_expected_revenue_on_wins", "sum"),
             expected_profit_on_wins=("_expected_profit_on_wins", "sum"),
+            bid_on_wins=("_bid_on_wins", "sum"),
         )
         .reset_index()
     )
@@ -457,7 +475,8 @@ def _build_feature_summary(
         np.nan,
     )
 
-    if _feature_kind(frame, feature) == "continuous":
+    kind = _feature_kind(frame, feature)
+    if kind == "continuous":
         sort_key = pd.to_numeric(
             summary["feature_bucket"]
             .astype(str)
@@ -467,16 +486,46 @@ def _build_feature_summary(
             ),
             errors="coerce",
         )
-        summary = (
-            summary.assign(_sort_key=sort_key)
-            .sort_values("_sort_key", kind="stable", na_position="last")
-            .drop(columns="_sort_key")
-            .reset_index(drop=True)
+    elif kind == "discrete":
+        sort_key = pd.to_numeric(summary["feature_bucket"], errors="coerce")
+    else:
+        numeric_key = pd.to_numeric(summary["feature_bucket"], errors="coerce")
+        if numeric_key.notna().any():
+            sort_key = numeric_key
+        else:
+            return summary.reset_index(drop=True)
+
+    return (
+        summary.assign(_sort_key=sort_key)
+        .sort_values("_sort_key", kind="stable", na_position="last")
+        .drop(columns="_sort_key")
+        .reset_index(drop=True)
+    )
+
+
+def _configure_feature_xaxis(
+    fig: go.Figure, labels: list[str], feature: str, kind: str
+) -> None:
+    """Configure feature-axis ordering and categorical handling."""
+    if kind == "categorical":
+        fig.update_xaxes(
+            title_text=feature,
+            type="category",
+            categoryorder="array",
+            categoryarray=labels,
         )
-    return summary
+    else:
+        fig.update_xaxes(title_text=feature)
 
 
-def _feature_win_rate_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
+def _feature_trace_mode(kind: str) -> str:
+    """Return a line mode appropriate for the feature's ordering semantics."""
+    return "markers" if kind == "categorical" else "lines+markers"
+
+
+def _feature_win_rate_chart(
+    summary: pd.DataFrame, feature: str, kind: str
+) -> go.Figure:
     """Plot observed win rate with lead support by feature."""
     labels = summary["feature_bucket"].astype(str).tolist()
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -491,7 +540,7 @@ def _feature_win_rate_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         go.Scatter(
             x=labels,
             y=summary["win_rate"],
-            mode="lines+markers",
+            mode=_feature_trace_mode(kind),
             name="Measured win rate",
         ),
         secondary_y=False,
@@ -503,12 +552,12 @@ def _feature_win_rate_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         margin=dict(l=20, r=20, t=60, b=120),
     )
     fig.update_yaxes(title_text="Win rate", range=[0, 1], secondary_y=False)
-    fig.update_yaxes(title_text="Number of leads", secondary_y=True)
-    fig.update_xaxes(title_text=feature)
+    fig.update_yaxes(title_text="Number of leads", showgrid=False, secondary_y=True)
+    _configure_feature_xaxis(fig, labels, feature, kind)
     return fig
 
 
-def _feature_bid_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
+def _feature_bid_chart(summary: pd.DataFrame, feature: str, kind: str) -> go.Figure:
     """Plot average and median actual bid by feature."""
     labels = summary["feature_bucket"].astype(str).tolist()
     fig = go.Figure()
@@ -516,7 +565,7 @@ def _feature_bid_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         go.Scatter(
             x=labels,
             y=summary["avg_bid"],
-            mode="lines+markers",
+            mode=_feature_trace_mode(kind),
             name="Average bid",
         )
     )
@@ -524,22 +573,24 @@ def _feature_bid_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         go.Scatter(
             x=labels,
             y=summary["median_bid"],
-            mode="lines+markers",
+            mode=_feature_trace_mode(kind),
             name="Median bid",
         )
     )
     fig.update_layout(
         title=f"Historical Bid by {feature}",
-        xaxis_title=feature,
         yaxis_title="Bid ($)",
         hovermode="x unified",
         legend=dict(orientation="h", x=0, xanchor="left", y=-0.22, yanchor="top"),
         margin=dict(l=20, r=20, t=60, b=120),
     )
+    _configure_feature_xaxis(fig, labels, feature, kind)
     return fig
 
 
-def _feature_economics_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
+def _feature_economics_chart(
+    summary: pd.DataFrame, feature: str, kind: str
+) -> go.Figure:
     """Plot canonical realized economics by feature."""
     labels = summary["feature_bucket"].astype(str).tolist()
     fig = go.Figure()
@@ -551,17 +602,17 @@ def _feature_economics_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         fig.add_trace(go.Bar(x=labels, y=summary[column], name=name))
     fig.update_layout(
         title=f"Realized Economics by {feature}",
-        xaxis_title=feature,
         yaxis_title="Amount ($)",
         barmode="group",
         hovermode="x unified",
         legend=dict(orientation="h", x=0, xanchor="left", y=-0.22, yanchor="top"),
         margin=dict(l=20, r=20, t=60, b=120),
     )
+    _configure_feature_xaxis(fig, labels, feature, kind)
     return fig
 
 
-def _feature_cm_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
+def _feature_cm_chart(summary: pd.DataFrame, feature: str, kind: str) -> go.Figure:
     """Plot realized contribution margin with lead support by feature."""
     labels = summary["feature_bucket"].astype(str).tolist()
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -576,7 +627,7 @@ def _feature_cm_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         go.Scatter(
             x=labels,
             y=summary["realized_cm"],
-            mode="lines+markers",
+            mode=_feature_trace_mode(kind),
             name="Realized CM",
         ),
         secondary_y=False,
@@ -585,7 +636,7 @@ def _feature_cm_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         go.Scatter(
             x=labels,
             y=summary["expected_cm_on_wins"],
-            mode="lines+markers",
+            mode=_feature_trace_mode(kind),
             name="Expected CM on wins",
         ),
         secondary_y=False,
@@ -596,10 +647,51 @@ def _feature_cm_chart(summary: pd.DataFrame, feature: str) -> go.Figure:
         legend=dict(orientation="h", x=0, xanchor="left", y=-0.22, yanchor="top"),
         margin=dict(l=20, r=20, t=60, b=120),
     )
-    fig.update_yaxes(title_text="CM", secondary_y=False)
-    fig.update_yaxes(title_text="Number of leads", secondary_y=True)
-    fig.update_xaxes(title_text=feature)
+    fig.update_yaxes(
+        title_text="CM",
+        tickformat=".0%",
+        secondary_y=False,
+    )
+    fig.update_yaxes(title_text="Number of leads", showgrid=False, secondary_y=True)
+    _configure_feature_xaxis(fig, labels, feature, kind)
     return fig
+
+
+def _standard_metric_axis(
+    columns: list[str], y_label: str
+) -> tuple[list[float] | None, str | None]:
+    """Return the standard y-axis range and tick format for metric plots."""
+    names = set(columns)
+    label = y_label.strip().lower()
+
+    probability_metrics = {
+        "measured_winrate",
+        "recommended_bid_predicted_win_rate",
+        "p_sold_given_won",
+        "profit_realization_rate",
+        "revenue_realization_fraction",
+    }
+    cm_metrics = {
+        "realized_cm",
+        "expected_cm_on_sold",
+        "expected_cm_on_wins",
+        "recommended_bid_predicted_cm",
+    }
+    signed_fraction_metrics = {"revenue_bias"}
+
+    if label in {"win rate", "probability", "fraction"}:
+        return [0.0, 1.0], ".0%"
+    if label == "cm":
+        return None, ".0%"
+    if "percentage" in label or "percent" in label:
+        return [0.0, 100.0], ".0f"
+    if names and names.issubset(probability_metrics):
+        return [0.0, 1.0], ".0%"
+    if names and names.issubset(cm_metrics):
+        return None, ".0%"
+    if names and names.issubset(signed_fraction_metrics):
+        return [-1.0, 1.0], ".0%"
+    return None, None
 
 
 def plot_metric_block(
@@ -610,6 +702,8 @@ def plot_metric_block(
     *,
     x_col: str = "datetime_min",
     x_label: str | None = None,
+    legendonly_columns: set[str] | None = None,
+    description: str | None = None,
 ) -> None:
     """Render an overlaid line chart for a selected metric group.
 
@@ -623,11 +717,17 @@ def plot_metric_block(
         Chart title.
     y_label : str
         Label for the y-axis.
+    description : str, optional
+        Short metric definition shown below the heading.
     """
     available = [c for c in columns if c in df_plot.columns]
     if df_plot.empty or not available or x_col not in df_plot.columns:
         st.info(f"No data available for {title}.")
         return
+
+    st.markdown(f"#### {title}")
+    if description:
+        st.caption(description)
 
     plot_df = df_plot[[x_col] + available].melt(
         id_vars=x_col,
@@ -649,16 +749,26 @@ def plot_metric_block(
             trace.line.dash = style["dash"]
             trace.line.width = 2.5
         trace.name = _METRIC_LABELS.get(metric_key, metric_key)
+        if legendonly_columns and metric_key in legendonly_columns:
+            trace.visible = "legendonly"
 
     fig.update_layout(
-        title=title,
         hovermode="x unified",
         legend_title_text="",
         legend=dict(orientation="h", x=0, y=1.02, xanchor="left", yanchor="bottom"),
-        margin=dict(t=80),
+        margin=dict(t=40),
     )
-    fig.update_xaxes(showgrid=True, title_text=x_label or x_col)
-    fig.update_yaxes(showgrid=True, title_text=y_label)
+    xaxis_kwargs = {"showgrid": True, "title_text": x_label or x_col}
+    if x_col == "datetime_min":
+        xaxis_kwargs["tickformat"] = "%a %b %d<br>%H:%M"
+    fig.update_xaxes(**xaxis_kwargs)
+    axis_range, tickformat = _standard_metric_axis(available, y_label)
+    yaxis_kwargs = {"showgrid": True, "title_text": y_label}
+    if axis_range is not None:
+        yaxis_kwargs["range"] = axis_range
+    if tickformat is not None:
+        yaxis_kwargs["tickformat"] = tickformat
+    fig.update_yaxes(**yaxis_kwargs)
     st.plotly_chart(fig, width="stretch")
 
 
@@ -698,6 +808,35 @@ def _add_volume_lead_counts(
     return historical_agg.merge(
         volume_counts, on=merge_keys, how="left", validate="one_to_one"
     )
+
+
+def _add_won_revenue_metrics(
+    historical_agg: pd.DataFrame,
+    df: pd.DataFrame,
+    *,
+    freq: str,
+    group_col: str | None,
+) -> pd.DataFrame:
+    """Add won-lead bid and expected revenue to time-based aggregates."""
+    if historical_agg.empty:
+        return historical_agg
+
+    work = _with_outcome_expected_metrics(df)
+    groupers = [pd.Grouper(key="datetime_min", freq=freq)]
+    if group_col:
+        groupers.append(group_col)
+
+    won_metrics = (
+        work.groupby(groupers, observed=False)
+        .agg(
+            bid_on_wins=("_bid_on_wins", "sum"),
+            expected_revenue_on_wins=("_expected_revenue_on_wins", "sum"),
+        )
+        .reset_index()
+    )
+    merge_keys = ["datetime_min"] + ([group_col] if group_col else [])
+    base = historical_agg.drop(columns=["expected_revenue_on_wins"], errors="ignore")
+    return base.merge(won_metrics, on=merge_keys, how="left", validate="one_to_one")
 
 
 def _assign_count_bins(
@@ -815,9 +954,19 @@ def _aggregate_historical_by_count(
         / pd.to_numeric(agg["expected_profit_on_sold"], errors="coerce"),
         np.nan,
     )
+    agg["revenue_realization_fraction"] = np.where(
+        pd.to_numeric(agg["expected_revenue_on_sold"], errors="coerce") > 0,
+        pd.to_numeric(agg["realized_revenue"], errors="coerce")
+        / pd.to_numeric(agg["expected_revenue_on_sold"], errors="coerce"),
+        np.nan,
+    )
     agg["realized_cm"] = transforms.contribution_margin(
         agg["realized_profit"],
         agg["realized_revenue"],
+    )
+    agg["expected_cm_on_sold"] = transforms.contribution_margin(
+        agg["expected_profit_on_sold"],
+        agg["expected_revenue_on_sold"],
     )
     agg["expected_cm_on_wins"] = transforms.contribution_margin(
         agg["expected_profit_on_wins"],
@@ -938,6 +1087,364 @@ def _render_historical_kpis(df: pd.DataFrame) -> None:
     )
 
 
+def _with_selected_plot_bins(
+    df: pd.DataFrame,
+    *,
+    bin_type: str,
+    bin_size: str | None,
+    count_per_bin: int | None,
+) -> tuple[pd.DataFrame, str]:
+    """Attach the currently selected Performance bin to lead-level rows."""
+    work = df.copy()
+    work["datetime_min"] = pd.to_datetime(
+        work["datetime_min"], errors="coerce", utc=True
+    )
+    work = work.dropna(subset=["datetime_min"]).copy()
+
+    if bin_type == "Time":
+        work["_plot_bin"] = work["datetime_min"].dt.floor(_BIN_MAP[str(bin_size)])
+        return work, "_plot_bin"
+
+    count_type = "won" if bin_type == "Won count" else "opportunity"
+    work = _assign_count_bins(
+        work,
+        count_per_bin=int(count_per_bin),
+        count_type=count_type,
+        group_col=None,
+    )
+    bin_col = "won_count_bin" if count_type == "won" else "opportunity_count_bin"
+    return work, bin_col
+
+
+def _render_revenue_bias(
+    df: pd.DataFrame,
+    *,
+    bin_type: str,
+    bin_size: str | None,
+    count_per_bin: int | None,
+) -> None:
+    """Render realized-vs-expected revenue bias for sold leads."""
+    work, bin_col = _with_selected_plot_bins(
+        df,
+        bin_type=bin_type,
+        bin_size=bin_size,
+        count_per_bin=count_per_bin,
+    )
+    sold = pd.to_numeric(work.get("sold"), errors="coerce").fillna(0).gt(0)
+    work = work.loc[sold].copy()
+    if work.empty:
+        st.info("No sold leads are available for revenue-bias analysis.")
+        return
+
+    work["expected_revenue"] = pd.to_numeric(
+        work.get("expected_revenue"), errors="coerce"
+    )
+    work["realized_revenue"] = pd.to_numeric(
+        work.get("realized_revenue"), errors="coerce"
+    )
+    work = work.dropna(subset=["expected_revenue", "realized_revenue"])
+    if work.empty:
+        st.info("No sold leads have complete expected and realized revenue values.")
+        return
+
+    expected_total = float(work["expected_revenue"].sum())
+    realized_total = float(work["realized_revenue"].sum())
+    bias = (
+        (realized_total - expected_total) / expected_total if expected_total else np.nan
+    )
+
+    st.markdown("#### Revenue Bias — Sold Leads")
+    st.caption(
+        "Revenue bias = (realized revenue - expected revenue) / expected revenue. "
+        "Negative values indicate realized revenue is below expectation."
+    )
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Expected Revenue", f"${expected_total:,.2f}")
+    c2.metric("Realized Revenue", f"${realized_total:,.2f}")
+    c3.metric("Revenue Bias", "—" if np.isnan(bias) else f"{bias:+.2%}")
+
+    binned = (
+        work.groupby(bin_col, observed=False)
+        .agg(
+            datetime_min=("datetime_min", "max"),
+            expected_revenue=("expected_revenue", "sum"),
+            realized_revenue=("realized_revenue", "sum"),
+        )
+        .reset_index()
+        .sort_values("datetime_min")
+    )
+    binned["revenue_bias"] = np.where(
+        binned["expected_revenue"] != 0.0,
+        (binned["realized_revenue"] - binned["expected_revenue"])
+        / binned["expected_revenue"],
+        np.nan,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=binned["datetime_min"],
+            y=binned["revenue_bias"],
+            mode="lines+markers",
+            name="Revenue bias",
+            customdata=np.column_stack(
+                [binned["expected_revenue"], binned["realized_revenue"]]
+            ),
+            hovertemplate=(
+                "%{x}<br>Revenue bias: %{y:.2%}<br>"
+                "Expected revenue: $%{customdata[0]:,.2f}<br>"
+                "Realized revenue: $%{customdata[1]:,.2f}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(y=0.0, line_dash="dash")
+    fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Revenue bias",
+        hovermode="x unified",
+    )
+    fig.update_yaxes(tickformat=".0%", showgrid=True)
+    fig.update_xaxes(showgrid=True, tickformat="%a %b %d<br>%H:%M")
+    st.plotly_chart(fig, width="stretch")
+
+
+def _render_revenue_realization(
+    df: pd.DataFrame,
+    *,
+    bin_type: str,
+    bin_size: str | None,
+    count_per_bin: int | None,
+) -> None:
+    """Render sold-lead revenue-realization KPIs and quantiles by selected bin."""
+    work, bin_col = _with_selected_plot_bins(
+        df,
+        bin_type=bin_type,
+        bin_size=bin_size,
+        count_per_bin=count_per_bin,
+    )
+    work["revenue_realization_fraction"] = pd.to_numeric(
+        work.get("revenue_realization_fraction"), errors="coerce"
+    )
+    work = work.dropna(subset=["revenue_realization_fraction"]).copy()
+    if work.empty:
+        st.info(
+            "No sold leads have valid expected and realized revenue for "
+            "revenue-realization analysis."
+        )
+        return
+
+    expected = pd.to_numeric(work["expected_revenue"], errors="coerce")
+    realized = pd.to_numeric(work["realized_revenue"], errors="coerce")
+    expected_total = float(expected.sum())
+    realized_total = float(realized.sum())
+    aggregate_fraction = (
+        realized_total / expected_total if expected_total > 0.0 else np.nan
+    )
+    median_fraction = float(work["revenue_realization_fraction"].median())
+
+    st.markdown("#### Revenue Realization — Sold Leads")
+    st.caption(
+        "Revenue realization fraction = realized revenue / expected revenue. "
+        "Only sold leads with expected revenue > 0 are included."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sold Leads", f"{len(work):,}")
+    c2.metric(
+        "Aggregate Revenue Realization",
+        "—" if np.isnan(aggregate_fraction) else f"{aggregate_fraction:.2%}",
+    )
+    c3.metric("Median Lead Realization", f"{median_fraction:.2%}")
+    c4.metric("Realized Revenue", f"${realized_total:,.2f}")
+
+    quantiles = (
+        work.groupby(bin_col, observed=False)["revenue_realization_fraction"]
+        .quantile([0.10, 0.25, 0.50, 0.75, 0.90])
+        .unstack()
+        .rename(
+            columns={
+                0.10: "P10",
+                0.25: "P25",
+                0.50: "P50",
+                0.75: "P75",
+                0.90: "P90",
+            }
+        )
+        .reset_index()
+    )
+    support = (
+        work.groupby(bin_col, observed=False)
+        .agg(
+            sold_leads=("revenue_realization_fraction", "size"),
+            datetime_min=("datetime_min", "max"),
+        )
+        .reset_index()
+    )
+    quantiles = (
+        quantiles.merge(support, on=bin_col, how="left")
+        .sort_values("datetime_min")
+        .reset_index(drop=True)
+    )
+
+    fig = go.Figure()
+    for column in ("P10", "P25", "P50", "P75", "P90"):
+        fig.add_trace(
+            go.Scatter(
+                x=quantiles["datetime_min"],
+                y=quantiles[column],
+                mode="lines+markers",
+                name=column,
+                customdata=quantiles[["sold_leads"]],
+                hovertemplate=(
+                    "%{x}<br>"
+                    + column
+                    + ": %{y:.2%}<br>Sold leads: %{customdata[0]:,.0f}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.add_hline(y=1.0, line_dash="dash")
+    fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Realized / Expected Revenue",
+        hovermode="x unified",
+    )
+    fig.update_yaxes(range=[0, 1], tickformat=".0%", showgrid=True)
+    fig.update_xaxes(showgrid=True, tickformat="%a %b %d<br>%H:%M")
+    st.plotly_chart(fig, width="stretch")
+
+
+def _render_total_negative_profit(
+    df: pd.DataFrame,
+    *,
+    bin_type: str,
+    bin_size: str | None,
+    count_per_bin: int | None,
+) -> None:
+    """Render total negative realized profit using the selected binning."""
+    work, bin_col = _with_selected_plot_bins(
+        df,
+        bin_type=bin_type,
+        bin_size=bin_size,
+        count_per_bin=count_per_bin,
+    )
+    sold = pd.to_numeric(work.get("sold"), errors="coerce").fillna(0).gt(0)
+    work = work.loc[sold, [bin_col, "datetime_min", "realized_profit"]].copy()
+    work["realized_profit"] = pd.to_numeric(work["realized_profit"], errors="coerce")
+    work = work.dropna(subset=["realized_profit"])
+    if work.empty:
+        st.info("No sold leads have realized profit for negative-profit analysis.")
+        return
+
+    work["negative_profit"] = work["realized_profit"].where(
+        work["realized_profit"].lt(0), 0.0
+    )
+    work["is_negative_profit"] = work["realized_profit"].lt(0)
+    binned = (
+        work.groupby(bin_col, observed=False)
+        .agg(
+            datetime_min=("datetime_min", "max"),
+            total_negative_profit=("negative_profit", "sum"),
+            negative_profit_leads=("is_negative_profit", "sum"),
+            sold_leads=("is_negative_profit", "size"),
+        )
+        .reset_index()
+        .sort_values("datetime_min")
+    )
+
+    st.markdown("#### Total Negative Profit")
+    st.caption(
+        "Sum of realized profit below $0 across sold leads. "
+        "Non-negative-profit leads contribute $0."
+    )
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=binned["datetime_min"],
+            y=binned["total_negative_profit"],
+            mode="lines+markers",
+            name="Total Negative Profit",
+            customdata=binned[["negative_profit_leads", "sold_leads"]],
+            hovertemplate=(
+                "%{x}<br>Total negative profit: $%{y:,.2f}<br>"
+                "Negative-profit leads: %{customdata[0]:,.0f}<br>"
+                "Sold leads: %{customdata[1]:,.0f}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(y=0.0, line_dash="dash")
+    fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Total Negative Profit ($)",
+        hovermode="x unified",
+    )
+    fig.update_yaxes(tickprefix="$", tickformat=",.0f", showgrid=True)
+    fig.update_xaxes(showgrid=True, tickformat="%a %b %d<br>%H:%M")
+    st.plotly_chart(fig, width="stretch")
+
+
+def _render_win_rate_bias_plot(agg: pd.DataFrame) -> None:
+    """Render measured-versus-predicted win-rate bias over monitoring bins."""
+    required = {
+        "datetime_min",
+        "measured_winrate",
+        "recommended_bid_predicted_win_rate",
+    }
+    if not required.issubset(agg.columns):
+        return
+
+    plot = agg[list(required)].copy()
+    plot["measured_winrate"] = pd.to_numeric(plot["measured_winrate"], errors="coerce")
+    plot["predicted_winrate"] = pd.to_numeric(
+        plot["recommended_bid_predicted_win_rate"],
+        errors="coerce",
+    )
+    valid = (
+        plot["measured_winrate"].notna()
+        & plot["predicted_winrate"].notna()
+        & plot["predicted_winrate"].gt(0)
+    )
+    plot = plot.loc[valid].copy()
+    if plot.empty:
+        st.info("No win-rate bias observations are available for these filters.")
+        return
+
+    plot["win_rate_bias"] = (
+        plot["measured_winrate"] - plot["predicted_winrate"]
+    ) / plot["predicted_winrate"]
+
+    st.markdown("#### Win Rate Bias")
+    st.caption(
+        "Bias = (measured win rate - predicted win rate) / predicted win rate. "
+        "Negative values mean the model is overpredicting auction wins."
+    )
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=plot["datetime_min"],
+            y=plot["win_rate_bias"],
+            mode="lines+markers",
+            name="Win Rate Bias",
+            line=dict(color=_STYLE_MAP["measured_winrate"]["color"]),
+            customdata=plot[["predicted_winrate", "measured_winrate"]],
+            hovertemplate=(
+                "%{x}<br>Win-rate bias: %{y:+.2%}<br>"
+                "Predicted win rate: %{customdata[0]:.2%}<br>"
+                "Measured win rate: %{customdata[1]:.2%}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(y=0.0, line_dash="dash")
+    fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Win Rate Bias",
+        hovermode="x unified",
+    )
+    fig.update_yaxes(tickformat=".0%", showgrid=True)
+    fig.update_xaxes(showgrid=True, tickformat="%a %b %d<br>%H:%M")
+    st.plotly_chart(fig, width="stretch")
+
+
 def _render_ml_kpis(df: pd.DataFrame) -> None:
     """Render production prediction-vs-observed KPIs."""
     mask = transforms.recommended_bid_metrics_available_mask(df)
@@ -969,10 +1476,18 @@ def _render_ml_kpis(df: pd.DataFrame) -> None:
     )
 
     st.markdown("#### Production ML Prediction Performance")
+    st.caption(
+        "Aggregate predicted-versus-observed ML performance for the currently "
+        "selected production cohort."
+    )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
         "Profit Prediction Error",
-        "—" if np.isnan(profit_prediction_error) else f"{profit_prediction_error:+.2%}",
+        (
+            "—"
+            if np.isnan(profit_prediction_error)
+            else f"{profit_prediction_error:+.2%}"
+        ),
         delta=(
             None
             if np.isnan(profit_prediction_error)
@@ -1082,7 +1597,7 @@ def main():
                     else "Opportunities per bin"
                 ),
                 min_value=10,
-                max_value=2000,
+                max_value=2000 if bin_type == "Won count" else 10000,
                 value=500 if bin_type == "Won count" else 1000,
                 step=10,
                 key=(
@@ -1282,11 +1797,21 @@ def main():
                 freq=_BIN_MAP[bin_size],
                 group_col=group_col,
             )
+            historical_agg = _add_won_revenue_metrics(
+                historical_agg,
+                df,
+                freq=_BIN_MAP[bin_size],
+                group_col=group_col,
+            )
             historical_agg["p_sold_given_won"] = np.where(
                 pd.to_numeric(historical_agg["num_won"], errors="coerce") > 0,
                 pd.to_numeric(historical_agg["num_sold"], errors="coerce")
                 / pd.to_numeric(historical_agg["num_won"], errors="coerce"),
                 np.nan,
+            )
+            historical_agg["expected_cm_on_sold"] = transforms.contribution_margin(
+                historical_agg["expected_profit_on_sold"],
+                historical_agg["expected_revenue_on_sold"],
             )
             historical_agg["profit_realization_rate"] = np.where(
                 pd.to_numeric(
@@ -1297,6 +1822,19 @@ def main():
                 pd.to_numeric(historical_agg["realized_profit"], errors="coerce")
                 / pd.to_numeric(
                     historical_agg["expected_profit_on_sold"],
+                    errors="coerce",
+                ),
+                np.nan,
+            )
+            historical_agg["revenue_realization_fraction"] = np.where(
+                pd.to_numeric(
+                    historical_agg["expected_revenue_on_sold"],
+                    errors="coerce",
+                )
+                > 0,
+                pd.to_numeric(historical_agg["realized_revenue"], errors="coerce")
+                / pd.to_numeric(
+                    historical_agg["expected_revenue_on_sold"],
                     errors="coerce",
                 ),
                 np.nan,
@@ -1322,6 +1860,7 @@ def main():
                     group_col=group_col,
                 )
                 merge_keys = ["datetime_min"] + ([group_col] if group_col else [])
+
             else:
                 count_type = "won" if bin_type == "Won count" else "opportunity"
                 ml_agg = _aggregate_ml_by_count(
@@ -1335,6 +1874,15 @@ def main():
                 )
                 merge_keys = [count_bin_col] + ([group_col] if group_col else [])
 
+            if not ml_agg.empty and {
+                "recommended_bid_predicted_revenue",
+                "recommended_bid_predicted_profit",
+            }.issubset(ml_agg.columns):
+                ml_agg["recommended_bid_predicted_bid_cost"] = (
+                    ml_agg["recommended_bid_predicted_revenue"]
+                    - ml_agg["recommended_bid_predicted_profit"]
+                )
+
             if ml_agg.empty:
                 st.info(
                     "ML metrics are not available for the selected filters; "
@@ -1346,6 +1894,7 @@ def main():
                     column
                     for column in (
                         "recommended_bid_predicted_revenue",
+                        "recommended_bid_predicted_bid_cost",
                         "recommended_bid_predicted_profit",
                         "recommended_bid_predicted_win_rate",
                         "recommended_bid_predicted_cm",
@@ -1359,7 +1908,14 @@ def main():
                     validate="one_to_one",
                 )
 
-        def _plot_group(cols, title, y_label):
+        def _plot_group(
+            cols,
+            title,
+            y_label,
+            *,
+            legendonly_columns=None,
+            description=None,
+        ):
             if group_col is None:
                 plot_metric_block(
                     agg,
@@ -1368,6 +1924,8 @@ def main():
                     y_label,
                     x_col=x_col,
                     x_label=x_label,
+                    legendonly_columns=legendonly_columns,
+                    description=description,
                 )
                 return
 
@@ -1397,13 +1955,21 @@ def main():
                     y_label,
                     x_col=x_col,
                     x_label=x_label,
+                    legendonly_columns=legendonly_columns,
+                    description=description,
                 )
 
         sold_revenue_cols = [
             "bid_cost",
             "realized_revenue",
             "expected_revenue_on_sold",
+            "bid_on_wins",
+            "expected_revenue_on_wins",
         ]
+        sold_revenue_legendonly = {
+            "bid_on_wins",
+            "expected_revenue_on_wins",
+        }
         sold_profit_cols = [
             "realized_profit",
             "expected_profit_on_sold",
@@ -1411,9 +1977,14 @@ def main():
         ml_revenue_comparison_cols = [
             "recommended_bid_predicted_revenue",
             "expected_revenue_on_wins",
+            "recommended_bid_predicted_bid_cost",
         ]
         winrate_cols = ["measured_winrate"]
-        cm_cols = ["realized_cm", "expected_cm_on_wins"]
+        cm_cols = [
+            "realized_cm",
+            "expected_cm_on_sold",
+            "expected_cm_on_wins",
+        ]
 
         if show_ml_metrics:
             winrate_cols.append("recommended_bid_predicted_win_rate")
@@ -1431,6 +2002,7 @@ def main():
                     sold_revenue_cols,
                     "Sold Leads — Bid Cost, Realized Revenue, and Expected Revenue",
                     "Amount ($)",
+                    legendonly_columns=sold_revenue_legendonly,
                 )
                 _plot_group(
                     sold_profit_cols,
@@ -1443,7 +2015,11 @@ def main():
                     "Win rate",
                 )
                 _plot_group(
-                    ["realized_cm", "expected_cm_on_wins"],
+                    [
+                        "realized_cm",
+                        "expected_cm_on_sold",
+                        "expected_cm_on_wins",
+                    ],
                     "Contribution Margin",
                     "CM",
                 )
@@ -1454,14 +2030,38 @@ def main():
                 )
                 _plot_group(
                     ["profit_realization_rate"],
-                    "Profit Realization Rate = Realized Profit / Expected Profit "
-                    "on Sold Leads",
+                    "Profit Realization Rate",
                     "Fraction",
+                    description=("Realized Profit / Expected Profit on sold leads."),
+                )
+                _plot_group(
+                    ["revenue_realization_fraction"],
+                    "Revenue Realization Fraction",
+                    "Fraction",
+                    description=("Realized Revenue / Expected Revenue on sold leads."),
                 )
                 _plot_group(
                     ["p_sold_given_won"],
                     "P(Sold | Won) = Sold Leads / Won Leads",
                     "Probability",
+                )
+                _render_revenue_bias(
+                    df,
+                    bin_type=bin_type,
+                    bin_size=bin_size if bin_type == "Time" else None,
+                    count_per_bin=(int(count_per_bin) if bin_type != "Time" else None),
+                )
+                _render_revenue_realization(
+                    df,
+                    bin_type=bin_type,
+                    bin_size=bin_size if bin_type == "Time" else None,
+                    count_per_bin=(int(count_per_bin) if bin_type != "Time" else None),
+                )
+                _render_total_negative_profit(
+                    df,
+                    bin_type=bin_type,
+                    bin_size=bin_size if bin_type == "Time" else None,
+                    count_per_bin=(int(count_per_bin) if bin_type != "Time" else None),
                 )
 
             with ml_tab:
@@ -1471,6 +2071,7 @@ def main():
                 )
                 if show_ml_metrics:
                     _render_ml_kpis(plot_df)
+                    _render_win_rate_bias_plot(agg)
                     _plot_group(
                         [
                             "measured_winrate",
@@ -1510,6 +2111,7 @@ def main():
                 sold_revenue_cols,
                 "Sold Leads — Bid Cost, Realized Revenue, and Expected Revenue",
                 "Amount ($)",
+                legendonly_columns=sold_revenue_legendonly,
             )
         elif selected_metric == "Sold Lead Profit":
             _plot_group(
@@ -1616,8 +2218,8 @@ def main():
             top_n = st.slider(
                 "Top categories / values",
                 min_value=5,
-                max_value=50,
-                value=20,
+                max_value=100,
+                value=50,
                 key="mon_feature_top_n",
             )
 
@@ -1639,24 +2241,24 @@ def main():
         left, right = st.columns(2)
         with left:
             st.plotly_chart(
-                _feature_win_rate_chart(summary, feature),
+                _feature_win_rate_chart(summary, feature, kind),
                 width="stretch",
             )
         with right:
             st.plotly_chart(
-                _feature_bid_chart(summary, feature),
+                _feature_bid_chart(summary, feature, kind),
                 width="stretch",
             )
 
         left, right = st.columns(2)
         with left:
             st.plotly_chart(
-                _feature_economics_chart(summary, feature),
+                _feature_economics_chart(summary, feature, kind),
                 width="stretch",
             )
         with right:
             st.plotly_chart(
-                _feature_cm_chart(summary, feature),
+                _feature_cm_chart(summary, feature, kind),
                 width="stretch",
             )
 

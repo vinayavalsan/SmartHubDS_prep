@@ -105,3 +105,33 @@ slo:
   error_rate_pct: 1.0         # % of requests that errored
   shap_backlog: 1000          # rows awaiting SHAP enrichment (shap-worker lag)
   no_requests_minutes: 10     # no successful request this long => possible outage
+
+# Hourly ML realization monitor. Evaluates completed hourly windows only and
+# alerts on persistent negative win-rate bias for configured ML bid strategies.
+# Slack delivery uses the existing SLACK_WEBHOOK_URL notification integration.
+model_degradation:
+  enabled: true
+
+  # Bidding strategies that are controlled by the ML bid policy. Keep empty
+  # until production ML bidding_strategy_id values are known/configured.
+  ml_bidding_strategy_ids: [3]
+
+  # Additional fields used to split each monitored strategy into cohorts.
+  # bidding_strategy_id is always included automatically and must not be listed.
+  cohort_features:
+    - campaign_id
+
+  # The first implementation intentionally evaluates one-hour windows.
+  window_hours: 1
+
+  # A cohort is persistently degraded when the latest completed hour is bad and
+  # at least required_bad_windows of the last persistence_windows are bad.
+  persistence_windows: 3
+  required_bad_windows: 2
+
+  # Bad requires BOTH a material relative bias and enough statistical evidence.
+  # win-rate bias = (measured win rate - predicted win rate) / predicted win rate
+  warning_winrate_bias: -0.10
+  warning_zscore: -2.0
+  critical_winrate_bias: -0.20
+  critical_zscore: -3.0
