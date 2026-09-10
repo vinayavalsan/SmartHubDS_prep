@@ -54,17 +54,18 @@ def check_once(window_minutes: int | None = None) -> list[dict]:
         )
         return []
 
-    fields = {
-        "Window": f"last {window_minutes} min",
-        "Requests": slis["requests"],
-        "Rate/min": slis["rate_per_min"],
-        "TAT p99 (s)": slis["tat_p99"],
-        "Within 1s %": slis["within_1s_pct"],
-        "Error rate %": slis["error_rate_pct"],
-        "SHAP backlog": slis["shap_backlog"],
-        "Breaches": ", ".join(b["metric"] for b in breaches),
+    # Show ONLY the breached metrics + their values (not the full SLI dump) so
+    # the alert is about what actually broke. Window gives the time context.
+    slo_labels = {
+        "tat_p99_seconds": "TAT p99 (s)",
+        "error_rate_pct": "Error rate %",
+        "shap_backlog": "SHAP backlog",
+        "no_requests_minutes": "No requests (min)",
     }
-    error_text = "\n".join(b["message"] for b in breaches)
+    fields = {"Window": f"last {window_minutes} min"}
+    for b in breaches:
+        fields[slo_labels.get(b["metric"], b["metric"])] = b["value"]
+    error_text = "; ".join(b["message"] for b in breaches)
     logger.warning("SLO breach: %s", error_text)
     notifications.notify_failure("bid-api-slo", fields, error=error_text)
     return breaches

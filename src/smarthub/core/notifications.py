@@ -89,19 +89,67 @@ def _post(payload: dict) -> bool:
     return False
 
 
+_VERB = {_SUCCESS: "completed", _WARNING: "WARNING", _FAILURE: "FAILED"}
+
+
+def _rows(fields: dict) -> list[tuple[str, str]]:
+    """(key, value) pairs, skipping empties and stripping backticks.
+
+    Backticks are removed because values render inside a ``` code block ```,
+    where backticks would show literally rather than as inline code.
+    """
+    out: list[tuple[str, str]] = []
+    for k, v in (fields or {}).items():
+        if v in (None, "", []):
+            continue
+        out.append((str(k), str(v).replace("`", "")))
+    return out
+
+
+def _table(rows: list[tuple[str, str]]) -> str:
+    """Left-align keys into a monospace column: ``key   value``."""
+    if not rows:
+        return ""
+    width = max(len(k) for k, _ in rows)
+    return "\n".join(f"{k.ljust(width)}   {v}" for k, v in rows)
+
+
+def _assemble(head: list[str], rows: list[tuple[str, str]], footer_extra) -> dict:
+    """Assemble the common layout: rendered head, a code-block table, a footer.
+
+    ``head`` lines render as normal mrkdwn (bold title, emoji, headline, links);
+    ``rows`` go inside a ``` code block ``` as a column-aligned key/value table
+    so each alert reads as one compact, low-clutter monospace box. The env label
+    and timestamp (plus any ``footer_extra``) go in a small context footer.
+    """
+    body = "\n".join(head)
+    if rows:
+        body += "\n```\n" + _table(rows) + "\n```"
+    ctx = f"env: `{_env_label()}` · {_utc_now_str()}"
+    if footer_extra:
+        ctx += f" · {footer_extra}"
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": body}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]},
+    ]
+    # Fallback text (notifications, screen readers, clients without blocks).
+    lines = list(head) + [f"{k}: {v}" for k, v in rows] + [ctx]
+    return {"text": "\n".join(lines), "blocks": blocks}
+
+
 def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) -> dict:
-    """Build a Block Kit Slack message with a plain-text fallback.
+    """Build a code-block Slack message (title outside, key/values in a box).
 
     Inputs
     ------
     status : str
-        ``success`` or ``failure``; selects the emoji and verb.
+        ``success``, ``warning`` or ``failure``; selects the emoji and verb.
     pipeline : str
-        Pipeline name shown in the header.
+        Pipeline name shown in the title.
     fields : dict
-        Label/value pairs rendered as a field grid (empty values skipped).
+        Label/value pairs rendered as a monospace table (empty values skipped).
     error : str | None
-        Error text shown in a code block (truncated if very long).
+        Error text added as a final ``Error`` row (truncated if very long).
 
     Returns
     -------
@@ -109,66 +157,22 @@ def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) 
         A payload with ``text`` and ``blocks`` keys.
     """
     emoji = _EMOJI.get(status, "")
-    verb = {
-        _SUCCESS: "completed",
-        _WARNING: "WARNING",
-        _FAILURE: "FAILED",
-    }.get(status, status.upper())
-    header = f"SmartHub · {pipeline} · {verb}"
+    verb = _VERB.get(status, status.upper())
+    head = [f"{emoji} *SmartHub · {pipeline} · {verb}*"]
 
-    blocks: list[dict] = [
-        {
-            "type": "header",
-            "text": {"type": "plain_text", "text": f"{emoji} {header}"[:150]},
-        }
-    ]
-
-    # Optional @-mention on failure.
+    # Optional @-mention on failure (rendered above the box).
     if status == _FAILURE:
         mention = os.environ.get(MENTION_ENV, "").strip()
         if mention:
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"{mention} attention needed"},
-                }
-            )
+            head.append(f"{mention} attention needed")
 
-    # Field grid (2 columns) — skip empty values.
-    field_blocks = [
-        {"type": "mrkdwn", "text": f"*{k}:*\n{v}"}
-        for k, v in fields.items()
-        if v not in (None, "", [])
-    ]
-    for i in range(0, len(field_blocks), 10):  # Slack caps 10 fields/section
-        blocks.append({"type": "section", "fields": field_blocks[i : i + 10]})
-
+    rows = _rows(fields)
     if error:
-        text = str(error)
-        if len(text) > 2800:
-            text = text[:2800] + "\n… (truncated)"
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*Error:*\n```{text}```"},
-            }
-        )
-
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [
-                {"type": "mrkdwn", "text": f"env: `{_env_label()}` · {_utc_now_str()}"}
-            ],
-        }
-    )
-
-    # Fallback text (notifications, screen readers, clients without blocks).
-    lines = [f"{emoji} {header}"]
-    lines += [f"{k}: {v}" for k, v in fields.items() if v not in (None, "", [])]
-    if error:
-        lines.append(f"Error: {error}")
-    return {"text": "\n".join(lines), "blocks": blocks}
+        text = str(error).strip()
+        if len(text) > 1500:
+            text = text[:1500] + " … (truncated)"
+        rows.append(("Error", text))
+    return _assemble(head, rows, footer_extra=None)
 
 
 def notify_raw(payload: dict) -> bool:
@@ -270,15 +274,6 @@ def notify_failure(pipeline: str, fields: dict, error: str | None = None) -> boo
     return notify(_FAILURE, pipeline, fields, error=error)
 
 
-def _field_blocks(fields: dict) -> list[dict]:
-    """2-column Block Kit field blocks from a dict; empty values are skipped."""
-    return [
-        {"type": "mrkdwn", "text": f"*{k}:*\n{v}"}
-        for k, v in fields.items()
-        if v not in (None, "", [])
-    ]
-
-
 def _build_grouped_payload(
     status: str,
     pipeline: str,
@@ -287,23 +282,29 @@ def _build_grouped_payload(
     groups: list,
     footer_extra: str | None,
 ) -> dict:
-    """Build a Block Kit message grouped into titled sections with dividers.
+    """Build a code-block Slack message from grouped fields.
+
+    Title (emoji + pipeline + verb + subject) and the headline render as normal
+    mrkdwn above the box; the groups are flattened into one column-aligned
+    key/value table inside a ``` code block ``` (group titles are dropped — the
+    trimmed field keys are self-describing). Empty values/groups are skipped.
 
     Inputs
     ------
     status : str
-        ``success`` or ``failure``.
+        ``success``, ``warning`` or ``failure``.
     pipeline : str
-        Pipeline name shown in the header.
+        Pipeline name shown in the title.
     subject : str | None
-        Optional subject appended to the header.
+        Optional subject appended to the title.
     headline : str | None
-        Prominent mrkdwn line under the header (e.g. the decision).
+        Prominent mrkdwn line under the title (e.g. the decision) — rendered
+        outside the box so its bold/links/emoji display.
     groups : list
-        Ordered ``(title, fields_dict)`` pairs; each renders as a divider
-        plus a titled 2-column field grid.
+        Ordered ``(title, fields_dict)`` pairs; titles are dropped, fields are
+        flattened into the table in order.
     footer_extra : str | None
-        Extra text appended to the context footer.
+        Extra mrkdwn appended to the context footer (e.g. a link).
 
     Returns
     -------
@@ -311,53 +312,16 @@ def _build_grouped_payload(
         A payload with ``text`` and ``blocks`` keys.
     """
     emoji = _EMOJI.get(status, "")
-    verb = "completed" if status == _SUCCESS else "FAILED"
+    verb = _VERB.get(status, status.upper())
     subj = f" · {subject}" if subject else ""
-    header = f"SmartHub · {pipeline} · {verb}{subj}"
-
-    blocks: list[dict] = [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": f"{emoji} {header}"[:150],
-                "emoji": True,
-            },
-        }
-    ]
+    head = [f"{emoji} *SmartHub · {pipeline} · {verb}{subj}*"]
     if headline:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": headline}})
+        head.append(headline)
 
-    for title, fields in groups:
-        fb = _field_blocks(fields)
-        if not fb:
-            continue
-        blocks.append({"type": "divider"})
-        first = {"type": "section", "fields": fb[:10]}
-        if title:
-            first["text"] = {"type": "mrkdwn", "text": f"*{title}*"}
-        blocks.append(first)
-        for i in range(10, len(fb), 10):
-            blocks.append({"type": "section", "fields": fb[i : i + 10]})
-
-    ctx = f"env: `{_env_label()}` · {_utc_now_str()}"
-    if footer_extra:
-        ctx += f" · {footer_extra}"
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]})
-
-    # Fallback text (notifications, screen readers, no-block clients).
-    lines = [f"{emoji} {header}"]
-    if headline:
-        lines.append(headline)
-    for title, fields in groups:
-        rendered = [f"{k}: {v}" for k, v in fields.items() if v not in (None, "", [])]
-        if not rendered:
-            continue
-        if title:
-            lines.append(f"— {title} —")
-        lines += rendered
-    lines.append(ctx)
-    return {"text": "\n".join(lines), "blocks": blocks}
+    rows: list[tuple[str, str]] = []
+    for _title, fields in groups or []:
+        rows.extend(_rows(fields))
+    return _assemble(head, rows, footer_extra)
 
 
 def notify_success_grouped(
@@ -435,7 +399,6 @@ def flow_failure_hook(flow, flow_run, state) -> None:
         fields = {
             "Lead type": _lead_type_label(params),
             "Run": getattr(flow_run, "name", None),
-            "Deployment": getattr(flow_run, "deployment_id", None),
             "Run URL": _run_url(flow_run) or None,
         }
         message = getattr(state, "message", None) or "Flow run entered a FAILED state."

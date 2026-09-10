@@ -549,18 +549,14 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     )
 
     if binary_variance_loss:
-        affected = "\n".join(
-            f"{row['feature']}: train={row['train_unique']}, "
-            f"test={row['eval_unique']}"
-            for row in binary_variance_loss
-        )
+        affected = ", ".join(row["feature"] for row in binary_variance_loss)
         notifications.notify_warning(
             "train-model",
             {
                 "Lead type": f"{lead_type_name} ({lead_type_id})",
-                "Issue": "Binary feature(s) lost variance in training split",
-                "Affected features": affected,
-                "Action": "Training continues normally",
+                "Issue": "Binary feature(s) lost variance in train split",
+                "Affected": affected,
+                "Action": "Training continues",
             },
         )
 

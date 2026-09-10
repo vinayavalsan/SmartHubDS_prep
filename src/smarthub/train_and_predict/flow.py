@@ -6,6 +6,7 @@ This module runs training, publishes run summaries, and sends notifications.
 from __future__ import annotations
 
 import argparse
+import os
 
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_markdown_artifact
@@ -366,122 +367,66 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     promotion_status = result.get("promotion_status")
     promotion_mode = result.get("promotion_mode")
     if promotion_mode == "disabled":
-        icon = ":fast_forward:"
         state = "Promotion evaluation disabled"
     elif promoted:
-        icon = ":white_check_mark:"
         state = "Promoted to serving"
     elif promotion_status == "awaiting_manual_promotion":
-        icon = ":large_yellow_circle:"
         state = "Eligible — awaiting manual promotion"
     elif eligibility_status == "eligible":
-        icon = ":pause_button:"
         state = "Eligible — promotion execution skipped"
     else:
-        icon = ":pause_button:"
         state = "Not eligible — serving model unchanged"
+    # Profit lift goes in the headline (replaces the whole Bid-optimizer group).
+    lift_pct = _f(opt.get("expected_profit_lift_pct"), "{:.1%}")
+    lift_txt = f" · profit lift {lift_pct}" if lift_pct != "—" else ""
     headline = (
-        f"{icon} *{state}* · "
-        f"`{result.get('production_model_version') or result.get('training_run_id')}`\n"
+        f"*{state}* · "
+        f"`{result.get('production_model_version') or result.get('training_run_id')}`"
+        f"{lift_txt}\n"
         f"{result.get('promotion_reason', '—')}"
     )
 
     reg_used = f"{fb['n_registered_used']}/{fb['n_registered']}"
-    feature_title = f"Features · {fb['total']} ({reg_used} from registry)"
+    # Trimmed: dropped the "Observed production policy" and "Bid optimizer"
+    # groups (deep analysis lives in the model-diagnostics app, linked in the
+    # footer), slimmed Model + Performance, and collapsed Features to one line.
     groups = [
         (
             "Model",
             {
                 "Model": f"{lineage.get('model_type')} "
                 f"(cal={lineage.get('calibrated')})",
-                "Rows trained": result["prep_summary"].get("training_rows"),
-                "Training run ID": result.get("training_run_id"),
-                "Production version": (result.get("production_model_version") or "—"),
-                "Promotion mode": promotion_mode,
-                "Eligibility status": eligibility_status,
-                "Promotion status": promotion_status,
-                "Data range": (
-                    f"{lineage.get('data_min_created_at')} → "
-                    f"{lineage.get('data_max_created_at')}"
-                ),
-                "Trained on table": f"`{lineage.get('training_table_version')}`",
+                "Run ID": result.get("training_run_id"),
+                "Status": f"{eligibility_status} → {promotion_status}",
+                "Trained on": f"`{lineage.get('training_table_version')}`",
             },
         ),
         (
-            "Performance (held-out)",
+            "Performance",
             {
                 "ROC AUC": _f(m.get("roc_auc")),
-                "PR AUC": _f(m.get("pr_auc")),
-                "Log loss": _f(m.get("log_loss")),
-                "F2": _f(m.get("f2")),
                 "Calibration error": _f(m.get("calibration_error")),
             },
         ),
         (
-            "Observed production policy (held-out)",
-            {
-                "Rows": opt.get("optimizer_rows", "—"),
-                "Wins": opt.get("observed_policy_wins", "—"),
-                "Win rate": _f(
-                    opt.get("observed_policy_win_rate"),
-                    "{:.2%}",
-                ),
-                "Expected revenue": _f(
-                    opt.get("observed_policy_total_expected_revenue")
-                ),
-                "Bid cost": _f(opt.get("observed_policy_total_bid_cost")),
-                "Observed profit on historical wins": _f(
-                    opt.get("observed_policy_total_expected_profit")
-                ),
-                "Expected CM": _f(
-                    opt.get("observed_policy_expected_cm"),
-                ),
-            },
-        ),
-        (
-            "Bid optimizer (predicted)",
-            {
-                "Probability-weighted expected-profit lift": _f(
-                    opt.get("expected_profit_lift_total")
-                ),
-                "Probability-weighted expected-profit lift %": _f(
-                    opt.get("expected_profit_lift_pct"),
-                    "{:.2%}",
-                ),
-                "Probability-weighted expected profit": (
-                    f"{_f(opt.get('current_bid_total_expected_profit'))} → "
-                    f"{_f(opt.get('recommended_bid_total_expected_profit'))}"
-                ),
-                "Avg win rate": (
-                    f"{_f(opt.get('avg_current_bid_predicted_win_rate'))} → "
-                    f"{_f(opt.get('avg_recommended_bid_predicted_win_rate'))}"
-                ),
-                "Avg / median bid change": (
-                    f"{_f(opt.get('avg_bid_change'))} / "
-                    f"{_f(opt.get('median_bid_change'))}"
-                ),
-                "Bid up/down/same": (
-                    f"{_f(opt.get('bid_increase_pct'), '{:.2f}%')} / "
-                    f"{_f(opt.get('bid_decrease_pct'), '{:.2f}%')} / "
-                    f"{_f(opt.get('bid_unchanged_pct'), '{:.2f}%')}"
-                ),
-                "Avg recommended CM": _f(opt.get("avg_recommended_bid_cm_if_won")),
-            },
-        ),
-        (
-            feature_title,
-            {
-                "Registry features used": reg_used,
-                "Registry features unused": ", ".join(fb["unused"]) or "none",
-            },
+            "Features",
+            {"Used": f"{fb['total']} ({reg_used} from registry)"},
         ),
     ]
+    # Deep-link to the model-diagnostics app for this run (if configured).
+    diag_base = os.getenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", "").strip()
+    run_id = result.get("training_run_id")
+    diag = (
+        f"<{diag_base}?run_id={run_id}|diagnostics> · "
+        if diag_base and run_id
+        else ""
+    )
     notifications.notify_success_grouped(
         "train-model",
         subject=f"{lead_type_name} ({lead_type_id})",
         headline=headline,
         groups=groups,
-        footer_extra=f"model `{result['model_path']}`",
+        footer_extra=f"{diag}model `{result['model_path']}`",
     )
 
 
