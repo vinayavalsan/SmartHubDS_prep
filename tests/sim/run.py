@@ -19,6 +19,7 @@ Uses only pandas + requests — runs in the worker container with no extra insta
 
 Analyse the ledger afterwards with analyze.py.
 """
+
 from __future__ import annotations
 
 import argparse

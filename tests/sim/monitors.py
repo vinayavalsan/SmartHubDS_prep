@@ -11,6 +11,7 @@ Pure stdlib + `docker`/`psql` via subprocess — no Python deps.
         --serve-container prefect-serve --pg-container prefect-postgres \
         --disk-path /app/data
 """
+
 from __future__ import annotations
 
 import argparse

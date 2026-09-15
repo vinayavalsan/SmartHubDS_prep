@@ -11,6 +11,7 @@ anything real. It mimics the real contract: 422 on a missing required field,
     # then:  python run.py --data snapshot.parquet \
     #        --url http://127.0.0.1:8080 --dispatch
 """
+
 from __future__ import annotations
 
 import argparse

@@ -10,6 +10,7 @@ limited parity + economic backtest.
     python analyze.py data/sim/ledger.jsonl
     python analyze.py data/sim/ledger.jsonl --data data/sim/snapshot.parquet
 """
+
 from __future__ import annotations
 
 import argparse

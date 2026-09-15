@@ -15,6 +15,7 @@ back; the checkpoint makes it resume the right day.
 Slack: set SLACK_WEBHOOK in the environment to receive heartbeats (else printed).
 Quick test: add `--segment-minutes 6 --speed 60` to run a "day" in ~6 seconds.
 """
+
 from __future__ import annotations
 
 import argparse
