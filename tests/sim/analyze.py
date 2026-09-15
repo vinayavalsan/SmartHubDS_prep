@@ -81,7 +81,10 @@ def analyze(ledger_path: str, snapshot: str | None,
                   f"max {served.max():.2f}  | null(no-bid) {max(null_bids,0)}")
 
     # ---- parity / backtest against historical outcomes ----
-    if snapshot:
+    if snapshot and "recommended_bid" not in df.columns:
+        print("\n(no successful bids in this ledger yet — skipping parity/report; "
+              "check the status codes above)")
+    elif snapshot:
         snap = pd.read_parquet(snapshot, columns=["id", "bid", "won", "rev",
                                                   "expected_revenue"])
         snap = snap.rename(columns={"id": "lead_ping_id", "bid": "hist_bid",
@@ -138,7 +141,10 @@ def analyze(ledger_path: str, snapshot: str | None,
 
     # ---- verdict ----
     print("\n--- verdict ---")
+    ok_rate = float(ok.mean()) if n else 0.0
     v = []
+    v.append(("requests succeeded (2xx)", ok.sum() > 0 and ok_rate >= 0.99,
+              f"{ok_rate*100:.0f}% ok of {n}"))
     v.append(("no 5xx/timeouts", n_5xx == 0, f"{n_5xx} errors"))
     v.append(("p99 < 1000ms", (_pct(lat, 99) < 1000) if len(lat) else False,
               f"p99={_pct(lat,99):.0f}ms"))

@@ -102,10 +102,24 @@ cmd_report(){
 
 cmd_stop(){
   log "stopping replay + monitors"
-  docker exec "$WORKER" pkill -f "supervisor.py" 2>/dev/null
-  docker exec "$WORKER" pkill -f "run.py" 2>/dev/null
-  pkill -f "tests/sim/monitors.py" 2>/dev/null
-  log "stopped (staging serve left running — use 'down' to remove it)"
+  # the worker image has no pkill/pgrep — scan /proc from python (always present)
+  docker exec "$WORKER" python -c '
+import os, signal
+for p in os.listdir("/proc"):
+    if not p.isdigit():
+        continue
+    try:
+        cl = open("/proc/%s/cmdline" % p, "rb").read().decode("utf-8", "ignore")
+    except Exception:
+        continue
+    if "supervisor.py" in cl or "/app/data/sim/run.py" in cl:
+        try:
+            os.kill(int(p), signal.SIGTERM)
+        except Exception:
+            pass
+' 2>/dev/null
+  pkill -f "tests/sim/monitors.py" 2>/dev/null   # monitors run on the host (has pkill)
+  log "stopped (staging serve left running — use '\''down'\'' to remove it)"
 }
 
 cmd_down(){
