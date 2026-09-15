@@ -110,6 +110,10 @@ def build_payload(row: dict[str, Any]) -> dict[str, Any]:
         # ids must be ints, not floats, for a clean request
         if api_field in ("lead_type_id", "campaign_id", "source_type_id", "lead_ping_id"):
             val = int(val)
+        # expected_revenue must be > 0 (API contract: gt=0). A 0/negative value
+        # means no revenue to bid on — skip the lead, as the real caller would.
+        if api_field == "expected_revenue" and float(val) <= 0:
+            raise PayloadError("expected_revenue <= 0 (no positive revenue to bid on)")
         body[api_field] = val
 
     for api_field in OPTIONAL:

@@ -31,6 +31,7 @@ BURST_PROB=${BURST_PROB:-0.6}
 SPEED=${SPEED:-1}                            # 1 = real time; 60 = compressed rehearsal
 SEGMENT_MINUTES=${SEGMENT_MINUTES:-1440}     # minutes per "day"
 export SERVE_WORKERS=${SERVE_WORKERS:-4}
+API_KEY=${API_KEY:-}                          # bearer key for the staging serve (auth is on)
 
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -82,7 +83,7 @@ cmd_start(){
   docker exec -e SLACK_WEBHOOK="${SLACK_WEBHOOK:-}" -d "$WORKER" sh -c \
     "cd /app/data/sim && python supervisor.py --data $DATA --url $URL \
        --days $DAYS --segment-minutes $SEGMENT_MINUTES --speed $SPEED \
-       --burst-prob $BURST_PROB --ledger-dir $LEDGERS \
+       --burst-prob $BURST_PROB --ledger-dir $LEDGERS ${API_KEY:+--api-key $API_KEY} \
        > /app/data/sim/supervisor.log 2>&1"
   log "replay started: days=$DAYS speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
   echo
