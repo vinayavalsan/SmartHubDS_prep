@@ -37,8 +37,10 @@ def heartbeat(text: str) -> None:
         return
     try:
         req = urllib.request.Request(
-            hook, data=json.dumps({"text": text}).encode(),
-            headers={"Content-Type": "application/json"})
+            hook,
+            data=json.dumps({"text": text}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
         urllib.request.urlopen(req, timeout=10)
     except Exception as exc:  # noqa: BLE001 - never let alerting kill the run
         print(f"[heartbeat] slack post failed: {exc}", flush=True)
@@ -55,22 +57,47 @@ def load_ckpt(path: str) -> int:
 def save_ckpt(path: str, day: int) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"last_completed_day": day,
-                   "updated": datetime.now().isoformat(timespec="seconds")}, f)
+        json.dump(
+            {
+                "last_completed_day": day,
+                "updated": datetime.now().isoformat(timespec="seconds"),
+            },
+            f,
+        )
     os.replace(tmp, path)
 
 
 def run_day(args, day: int, ledger: str) -> bool:
     """Run one day-segment; restart on crash up to --max-restarts. True if ok."""
-    cmd = [args.python, os.path.join(HERE, "run.py"),
-           "--data", args.data, "--url", args.url,
-           "--minutes", str(args.segment_minutes), "--out", ledger, "--dispatch",
-           "--seed", str(args.seed + day),
-           "--rate-min", str(args.rate_min), "--rate-max", str(args.rate_max),
-           "--burst-prob", str(args.burst_prob),
-           "--burst-frac-min", str(args.burst_frac_min),
-           "--burst-frac-max", str(args.burst_frac_max),
-           "--max-bursts", str(args.max_bursts), "--speed", str(args.speed)]
+    cmd = [
+        args.python,
+        os.path.join(HERE, "run.py"),
+        "--data",
+        args.data,
+        "--url",
+        args.url,
+        "--minutes",
+        str(args.segment_minutes),
+        "--out",
+        ledger,
+        "--dispatch",
+        "--seed",
+        str(args.seed + day),
+        "--rate-min",
+        str(args.rate_min),
+        "--rate-max",
+        str(args.rate_max),
+        "--burst-prob",
+        str(args.burst_prob),
+        "--burst-frac-min",
+        str(args.burst_frac_min),
+        "--burst-frac-max",
+        str(args.burst_frac_max),
+        "--max-bursts",
+        str(args.max_bursts),
+        "--speed",
+        str(args.speed),
+    ]
     if args.api_key:
         cmd += ["--api-key", args.api_key]
     for attempt in range(1, args.max_restarts + 1):
@@ -78,8 +105,10 @@ def run_day(args, day: int, ledger: str) -> bool:
         rc = subprocess.run(cmd).returncode
         if rc == 0:
             return True
-        heartbeat(f":warning: replay day {day} exited rc={rc} "
-                  f"(attempt {attempt}/{args.max_restarts}) — restarting")
+        heartbeat(
+            f":warning: replay day {day} exited rc={rc} "
+            f"(attempt {attempt}/{args.max_restarts}) — restarting"
+        )
         time.sleep(min(30, 5 * attempt))
     return False
 
@@ -90,12 +119,17 @@ def rollup(args, day: int, ledger: str) -> str:
         return "(no rollup)"
     out = subprocess.run(
         [args.python, os.path.join(HERE, "analyze.py"), ledger, "--data", args.data],
-        capture_output=True, text=True).stdout
+        capture_output=True,
+        text=True,
+    ).stdout
     with open(os.path.join(args.ledger_dir, f"rollup_day{day}.txt"), "w") as f:
         f.write(out)
     # pull the two lines humans care about
-    picks = [ln.strip() for ln in out.splitlines()
-             if ln.strip().startswith(("requests", "latency ms")) or "[FAIL]" in ln]
+    picks = [
+        ln.strip()
+        for ln in out.splitlines()
+        if ln.strip().startswith(("requests", "latency ms")) or "[FAIL]" in ln
+    ]
     return " | ".join(picks) if picks else "rollup written"
 
 
@@ -128,18 +162,24 @@ def main() -> int:
         print(f"All {args.days} days already complete (checkpoint={ckpt}).")
         return 0
 
-    heartbeat(f":rocket: replay supervisor starting — days {done+1}..{args.days}, "
-              f"target {args.url}")
+    heartbeat(
+        f":rocket: replay supervisor starting — days {done+1}..{args.days}, "
+        f"target {args.url}"
+    )
     for day in range(done + 1, args.days + 1):
         ledger = os.path.join(args.ledger_dir, f"day{day}.jsonl")
         ok = run_day(args, day, ledger)
         if not ok:
-            heartbeat(f":rotating_light: replay day {day} FAILED after "
-                      f"{args.max_restarts} restarts — supervisor stopping.")
+            heartbeat(
+                f":rotating_light: replay day {day} FAILED after "
+                f"{args.max_restarts} restarts — supervisor stopping."
+            )
             return 1
         summary = rollup(args, day, ledger)
         save_ckpt(ckpt, day)
-        heartbeat(f":white_check_mark: replay day {day}/{args.days} complete — {summary}")
+        heartbeat(
+            f":white_check_mark: replay day {day}/{args.days} complete — {summary}"
+        )
 
     heartbeat(f":checkered_flag: replay finished all {args.days} historical days.")
     return 0

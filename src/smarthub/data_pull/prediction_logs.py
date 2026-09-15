@@ -85,9 +85,7 @@ def fetch_prediction_logs(
         Selected prediction-log columns, or an empty frame when none match.
     """
     if store is None:
-        from smarthub.train_and_predict.prediction_log_schema import (
-            PredictionLogStore,
-        )
+        from smarthub.train_and_predict.prediction_log_schema import PredictionLogStore
 
         store = PredictionLogStore()
 

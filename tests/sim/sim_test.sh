@@ -101,6 +101,16 @@ cmd_start(){
   cp tests/sim/*.py data/sim/ 2>/dev/null      # refresh harness copies for the mount
   cmd_up || exit 1
   mkdir -p data/sim/ledgers
+  # Fresh run: move any prior ledgers + checkpoint aside so `report` reflects
+  # ONLY this run's traffic (nothing deleted — kept under ledgers/archive/<ts>).
+  if ls data/sim/ledgers/*.jsonl >/dev/null 2>&1 \
+       || [ -f data/sim/ledgers/supervisor.ckpt.json ]; then
+    arch="data/sim/ledgers/archive/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$arch"
+    mv data/sim/ledgers/*.jsonl "$arch"/ 2>/dev/null
+    mv data/sim/ledgers/supervisor.ckpt.json "$arch"/ 2>/dev/null
+    log "archived previous ledgers -> $arch"
+  fi
   # host-side monitors (stdlib python3; samples the staging serve + postgres + disk)
   pkill -f "monitors.py" 2>/dev/null
   nohup python3 tests/sim/monitors.py --interval 30 --out data/sim/health.csv \

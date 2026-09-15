@@ -17,6 +17,7 @@ Two rules that keep the request faithful to what the model saw in training:
   value; converting it here would shift every timing feature. (The API doc's
   "Pacific" note is about how the model reads it, not how you format it.)
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -29,25 +30,49 @@ REQUIRED = {
     "campaign_id": "campaign_id",
     "source_type_id": "source_type_id",
     "traffic_tier": "traffic_tier",
-    "state": "state",                        # the only mandatory lead attribute
-    "created_at": "created_at",              # sent verbatim (see module docstring)
-    "lead_ping_id": "id",                    # lead_pings PK
+    "state": "state",  # the only mandatory lead attribute
+    "created_at": "created_at",  # sent verbatim (see module docstring)
+    "lead_ping_id": "id",  # lead_pings PK
 }
 
 # Sent only when present/non-null (the model imputes when absent). API field == column.
 OPTIONAL = [
     "account_id",
-    "insured", "home_owner", "dui", "sr22_required", "military_affiliation",
-    "gender", "marital_status", "current_carrier", "home_property_type",
-    "age", "num_vehicles", "num_drivers", "num_auto_violations",
-    "num_auto_accidents", "num_home_claims", "continuous_coverage_months",
+    "insured",
+    "home_owner",
+    "dui",
+    "sr22_required",
+    "military_affiliation",
+    "gender",
+    "marital_status",
+    "current_carrier",
+    "home_property_type",
+    "age",
+    "num_vehicles",
+    "num_drivers",
+    "num_auto_violations",
+    "num_auto_accidents",
+    "num_home_claims",
+    "continuous_coverage_months",
 ]
 
 # Outcome / post-bid columns that must NEVER be sent (kept only for the analyzer).
-OUTCOME_COLUMNS = frozenset({
-    "bid", "rev", "won", "accepted", "accepted_listings", "response_ms",
-    "erred", "error_reason_id", "realized_revenue", "sold", "bid_cost", "profit",
-})
+OUTCOME_COLUMNS = frozenset(
+    {
+        "bid",
+        "rev",
+        "won",
+        "accepted",
+        "accepted_listings",
+        "response_ms",
+        "erred",
+        "error_reason_id",
+        "realized_revenue",
+        "sold",
+        "bid_cost",
+        "profit",
+    }
+)
 
 _DT_FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -73,7 +98,7 @@ def _clean(v: Any) -> Any:
     """Convert a numpy/pandas scalar to a JSON-native value; None if missing."""
     if _is_missing(v):
         return None
-    if hasattr(v, "item"):          # numpy scalar -> python int/float/bool
+    if hasattr(v, "item"):  # numpy scalar -> python int/float/bool
         try:
             v = v.item()
         except (ValueError, AttributeError):
@@ -87,7 +112,7 @@ def _fmt_created_at(v: Any) -> str | None:
         return None
     if isinstance(v, str):
         return v.strip()[:19]
-    if isinstance(v, datetime):     # pandas.Timestamp is a datetime subclass
+    if isinstance(v, datetime):  # pandas.Timestamp is a datetime subclass
         return v.strftime(_DT_FMT)
     if hasattr(v, "strftime"):
         return v.strftime(_DT_FMT)
@@ -108,7 +133,12 @@ def build_payload(row: dict[str, Any]) -> dict[str, Any]:
         if val is None or (isinstance(val, str) and not val.strip()):
             raise PayloadError(f"missing required field '{api_field}' (column '{col}')")
         # ids must be ints, not floats, for a clean request
-        if api_field in ("lead_type_id", "campaign_id", "source_type_id", "lead_ping_id"):
+        if api_field in (
+            "lead_type_id",
+            "campaign_id",
+            "source_type_id",
+            "lead_ping_id",
+        ):
             val = int(val)
         # expected_revenue must be > 0 (API contract: gt=0). A 0/negative value
         # means no revenue to bid on — skip the lead, as the real caller would.

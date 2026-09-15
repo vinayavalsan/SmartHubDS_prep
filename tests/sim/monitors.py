@@ -8,7 +8,8 @@ climbing DB connections, disk filling) is visible that a short run would miss.
 Pure stdlib + `docker`/`psql` via subprocess — no Python deps.
 
     python monitors.py --interval 30 --out data/sim/health.csv \
-        --serve-container prefect-serve --pg-container prefect-postgres --disk-path /app/data
+        --serve-container prefect-serve --pg-container prefect-postgres \
+        --disk-path /app/data
 """
 from __future__ import annotations
 
@@ -43,9 +44,17 @@ def _docker_stats(container: str):
     """(cpu_pct, mem_mb) for a container, or (None, None) if unavailable."""
     try:
         out = subprocess.run(
-            ["docker", "stats", "--no-stream", "--format", "{{.CPUPerc}};{{.MemUsage}}",
-             container],
-            capture_output=True, text=True, timeout=15,
+            [
+                "docker",
+                "stats",
+                "--no-stream",
+                "--format",
+                "{{.CPUPerc}};{{.MemUsage}}",
+                container,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
         ).stdout.strip()
         if not out:
             return None, None
@@ -62,9 +71,10 @@ def _docker_stats(container: str):
 def _pg_scalar(pg_container: str, db: str, user: str, sql: str):
     try:
         out = subprocess.run(
-            ["docker", "exec", pg_container, "psql", "-U", user, "-d", db,
-             "-tAc", sql],
-            capture_output=True, text=True, timeout=15,
+            ["docker", "exec", pg_container, "psql", "-U", user, "-d", db, "-tAc", sql],
+            capture_output=True,
+            text=True,
+            timeout=15,
         ).stdout.strip()
         return int(out) if out.lstrip("-").isdigit() else out or None
     except Exception:
@@ -74,7 +84,9 @@ def _pg_scalar(pg_container: str, db: str, user: str, sql: str):
 def main() -> int:
     ap = argparse.ArgumentParser(description="Sample host/container/DB health to CSV.")
     ap.add_argument("--interval", type=float, default=30)
-    ap.add_argument("--duration", type=float, default=0, help="seconds; 0 = until Ctrl-C")
+    ap.add_argument(
+        "--duration", type=float, default=0, help="seconds; 0 = until Ctrl-C"
+    )
     ap.add_argument("--out", default="data/sim/health.csv")
     ap.add_argument("--serve-container", default=None)
     ap.add_argument("--pg-container", default=None)
@@ -83,9 +95,17 @@ def main() -> int:
     ap.add_argument("--disk-path", default="/app/data")
     args = ap.parse_args()
 
-    fields = ["ts", "host_cpu_pct", "host_mem_used_mb", "host_mem_total_mb",
-              "disk_used_pct", "serve_cpu_pct", "serve_mem_mb",
-              "pg_conns", "pred_log_rows"]
+    fields = [
+        "ts",
+        "host_cpu_pct",
+        "host_mem_used_mb",
+        "host_mem_total_mb",
+        "disk_used_pct",
+        "serve_cpu_pct",
+        "serve_mem_mb",
+        "pg_conns",
+        "pred_log_rows",
+    ]
     fh = open(args.out, "a", newline="", buffering=1)
     w = csv.DictWriter(fh, fieldnames=fields)
     if fh.tell() == 0:
@@ -93,7 +113,9 @@ def main() -> int:
 
     idle0, tot0 = _host_cpu_idle_total()
     t_start = time.time()
-    print(f"monitoring every {args.interval}s -> {args.out} (Ctrl-C to stop)", flush=True)
+    print(
+        f"monitoring every {args.interval}s -> {args.out} (Ctrl-C to stop)", flush=True
+    )
     try:
         while True:
             time.sleep(args.interval)
@@ -107,23 +129,43 @@ def main() -> int:
                 disk_pct = round(100.0 * du.used / du.total, 1)
             except Exception:
                 disk_pct = None
-            s_cpu, s_mem = (_docker_stats(args.serve_container)
-                            if args.serve_container else (None, None))
+            s_cpu, s_mem = (
+                _docker_stats(args.serve_container)
+                if args.serve_container
+                else (None, None)
+            )
             pg_conns = pred_rows = None
             if args.pg_container:
-                pg_conns = _pg_scalar(args.pg_container, args.pg_db, args.pg_user,
-                                      "SELECT count(*) FROM pg_stat_activity;")
-                pred_rows = _pg_scalar(args.pg_container, args.pg_db, args.pg_user,
-                                       "SELECT count(*) FROM smarthub_prediction_log;")
-            row = {"ts": round(time.time() - t_start, 1), "host_cpu_pct": cpu,
-                   "host_mem_used_mb": mem_used, "host_mem_total_mb": mem_total,
-                   "disk_used_pct": disk_pct, "serve_cpu_pct": s_cpu,
-                   "serve_mem_mb": s_mem, "pg_conns": pg_conns,
-                   "pred_log_rows": pred_rows}
+                pg_conns = _pg_scalar(
+                    args.pg_container,
+                    args.pg_db,
+                    args.pg_user,
+                    "SELECT count(*) FROM pg_stat_activity;",
+                )
+                pred_rows = _pg_scalar(
+                    args.pg_container,
+                    args.pg_db,
+                    args.pg_user,
+                    "SELECT count(*) FROM smarthub_prediction_log;",
+                )
+            row = {
+                "ts": round(time.time() - t_start, 1),
+                "host_cpu_pct": cpu,
+                "host_mem_used_mb": mem_used,
+                "host_mem_total_mb": mem_total,
+                "disk_used_pct": disk_pct,
+                "serve_cpu_pct": s_cpu,
+                "serve_mem_mb": s_mem,
+                "pg_conns": pg_conns,
+                "pred_log_rows": pred_rows,
+            }
             w.writerow(row)
-            print(f"  t={row['ts']:>6.0f}s cpu={cpu:>5}% mem={mem_used:.0f}/"
-                  f"{mem_total:.0f}MB disk={disk_pct}% serve_mem={s_mem} "
-                  f"pg_conns={pg_conns} pred_rows={pred_rows}", flush=True)
+            print(
+                f"  t={row['ts']:>6.0f}s cpu={cpu:>5}% mem={mem_used:.0f}/"
+                f"{mem_total:.0f}MB disk={disk_pct}% serve_mem={s_mem} "
+                f"pg_conns={pg_conns} pred_rows={pred_rows}",
+                flush=True,
+            )
             if args.duration and (time.time() - t_start) >= args.duration:
                 break
     except KeyboardInterrupt:

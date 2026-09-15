@@ -9,6 +9,7 @@ Two building blocks (see phase1_replayer for the standalone proof):
 
 Total per minute ~ Uniform(rate_min, rate_max). Set burst_prob=0 for pure scatter.
 """
+
 from __future__ import annotations
 
 import random
@@ -26,7 +27,9 @@ class BurstConfig:
     max_bursts: int = 1
 
 
-def build_minute_offsets(rng: random.Random, cfg: BurstConfig) -> tuple[list[float], dict]:
+def build_minute_offsets(
+    rng: random.Random, cfg: BurstConfig
+) -> tuple[list[float], dict]:
     """Return (sorted offsets in [0,60), composition-info) for one minute."""
     n = rng.randint(cfg.rate_min, cfg.rate_max)
     offsets: list[float] = []
@@ -48,8 +51,9 @@ def build_minute_offsets(rng: random.Random, cfg: BurstConfig) -> tuple[list[flo
     return offsets, {"n": n, "bursts": bursts, "scattered": remaining}
 
 
-def build_schedule(rng: random.Random, minutes: int,
-                   cfg: BurstConfig) -> tuple[list[float], list[dict]]:
+def build_schedule(
+    rng: random.Random, minutes: int, cfg: BurstConfig
+) -> tuple[list[float], list[dict]]:
     """Absolute arrival offsets (seconds from start) + per-minute composition."""
     schedule: list[float] = []
     infos: list[dict] = []

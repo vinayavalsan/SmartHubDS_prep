@@ -7,6 +7,7 @@ the pool at its scheduled instant and not waited on, so a burst of N arrivals
 runs concurrently (open-loop). Every request — success, error, timeout — is
 written as one JSON line to the ledger and rolled into `Stats`.
 """
+
 from __future__ import annotations
 
 import json
@@ -65,9 +66,15 @@ _KEEP = (
 
 
 class Sender:
-    def __init__(self, url: str, ledger: Ledger, stats: Stats,
-                 api_key: str | None = None, timeout: float = 5.0,
-                 workers: int = 512):
+    def __init__(
+        self,
+        url: str,
+        ledger: Ledger,
+        stats: Stats,
+        api_key: str | None = None,
+        timeout: float = 5.0,
+        workers: int = 512,
+    ):
         self.url = url
         self.ledger = ledger
         self.stats = stats
@@ -76,7 +83,8 @@ class Sender:
         self._pool = ThreadPoolExecutor(max_workers=workers)
         self._session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(
-            pool_connections=workers, pool_maxsize=workers, max_retries=0)
+            pool_connections=workers, pool_maxsize=workers, max_retries=0
+        )
         self._session.mount("http://", adapter)
         self._session.mount("https://", adapter)
         self._session.headers.update({"Content-Type": "application/json"})
