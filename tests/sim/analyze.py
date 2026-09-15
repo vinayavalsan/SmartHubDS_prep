@@ -13,6 +13,8 @@ limited parity + economic backtest.
 from __future__ import annotations
 
 import argparse
+import glob
+import os
 import sys
 
 import pandas as pd
@@ -34,8 +36,17 @@ def _to01(s: pd.Series) -> pd.Series:
     return pd.to_numeric(out, errors="coerce")
 
 
-def analyze(ledger_path: str, snapshot: str | None) -> int:
-    df = pd.read_json(ledger_path, lines=True)
+def analyze(ledger_path: str, snapshot: str | None,
+            report_csv: str | None = None) -> int:
+    files = sorted(glob.glob(ledger_path)) or [ledger_path]
+    frames = [pd.read_json(f, lines=True) for f in files
+              if os.path.exists(f) and os.path.getsize(f) > 0]
+    if not frames:
+        print(f"no ledger data at {ledger_path}")
+        return 1
+    df = pd.concat(frames, ignore_index=True)
+    if len(files) > 1:
+        print(f"(analyzing {len(files)} ledger files)")
     if df.empty:
         print("empty ledger")
         return 1
@@ -76,25 +87,54 @@ def analyze(ledger_path: str, snapshot: str | None) -> int:
         snap = snap.rename(columns={"id": "lead_ping_id", "bid": "hist_bid",
                                     "won": "hist_won", "rev": "hist_rev"})
         j = df.merge(snap, on="lead_ping_id", how="left")
-        served = j[j["ok"] & j["recommended_bid"].notna()]
+        served = j[j["ok"] & j["recommended_bid"].notna()].copy()
         if len(served):
-            print("\n--- parity vs history (served bids only) ---")
-            rb, hb = served["recommended_bid"], pd.to_numeric(served["hist_bid"],
-                                                              errors="coerce")
-            both = served[hb.notna()]
-            if len(both):
-                d = both["recommended_bid"] - pd.to_numeric(both["hist_bid"])
-                print(f"recommended vs historical bid: n={len(both)}  "
+            # Per-lead comparison table: model's bid vs the bid actually placed.
+            comp = pd.DataFrame({
+                "lead_ping_id": served["lead_ping_id"].astype("Int64"),
+                "lead_type": served["lead_type_id"].map({6: "auto", 1: "home"}),
+                "recommended_bid": served["recommended_bid"].round(2),
+                "actual_bid": pd.to_numeric(served["hist_bid"], errors="coerce").round(2),
+                "model_win_prob": pd.to_numeric(
+                    served.get("recommended_bid_predicted_win_rate"),
+                    errors="coerce").round(3),
+                "historical_won": _to01(served["hist_won"]).astype("Int64"),
+                "decision_path": served["decision_path"],
+            })
+            comp["diff"] = (comp["recommended_bid"] - comp["actual_bid"]).round(2)
+            # "won/loss if the bid is chosen by the ML model" = the model's own
+            # call at its recommended bid (win_prob >= 0.5). It is an ESTIMATE,
+            # not observed truth (we never see the market's response to a new bid).
+            comp["model_says"] = comp["model_win_prob"].apply(
+                lambda p: "win" if pd.notna(p) and p >= 0.5 else
+                          ("loss" if pd.notna(p) else "n/a"))
+            comp = comp[["lead_ping_id", "lead_type", "recommended_bid",
+                         "actual_bid", "diff", "model_win_prob", "model_says",
+                         "historical_won", "decision_path"]]
+
+            print("\n--- per-lead: model bid vs actual bid (sample of "
+                  f"{min(12, len(comp))} of {len(comp)}) ---")
+            with pd.option_context("display.max_columns", None,
+                                   "display.width", 200):
+                print(comp.head(12).to_string(index=False))
+
+            d = comp["diff"].dropna()
+            mw = (comp["model_says"] == "win").sum()
+            hw = comp["historical_won"].dropna()
+            print("\n--- parity summary (served bids) ---")
+            if len(d):
+                print(f"recommended vs actual bid: n={len(d)}  "
                       f"mean Δ {d.mean():+.2f}  p50 Δ {_pct(d,50):+.2f}  "
-                      f"(recommended {'higher' if d.mean()>0 else 'lower'} on avg)")
-            wr = pd.to_numeric(served["recommended_bid_predicted_win_rate"],
-                               errors="coerce").dropna()
-            won = _to01(served["hist_won"]).dropna()
-            if len(wr):
-                hw = f"{won.mean():.3f}" if len(won) else "n/a"
-                print(f"predicted win-rate: mean {wr.mean():.3f}  "
-                      f"| historical win rate {hw} (n={len(won)}) "
-                      f"(calibration sanity — not a match, different bids)")
+                      f"(model bids {'higher' if d.mean()>0 else 'lower'} on avg)")
+            print(f"model says WIN at its bid : {mw}/{len(comp)} "
+                  f"({100*mw/len(comp):.0f}%)  [model's own estimate]")
+            if len(hw):
+                print(f"historical win rate       : {hw.mean():.3f} "
+                      f"(at the bid actually placed — different bid, for context)")
+
+            if report_csv:
+                comp.to_csv(report_csv, index=False)
+                print(f"\nfull per-lead report ({len(comp)} rows) -> {report_csv}")
 
     # ---- verdict ----
     print("\n--- verdict ---")
@@ -111,10 +151,12 @@ def analyze(ledger_path: str, snapshot: str | None) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Analyze a run.py capture ledger.")
-    ap.add_argument("ledger", help="JSONL ledger from run.py")
+    ap.add_argument("ledger", help="JSONL ledger from run.py (or a glob for many)")
     ap.add_argument("--data", default=None, help="snapshot .parquet for parity/backtest")
+    ap.add_argument("--report-csv", default=None,
+                    help="write the full per-lead bid-comparison table to this CSV")
     args = ap.parse_args(argv)
-    return analyze(args.ledger, args.data)
+    return analyze(args.ledger, args.data, args.report_csv)
 
 
 if __name__ == "__main__":
