@@ -184,7 +184,7 @@ def win_rate_chart(
             go.Scatter(
                 x=labels,
                 y=summary[column],
-                mode="markers" if analysis_kind == "categorical" else "lines+markers",
+                mode="lines+markers",
                 name=name,
             ),
             secondary_y=False,
@@ -193,8 +193,8 @@ def win_rate_chart(
     fig.update_layout(
         title=f"Win rate by {feature_name}",
         hovermode="x unified",
-        legend=dict(orientation="h", x=0, xanchor="left", y=-0.22, yanchor="top"),
-        margin=dict(l=20, r=20, t=60, b=120),
+        legend=dict(orientation="h", x=0, xanchor="left", y=1.02, yanchor="bottom"),
+        margin=dict(l=20, r=20, t=100, b=60),
     )
     fig.update_yaxes(
         title_text="Win rate",
@@ -227,7 +227,7 @@ def bid_chart(
         go.Scatter(
             x=labels,
             y=summary["avg_existing_bid"],
-            mode="markers" if analysis_kind == "categorical" else "lines+markers",
+            mode="lines+markers",
             name="Average existing bid",
         )
     )
@@ -235,7 +235,7 @@ def bid_chart(
         go.Scatter(
             x=labels,
             y=summary["avg_recommended_bid"],
-            mode="markers" if analysis_kind == "categorical" else "lines+markers",
+            mode="lines+markers",
             name="Average recommended bid",
         )
     )
@@ -253,8 +253,8 @@ def bid_chart(
         xaxis_title=feature_name,
         yaxis_title="Bid",
         hovermode="x unified",
-        legend=dict(orientation="h", x=0, xanchor="left", y=-0.22, yanchor="top"),
-        margin=dict(l=20, r=20, t=60, b=120),
+        legend=dict(orientation="h", x=0, xanchor="left", y=1.02, yanchor="bottom"),
+        margin=dict(l=20, r=20, t=100, b=60),
     )
     if analysis_kind == "categorical":
         fig.update_xaxes(
@@ -612,7 +612,7 @@ def _render_candidate_bid_diagnostics(
         else:
             st.plotly_chart(
                 figure,
-                use_container_width=True,
+                width="stretch",
                 key=chart_key("candidate_count_hist"),
             )
 
@@ -633,7 +633,7 @@ def _render_candidate_bid_diagnostics(
         else:
             st.plotly_chart(
                 figure,
-                use_container_width=True,
+                width="stretch",
                 key=chart_key("candidate_position_hist"),
             )
 
@@ -653,7 +653,7 @@ def _render_candidate_bid_diagnostics(
         else:
             st.plotly_chart(
                 figure,
-                use_container_width=True,
+                width="stretch",
                 key=chart_key("candidate_count_vs_change"),
             )
 
@@ -675,7 +675,7 @@ def _render_candidate_bid_diagnostics(
         else:
             st.plotly_chart(
                 figure,
-                use_container_width=True,
+                width="stretch",
                 key=chart_key("candidate_count_vs_position"),
             )
 
@@ -735,10 +735,10 @@ def _show_subset_metrics(diagnostics: dict[str, float | int | None]) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="SmartHub Feature Diagnostics",
+        page_title="Trained Model Evaluation",
         layout="wide",
     )
-    st.title("SmartHub Feature Diagnostics")
+    st.title("Trained Model Evaluation")
     st.caption(
         "Explore saved held-out optimizer evaluation artifacts. "
         "This page does not rerun the model."
@@ -767,7 +767,14 @@ def main() -> None:
         st.stop()
 
     with st.sidebar:
-        feature = st.selectbox("Feature", options=features)
+        st.header("Diagnostic view")
+        view = st.radio(
+            "View",
+            options=["Summary", "Bid Diagnostics", "Economics", "Candidate Bids"],
+            index=0,
+        )
+
+        st.header("Filters")
         outcome = st.selectbox("Historical outcome", ["All", "Won", "Lost"])
         recommendation_filter = st.selectbox(
             "Optimizer recommendation",
@@ -781,6 +788,8 @@ def main() -> None:
             ],
         )
 
+        st.header("Feature analysis")
+        feature = st.selectbox("Feature", options=features)
         analysis_kind = resolve_feature_analysis_kind(frame, feature)
         if analysis_kind == "continuous":
             binning = st.selectbox("Numeric binning", ["quantile", "fixed"])
@@ -799,13 +808,6 @@ def main() -> None:
             value=100,
             step=50,
         )
-        density_bins = st.slider("2D heatmap bins", 20, 100, 50, step=5)
-        density_min_count = st.number_input(
-            "Minimum leads per heatmap cell",
-            min_value=1,
-            value=1,
-            step=1,
-        )
 
     outcome_filtered = apply_outcome_filter(frame, outcome)
     try:
@@ -818,6 +820,7 @@ def main() -> None:
     if recommendation_filtered.empty:
         st.warning("No rows remain after the optimizer recommendation filter.")
         st.stop()
+
     config = FeatureDiagnosticConfig(
         feature=feature,
         bins=int(bins),
@@ -844,20 +847,37 @@ def main() -> None:
         for value in summary["feature_bucket"].astype(str).tolist()
         if bucket_counts.get(value, 0) >= int(min_support)
     ]
-    with st.sidebar:
-        selected_bucket = st.selectbox(
-            "Feature value / bucket",
-            options=["All", *bucket_options],
-        )
-        show_all_buckets = st.checkbox(
-            "Show plots for all feature values / buckets",
-            value=False,
-            help=(
-                "Render the diagnostic plots for every visible feature value or "
-                "bucket one after another, in addition to the "
-                "currently selected bucket."
-            ),
-        )
+
+    selected_bucket = "All"
+    show_all_buckets = False
+    density_bins = 50
+    density_min_count = 1
+
+    if view != "Summary":
+        with st.sidebar:
+            st.header("Plot scope")
+            selected_bucket = st.selectbox(
+                "Feature value / bucket",
+                options=["All", *bucket_options],
+            )
+            show_all_buckets = st.checkbox(
+                "Show plots for all feature values / buckets",
+                value=False,
+                help=(
+                    "Render the diagnostic plots for every visible feature value or "
+                    "bucket one after another, in addition to the currently "
+                    "selected bucket."
+                ),
+            )
+
+            st.header("Heatmap settings")
+            density_bins = st.slider("2D heatmap bins", 20, 100, 50, step=5)
+            density_min_count = st.number_input(
+                "Minimum leads per heatmap cell",
+                min_value=1,
+                value=1,
+                step=1,
+            )
 
     selected = apply_feature_bucket(
         recommendation_filtered,
@@ -868,34 +888,35 @@ def main() -> None:
         st.warning("No rows remain for the selected feature bucket.")
         st.stop()
 
-    diagnostics = build_subset_diagnostics(
-        selected,
-        reference_rows=len(recommendation_filtered),
-    )
-
     st.write(
         f"**Rows after outcome filter:** {len(outcome_filtered):,}  \n"
         f"**Rows after recommendation filter:** {len(recommendation_filtered):,}  \n"
-        f"**Optimizer recommendation:** `{recommendation_filter}`  \n"
-        f"**Selected feature bucket:** `{selected_bucket}`"
+        f"**Optimizer recommendation:** `{recommendation_filter}`"
+        + (
+            f"  \n**Selected feature bucket:** `{selected_bucket}`"
+            if view != "Summary"
+            else ""
+        )
     )
-    _show_subset_metrics(diagnostics)
 
-    summary_tab, bid_tab, economics_tab, candidate_tab = st.tabs(
-        ["Summary", "Bid Diagnostics", "Economics", "Candidate Bids"]
-    )
+    if view != "Summary":
+        diagnostics = build_subset_diagnostics(
+            selected,
+            reference_rows=len(recommendation_filtered),
+        )
+        _show_subset_metrics(diagnostics)
 
-    with summary_tab:
+    if view == "Summary":
         left, right = st.columns(2)
         with left:
             st.plotly_chart(
                 win_rate_chart(summary, feature, analysis_kind),
-                use_container_width=True,
+                width="stretch",
             )
         with right:
             st.plotly_chart(
                 bid_chart(summary, feature, analysis_kind),
-                use_container_width=True,
+                width="stretch",
             )
 
         st.subheader("Feature summary")
@@ -905,7 +926,7 @@ def main() -> None:
         )
         st.dataframe(
             display,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -916,19 +937,17 @@ def main() -> None:
             file_name=f"feature_diagnostic_{feature}.csv",
             mime="text/csv",
         )
+        return
 
     heatmap_args = {
         "bins": int(density_bins),
         "minimum_count": int(density_min_count),
     }
 
-    # When all-bucket plotting is enabled, the main plots use the complete
-    # recommendation-filtered population. The selected feature bucket remains
-    # available for the Summary tab and for normal single-bucket exploration.
     main_plot_source = recommendation_filtered if show_all_buckets else selected
     main_plot_frame = _derived_diagnostic_frame(main_plot_source)
 
-    with bid_tab:
+    if view == "Bid Diagnostics":
         if show_all_buckets:
             st.subheader("All Feature Values Combined")
 
@@ -946,7 +965,7 @@ def main() -> None:
                 **heatmap_args,
             )
             if figure is not None:
-                st.plotly_chart(figure, use_container_width=True)
+                st.plotly_chart(figure, width="stretch")
         with second:
             figure = _density_heatmap(
                 main_plot_frame,
@@ -958,20 +977,20 @@ def main() -> None:
                 **heatmap_args,
             )
             if figure is not None:
-                st.plotly_chart(figure, use_container_width=True)
+                st.plotly_chart(figure, width="stretch")
         with third:
             st.plotly_chart(
                 recommended_bid_distribution(main_plot_frame),
-                use_container_width=True,
+                width="stretch",
             )
 
         if show_all_buckets:
             st.divider()
             st.subheader("All Feature Values")
             st.caption(
-                "Each section below applies the current outcome, "
-                "optimizer recommendation, support, and density settings "
-                "to one feature value or bucket."
+                "Each section below applies the current outcome, optimizer "
+                "recommendation, support, and density settings to one feature "
+                "value or bucket."
             )
             for bucket_value in bucket_options:
                 bucket_frame = apply_feature_bucket(
@@ -1002,7 +1021,7 @@ def main() -> None:
                     if figure is not None:
                         st.plotly_chart(
                             figure,
-                            use_container_width=True,
+                            width="stretch",
                             key=f"all_bid_bid_{feature}_{bucket_value}",
                         )
 
@@ -1019,23 +1038,23 @@ def main() -> None:
                     if figure is not None:
                         st.plotly_chart(
                             figure,
-                            use_container_width=True,
+                            width="stretch",
                             key=f"all_bid_wr_{feature}_{bucket_value}",
                         )
 
                 with third:
                     st.plotly_chart(
                         recommended_bid_distribution(bucket_plot_frame),
-                        use_container_width=True,
+                        width="stretch",
                         key=f"all_bid_hist_{feature}_{bucket_value}",
                     )
                 st.divider()
+        return
 
-    with candidate_tab:
+    if view == "Candidate Bids":
         st.caption(
-            "Candidate-search diagnostics use the same active outcome, optimizer "
-            "recommendation, support, density, and feature-bucket settings as the "
-            "other diagnostic tabs."
+            "Candidate-search diagnostics use the active outcome, optimizer "
+            "recommendation, support, density, and feature-bucket settings."
         )
         st.markdown(
             "**Recommended Bid Position** = "
@@ -1059,9 +1078,9 @@ def main() -> None:
             st.divider()
             st.subheader("All Feature Values")
             st.caption(
-                "Each section below applies the current outcome, "
-                "optimizer recommendation, support, and density settings "
-                "to one feature value or bucket."
+                "Each section below applies the current outcome, optimizer "
+                "recommendation, support, and density settings to one feature "
+                "value or bucket."
             )
 
             for bucket_value in bucket_options:
@@ -1082,103 +1101,103 @@ def main() -> None:
                     key_prefix=f"candidate_{feature}_{safe_bucket}",
                 )
                 st.divider()
+        return
 
-    with economics_tab:
-        if show_all_buckets:
-            st.subheader("All Feature Values Combined")
+    if show_all_buckets:
+        st.subheader("All Feature Values Combined")
 
-        first, second = st.columns(2)
-        with first:
-            figure = _density_heatmap(
-                main_plot_frame,
-                x_column="analysis_bid_change",
-                y_column="expected_profit_lift",
-                x_label="Bid change: recommended - existing",
-                y_label="Probability-weighted expected-profit lift",
-                title="Bid Change vs Expected-Profit Lift",
-                **heatmap_args,
+    first, second = st.columns(2)
+    with first:
+        figure = _density_heatmap(
+            main_plot_frame,
+            x_column="analysis_bid_change",
+            y_column="expected_profit_lift",
+            x_label="Bid change: recommended - existing",
+            y_label="Probability-weighted expected-profit lift",
+            title="Bid Change vs Expected-Profit Lift",
+            **heatmap_args,
+        )
+        if figure is None:
+            st.info("Expected-profit lift is unavailable in this artifact.")
+        else:
+            st.plotly_chart(figure, width="stretch")
+
+    with second:
+        figure = _density_heatmap(
+            main_plot_frame,
+            x_column="analysis_bid_change",
+            y_column="recommended_bid_cm_if_won",
+            x_label="Bid change: recommended - existing",
+            y_label="Recommended CM if won",
+            title="Bid Change vs Recommended CM",
+            **heatmap_args,
+        )
+        if figure is None:
+            st.info("Recommended CM is unavailable in this artifact.")
+        else:
+            st.plotly_chart(figure, width="stretch")
+
+    if show_all_buckets:
+        st.divider()
+        st.subheader("All Feature Values")
+        st.caption(
+            "Each section below applies the current outcome, optimizer "
+            "recommendation, support, and density settings to one feature "
+            "value or bucket."
+        )
+        for bucket_value in bucket_options:
+            bucket_frame = apply_feature_bucket(
+                recommendation_filtered,
+                config,
+                bucket_value,
             )
-            if figure is None:
-                st.info("Expected-profit lift is unavailable in this artifact.")
-            else:
-                st.plotly_chart(figure, use_container_width=True)
+            if bucket_frame.empty:
+                continue
 
-        with second:
-            figure = _density_heatmap(
-                main_plot_frame,
-                x_column="analysis_bid_change",
-                y_column="recommended_bid_cm_if_won",
-                x_label="Bid change: recommended - existing",
-                y_label="Recommended CM if won",
-                title="Bid Change vs Recommended CM",
-                **heatmap_args,
-            )
-            if figure is None:
-                st.info("Recommended CM is unavailable in this artifact.")
-            else:
-                st.plotly_chart(figure, use_container_width=True)
+            st.markdown(f"#### {feature} = {bucket_value}")
+            st.caption(f"Rows: {len(bucket_frame):,}")
+            bucket_plot_frame = _derived_diagnostic_frame(bucket_frame)
 
-        if show_all_buckets:
-            st.divider()
-            st.subheader("All Feature Values")
-            st.caption(
-                "Each section below applies the current outcome, "
-                "optimizer recommendation, support, and density settings "
-                "to one feature value or bucket."
-            )
-            for bucket_value in bucket_options:
-                bucket_frame = apply_feature_bucket(
-                    recommendation_filtered,
-                    config,
-                    bucket_value,
+            first, second = st.columns(2)
+            with first:
+                figure = _density_heatmap(
+                    bucket_plot_frame,
+                    x_column="analysis_bid_change",
+                    y_column="expected_profit_lift",
+                    x_label="Bid change: recommended - existing",
+                    y_label="Probability-weighted expected-profit lift",
+                    title="Bid Change vs Expected-Profit Lift",
+                    **heatmap_args,
                 )
-                if bucket_frame.empty:
-                    continue
-
-                st.markdown(f"#### {feature} = {bucket_value}")
-                st.caption(f"Rows: {len(bucket_frame):,}")
-                bucket_plot_frame = _derived_diagnostic_frame(bucket_frame)
-
-                first, second = st.columns(2)
-                with first:
-                    figure = _density_heatmap(
-                        bucket_plot_frame,
-                        x_column="analysis_bid_change",
-                        y_column="expected_profit_lift",
-                        x_label="Bid change: recommended - existing",
-                        y_label="Probability-weighted expected-profit lift",
-                        title="Bid Change vs Expected-Profit Lift",
-                        **heatmap_args,
+                if figure is None:
+                    st.info("Expected-profit lift is unavailable in this artifact.")
+                else:
+                    st.plotly_chart(
+                        figure,
+                        width="stretch",
+                        key=f"all_profit_{feature}_{bucket_value}",
                     )
-                    if figure is None:
-                        st.info("Expected-profit lift is unavailable in this artifact.")
-                    else:
-                        st.plotly_chart(
-                            figure,
-                            use_container_width=True,
-                            key=f"all_profit_{feature}_{bucket_value}",
-                        )
 
-                with second:
-                    figure = _density_heatmap(
-                        bucket_plot_frame,
-                        x_column="analysis_bid_change",
-                        y_column="recommended_bid_cm_if_won",
-                        x_label="Bid change: recommended - existing",
-                        y_label="Recommended CM if won",
-                        title="Bid Change vs Recommended CM",
-                        **heatmap_args,
+            with second:
+                figure = _density_heatmap(
+                    bucket_plot_frame,
+                    x_column="analysis_bid_change",
+                    y_column="recommended_bid_cm_if_won",
+                    x_label="Bid change: recommended - existing",
+                    y_label="Recommended CM if won",
+                    title="Bid Change vs Recommended CM",
+                    **heatmap_args,
+                )
+                if figure is None:
+                    st.info("Recommended CM is unavailable in this artifact.")
+                else:
+                    st.plotly_chart(
+                        figure,
+                        width="stretch",
+                        key=f"all_cm_{feature}_{bucket_value}",
                     )
-                    if figure is None:
-                        st.info("Recommended CM is unavailable in this artifact.")
-                    else:
-                        st.plotly_chart(
-                            figure,
-                            use_container_width=True,
-                            key=f"all_cm_{feature}_{bucket_value}",
-                        )
 
-                st.divider()
+            st.divider()
 
 
 if __name__ == "__main__":
