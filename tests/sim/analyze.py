@@ -162,6 +162,23 @@ def analyze(
                     else ("loss" if pd.notna(p) else "n/a")
                 )
             )
+
+            # Ground-truth-anchored win/loss for the MODEL's bid, decided by the
+            # KNOWN historical outcome at the ACTUAL bid (not a model self-estimate):
+            #   won at actual  & recommended >= actual -> WIN  (>= a winning bid wins)
+            #   lost at actual & recommended <= actual -> LOSS (<= a losing bid loses)
+            # anything else is UNCERTAIN: the counterfactual price region we never
+            # placed a bid in, so the true outcome there is unobservable.
+            def _ground_truth(row):
+                won = row["historical_won"]
+                rec, act = row["recommended_bid"], row["actual_bid"]
+                if pd.isna(won) or pd.isna(rec) or pd.isna(act):
+                    return "n/a"
+                if won == 1:
+                    return "win" if rec >= act else "uncertain"
+                return "loss" if rec <= act else "uncertain"
+
+            comp["ground_truth"] = comp.apply(_ground_truth, axis=1)
             comp = comp[
                 [
                     "lead_ping_id",
@@ -172,6 +189,7 @@ def analyze(
                     "model_win_prob",
                     "model_says",
                     "historical_won",
+                    "ground_truth",
                     "decision_path",
                 ]
             ]
@@ -196,6 +214,13 @@ def analyze(
             print(
                 f"model says WIN at its bid : {mw}/{len(comp)} "
                 f"({100*mw/len(comp):.0f}%)  [model's own estimate]"
+            )
+            gt = comp["ground_truth"].value_counts().to_dict()
+            print(
+                f"ground-truth outcome      : "
+                f"win {gt.get('win', 0)}  loss {gt.get('loss', 0)}  "
+                f"uncertain {gt.get('uncertain', 0)}  "
+                f"[settled by the actual bid's known result]"
             )
             if len(hw):
                 print(
