@@ -180,7 +180,7 @@ def main(argv=None) -> int:
     counts = Counter(int(o) for o in schedule)
     print(
         f"Arrival shape: peak {max(counts.values())}/s, "
-        f"{args.minutes*60 - len(counts)} idle seconds (bursty={args.burst_prob>0})"
+        f"{args.minutes*60 - len(counts)} idle seconds (bursty={args.burst_prob > 0})"
     )
 
     if not args.dispatch:

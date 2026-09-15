@@ -87,8 +87,8 @@ def analyze(
     print(f"status codes   : {df['status'].value_counts().sort_index().to_dict()}")
     if len(lat):
         print(
-            f"latency ms     : p50 {_pct(lat,50):.1f}  p90 {_pct(lat,90):.1f}  "
-            f"p95 {_pct(lat,95):.1f}  p99 {_pct(lat,99):.1f}  max {lat.max():.1f}"
+            f"latency ms     : p50 {_pct(lat, 50):.1f}  p90 {_pct(lat, 90):.1f}  "
+            f"p95 {_pct(lat, 95):.1f}  p99 {_pct(lat, 99):.1f}  max {lat.max():.1f}"
         )
         print(
             f"within 1s      : {within1s}/{len(lat)} " f"({100*within1s/len(lat):.1f}%)"
@@ -109,8 +109,8 @@ def analyze(
         if len(served):
             print(
                 f"recommended_bid: n={len(served)}  min {served.min():.2f}  "
-                f"p50 {_pct(served,50):.2f}  p95 {_pct(served,95):.2f}  "
-                f"max {served.max():.2f}  | null(no-bid) {max(null_bids,0)}"
+                f"p50 {_pct(served, 50):.2f}  p95 {_pct(served, 95):.2f}  "
+                f"max {served.max():.2f}  | null(no-bid) {max(null_bids, 0)}"
             )
 
     # ---- parity / backtest against historical outcomes ----
@@ -190,8 +190,8 @@ def analyze(
             if len(d):
                 print(
                     f"recommended vs actual bid: n={len(d)}  "
-                    f"mean Δ {d.mean():+.2f}  p50 Δ {_pct(d,50):+.2f}  "
-                    f"(model bids {'higher' if d.mean()>0 else 'lower'} on avg)"
+                    f"mean Δ {d.mean():+.2f}  p50 Δ {_pct(d, 50):+.2f}  "
+                    f"(model bids {'higher' if d.mean() > 0 else 'lower'} on avg)"
                 )
             print(
                 f"model says WIN at its bid : {mw}/{len(comp)} "
@@ -231,7 +231,7 @@ def analyze(
         (
             "p99 < 1000ms",
             (_pct(lat, 99) < 1000) if len(lat) else False,
-            f"p99={_pct(lat,99):.0f}ms",
+            f"p99={_pct(lat, 99):.0f}ms",
         )
     )
     v.append(("no unexpected 422", n_422 == 0, f"{n_422} rejected"))
