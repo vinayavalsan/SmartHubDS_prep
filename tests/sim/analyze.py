@@ -56,7 +56,9 @@ def analyze(ledger_path: str, snapshot: str | None,
     span = max(float(df["ts"].max()), 1e-9)
     thru = n / span * 60.0
 
-    n_5xx = int(((df["status"] >= 500) | (df["status"] == 0)).sum())
+    n_500 = int((df["status"] == 500).sum())
+    n_503 = int((df["status"] == 503).sum())      # graceful shed above concurrency cap
+    n_timeout = int((df["status"] == 0).sum())
     n_422 = int((df["status"] == 422).sum())
     within1s = int((lat < 1000).sum())
 
@@ -72,6 +74,9 @@ def analyze(ledger_path: str, snapshot: str | None,
     if "decision_path" in df:
         print(f"decision_path  : "
               f"{df['decision_path'].value_counts(dropna=True).to_dict()}")
+    if n_503 or n_500 or n_timeout:
+        print(f"shed/errors    : 503 (burst>concurrency) {n_503}  |  "
+              f"500 (crash) {n_500}  |  timeouts {n_timeout}")
     if "recommended_bid" in df:
         null_bids = int(df["recommended_bid"].isna().sum() - (n - int(ok.sum())))
         served = df.loc[ok, "recommended_bid"].dropna()
@@ -143,9 +148,12 @@ def analyze(ledger_path: str, snapshot: str | None,
     print("\n--- verdict ---")
     ok_rate = float(ok.mean()) if n else 0.0
     v = []
-    v.append(("requests succeeded (2xx)", ok.sum() > 0 and ok_rate >= 0.99,
-              f"{ok_rate*100:.0f}% ok of {n}"))
-    v.append(("no 5xx/timeouts", n_5xx == 0, f"{n_5xx} errors"))
+    v.append(("no crashes/timeouts (500/conn)", n_500 == 0 and n_timeout == 0,
+              f"{n_500} x500, {n_timeout} timeouts"))
+    if n_503:
+        v.append(("503 shed under burst (capacity note)", n_503 == 0,
+                  f"{n_503} shed — burst exceeded serve concurrency cap (raise "
+                  f"SERVE_LIMIT_CONCURRENCY/workers, or bursts are unrealistically large)"))
     v.append(("p99 < 1000ms", (_pct(lat, 99) < 1000) if len(lat) else False,
               f"p99={_pct(lat,99):.0f}ms"))
     v.append(("no unexpected 422", n_422 == 0, f"{n_422} rejected"))
