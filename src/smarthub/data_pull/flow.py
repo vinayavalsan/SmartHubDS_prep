@@ -230,9 +230,7 @@ def pull_prediction_logs(min_s: str, max_s: str, lead_type_id: int) -> dict:
     """
     logger = get_run_logger()
     try:
-        from smarthub.data_pull.prediction_logs import (
-            pull_and_persist_prediction_logs,
-        )
+        from smarthub.data_pull.prediction_logs import pull_and_persist_prediction_logs
 
         return pull_and_persist_prediction_logs(min_s, max_s, lead_type_id)
     except Exception as exc:  # noqa: BLE001 - never break the raw pull

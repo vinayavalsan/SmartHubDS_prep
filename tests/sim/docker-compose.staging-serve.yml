@@ -1,0 +1,60 @@
+# Isolated staging copy of `serve` for the replay/load test (tests/sim).
+#
+# Same image + promoted models as production, but its prediction-log AND config
+# DBs point at a THROWAWAY database (`smarthub_staging`), so synthetic replay
+# traffic NEVER lands in the production `prefect` DB that monitoring reads.
+# Not Watchtower-managed; exposed on 127.0.0.1:8001 (host) and reachable from
+# other containers (e.g. prefect-worker) as http://serve-staging:8000.
+#
+# Run from the REPO ROOT (so ./data and .env resolve there):
+#
+#   # 1) create the throwaway DB
+#   docker exec prefect-postgres psql -U prefect -c "CREATE DATABASE smarthub_staging;"
+#   # (optional, for config fidelity) copy prod's config into it:
+#   docker exec prefect-postgres sh -c \
+#     "pg_dump -U prefect -t 'smarthub_config*' prefect | psql -U prefect -d smarthub_staging" || true
+#
+#   # 2) bring up the isolated serve
+#   docker compose -f docker-compose.prefect.yml -f tests/sim/docker-compose.staging-serve.yml up -d serve-staging
+#
+#   # 3) point the replay (run inside prefect-worker) at it:
+#   #    --url http://serve-staging:8000
+#
+# Teardown:
+#   docker compose -f docker-compose.prefect.yml -f tests/sim/docker-compose.staging-serve.yml rm -sf serve-staging
+#   docker exec prefect-postgres psql -U prefect -c "DROP DATABASE smarthub_staging;"
+
+services:
+  serve-staging:
+    container_name: smarthub-serve-staging
+    image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
+    restart: "no"                       # a test container, not a managed service
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      SERVE_WORKERS: ${SERVE_WORKERS:-4}                 # match prod for fidelity
+      SERVE_LIMIT_CONCURRENCY: ${SERVE_LIMIT_CONCURRENCY:-8}
+      SMARTHUB_SHAP_MODE: offload                        # keep SHAP off the bid path
+      # Auth ON — same as prod. The harness (sim_test.sh) mints a throwaway key
+      # into this serve's throwaway DB and sends it as a Bearer token, so the
+      # replay exercises the real authenticated bid path end-to-end.
+      SMARTHUB_API_AUTH_ENABLED: "true"
+      # >>> THE ISOLATION: throwaway DB, NOT the prod `prefect` DB <<<
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging
+      SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging
+      SMARTHUB_OLLAMA_HOST: http://ollama:11434
+      SMARTHUB_LLM_MODEL: ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}
+      # same promoted models as prod (read-only load from MinIO/S3)
+      SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
+      SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
+      SMARTHUB_S3_BUCKET: ${SMARTHUB_S3_BUCKET:-smarthub-models}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8000"           # host-side access only on localhost
+    volumes:
+      - ./data:/app/data
