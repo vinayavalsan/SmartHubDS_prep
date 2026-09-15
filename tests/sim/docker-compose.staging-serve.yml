@@ -35,10 +35,10 @@ services:
       SERVE_WORKERS: ${SERVE_WORKERS:-4}                 # match prod for fidelity
       SERVE_LIMIT_CONCURRENCY: ${SERVE_LIMIT_CONCURRENCY:-8}
       SMARTHUB_SHAP_MODE: offload                        # keep SHAP off the bid path
-      # Auth OFF on the isolated test serve (bound to localhost + internal net):
-      # prod runs auth ON, so without this every replay request would 401. The
-      # auth-ON path is validated separately (Phase 6) with an issued key.
-      SMARTHUB_API_AUTH_ENABLED: "false"
+      # Auth ON — same as prod. The harness (sim_test.sh) mints a throwaway key
+      # into this serve's throwaway DB and sends it as a Bearer token, so the
+      # replay exercises the real authenticated bid path end-to-end.
+      SMARTHUB_API_AUTH_ENABLED: "true"
       # >>> THE ISOLATION: throwaway DB, NOT the prod `prefect` DB <<<
       SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging
       SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging

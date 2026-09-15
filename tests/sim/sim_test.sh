@@ -15,7 +15,12 @@
 # Quick compressed rehearsal against the REAL serve (finishes in ~6s):
 #   SPEED=60 SEGMENT_MINUTES=6 DAYS=1 bash tests/sim/sim_test.sh start
 #
-# Env overrides: DAYS, BURST_PROB, SPEED, SEGMENT_MINUTES, SERVE_WORKERS, SLACK_WEBHOOK
+# Auth is ON on the staging serve. You do NOT manage a key: the script mints a
+# throwaway key into the throwaway DB each run and uses it. (Override by
+# exporting API_KEY=shk_... to reuse your own.)
+#
+# Env overrides: DAYS, BURST_PROB, SPEED, SEGMENT_MINUTES, SERVE_WORKERS,
+#                SLACK_WEBHOOK, API_KEY
 
 cd "$(dirname "$0")/../.." || exit 1        # -> repo root (compose paths resolve here)
 
@@ -31,7 +36,7 @@ BURST_PROB=${BURST_PROB:-0.6}
 SPEED=${SPEED:-1}                            # 1 = real time; 60 = compressed rehearsal
 SEGMENT_MINUTES=${SEGMENT_MINUTES:-1440}     # minutes per "day"
 export SERVE_WORKERS=${SERVE_WORKERS:-4}
-API_KEY=${API_KEY:-}                          # bearer key for the staging serve (auth is on)
+API_KEY=${API_KEY:-}                          # bearer key; auto-minted by mint_key() if empty
 
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -46,6 +51,26 @@ ensure_db(){
       "pg_dump -U prefect -t 'smarthub_config*' prefect | psql -U prefect -d smarthub_staging" \
       >/dev/null 2>&1 || true   # copy prod config for fidelity (best-effort)
   fi
+}
+
+mint_key(){
+  # Auto-mint a throwaway bearer key straight into the throwaway smarthub_staging
+  # DB, so nothing secret is ever committed and you never handle a key by hand.
+  # If you exported API_KEY yourself, we respect it and skip minting.
+  if [ -n "$API_KEY" ]; then
+    log "using API_KEY from environment (${API_KEY:0:12}…)"; return 0
+  fi
+  log "minting a throwaway API key into smarthub_staging ..."
+  API_KEY=$(docker exec \
+      -e SMARTHUB_PREDICTION_LOG_DB_URL="postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging" \
+      "$WORKER" python -m smarthub.server.manage_keys create --client sim-test \
+      --note "sim replay/load test (throwaway)" 2>/dev/null \
+    | sed -n 's/^api_key: *//p' | head -1)
+  if [ -z "$API_KEY" ]; then
+    log "ERROR: could not mint an API key (is $WORKER up and smarthub importable?)"
+    return 1
+  fi
+  log "minted key ${API_KEY:0:12}… (client=sim-test, lives only in the throwaway DB)"
 }
 
 wait_health(){
@@ -64,8 +89,11 @@ sys.exit(0 if r.get('model_loaded') else 1)" 2>/dev/null; then
 
 cmd_up(){
   ensure_db
+  mint_key || exit 1        # key must exist in the DB before the serve caches it
   log "bringing up $STAGING (SERVE_WORKERS=$SERVE_WORKERS)"
-  $COMPOSE up -d serve-staging || exit 1
+  # --force-recreate: start with a clean key cache so the just-minted key is
+  # loaded on the serve's first authenticated request (no 60s cache-TTL wait).
+  $COMPOSE up -d --force-recreate serve-staging || exit 1
   wait_health || exit 1
 }
 
