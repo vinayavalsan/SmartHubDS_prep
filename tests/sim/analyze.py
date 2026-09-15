@@ -22,6 +22,18 @@ def _pct(s: pd.Series, p: float) -> float:
     return float(s.quantile(p / 100.0)) if len(s) else 0.0
 
 
+def _to01(s: pd.Series) -> pd.Series:
+    """Coerce a won/boolean-ish column to 0/1, handling numeric, bool and common
+    string encodings (true/false, t/f, yes/no, won/lost)."""
+    out = pd.to_numeric(s, errors="coerce")
+    mask = out.isna() & s.notna()
+    if mask.any():
+        m = {"true": 1, "false": 0, "t": 1, "f": 0, "1": 1, "0": 0,
+             "yes": 1, "no": 0, "won": 1, "lost": 0, "y": 1, "n": 0}
+        out.loc[mask] = (s[mask].astype(str).str.strip().str.lower().map(m))
+    return pd.to_numeric(out, errors="coerce")
+
+
 def analyze(ledger_path: str, snapshot: str | None) -> int:
     df = pd.read_json(ledger_path, lines=True)
     if df.empty:
@@ -77,10 +89,11 @@ def analyze(ledger_path: str, snapshot: str | None) -> int:
                       f"(recommended {'higher' if d.mean()>0 else 'lower'} on avg)")
             wr = pd.to_numeric(served["recommended_bid_predicted_win_rate"],
                                errors="coerce").dropna()
-            won = pd.to_numeric(served["hist_won"], errors="coerce")
+            won = _to01(served["hist_won"]).dropna()
             if len(wr):
+                hw = f"{won.mean():.3f}" if len(won) else "n/a"
                 print(f"predicted win-rate: mean {wr.mean():.3f}  "
-                      f"| historical win rate {won.mean():.3f} "
+                      f"| historical win rate {hw} (n={len(won)}) "
                       f"(calibration sanity — not a match, different bids)")
 
     # ---- verdict ----
