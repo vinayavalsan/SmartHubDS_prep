@@ -88,17 +88,14 @@ sys.exit(0 if r.get('model_loaded') else 1)" 2>/dev/null; then
 }
 
 show_model(){
-  # Print WHICH model artifact the staging serve resolved for each replayed
-  # lead type (model_uri from /health), so you can confirm the right model is
-  # serving — important once Vinaya promotes the final model.
-  for lt in 6 1; do
-    info=$(docker exec "$WORKER" python -c \
-      "import urllib.request,json; \
-r=json.load(urllib.request.urlopen('$URL/health?lead_type_id=$lt', timeout=8)); \
-print('loaded=%s  model_uri=%s' % (r.get('model_loaded'), r.get('model_uri') or 'NONE'))" \
-      2>/dev/null)
-    log "model[lead_type=$lt]: ${info:-<unreachable>}"
-  done
+  # Report WHICH promoted model each lead type resolves to, from the production
+  # serving pointer (the S3/MinIO current.json): promoted version, the UTC time
+  # it was promoted, the resolved artifact, and whether it changed since the
+  # last run. Runs inside the serve container (it has the production-storage env).
+  cp tests/sim/model_info.py data/sim/ 2>/dev/null   # ensure helper is on the mount
+  log "resolved model(s) from production store (S3/MinIO current.json):"
+  docker exec "$STAGING" python /app/data/sim/model_info.py 2>/dev/null \
+    || log "could not read model info (serve down, or prod storage not configured?)"
 }
 
 cmd_up(){
