@@ -68,6 +68,41 @@ def save_ckpt(path: str, day: int) -> None:
     os.replace(tmp, path)
 
 
+def _wait_healthy(url: str, api_key: str | None, timeout_s: float = 180.0) -> bool:
+    """Poll <url>/health until the model is loaded, so a day never runs against
+    a cold or just-rebooted serve. Returns True once healthy, else False."""
+    import urllib.request
+
+    deadline = time.time() + timeout_s
+    probe = url.rstrip("/") + "/health?lead_type_id=6"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(probe, timeout=8) as resp:
+                if json.load(resp).get("model_loaded"):
+                    return True
+        except Exception:  # noqa: BLE001 - serve still starting; keep polling
+            pass
+        time.sleep(5)
+    return False
+
+
+def _finish(args) -> int:
+    """Exit 0, or -- for a restart:unless-stopped container -- hold idle so a
+    completed run is not restart-looped by the container manager."""
+    if getattr(args, "hold_when_done", False):
+        print(
+            "[supervisor] all days complete -- holding idle "
+            "(use 'sim_test.sh down' to remove).",
+            flush=True,
+        )
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+    return 0
+
+
 def run_day(args, day: int, ledger: str) -> bool:
     """Run one day-segment; restart on crash up to --max-restarts. True if ok."""
     cmd = [
@@ -102,6 +137,13 @@ def run_day(args, day: int, ledger: str) -> bool:
     if args.api_key:
         cmd += ["--api-key", args.api_key]
     for attempt in range(1, args.max_restarts + 1):
+        if not _wait_healthy(args.url, args.api_key):
+            heartbeat(
+                f":warning: serve not healthy before day {day} "
+                f"attempt {attempt} -- retrying"
+            )
+            time.sleep(min(30, 5 * attempt))
+            continue
         print(f"\n=== day {day} attempt {attempt}: {' '.join(cmd)}", flush=True)
         rc = subprocess.run(cmd).returncode
         if rc == 0:
@@ -153,6 +195,12 @@ def main() -> int:
     ap.add_argument("--api-key", default=None)
     ap.add_argument("--max-restarts", type=int, default=5)
     ap.add_argument("--no-analyze", dest="analyze", action="store_false")
+    ap.add_argument(
+        "--hold-when-done",
+        action="store_true",
+        help="after all days complete, sleep instead of exiting (keeps a "
+        "restart:unless-stopped container Up without a restart loop)",
+    )
     ap.add_argument("--python", default=sys.executable)
     args = ap.parse_args()
 
@@ -161,7 +209,7 @@ def main() -> int:
     done = load_ckpt(ckpt)
     if done >= args.days:
         print(f"All {args.days} days already complete (checkpoint={ckpt}).")
-        return 0
+        return _finish(args)
 
     heartbeat(
         f":rocket: replay supervisor starting — days {done+1}..{args.days}, "
@@ -183,7 +231,7 @@ def main() -> int:
         )
 
     heartbeat(f":checkered_flag: replay finished all {args.days} historical days.")
-    return 0
+    return _finish(args)
 
 
 if __name__ == "__main__":

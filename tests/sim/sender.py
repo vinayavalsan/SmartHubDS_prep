@@ -38,7 +38,10 @@ class Ledger:
     """Thread-safe append-only JSONL writer, one line per request."""
 
     def __init__(self, path: str):
-        self._fh = open(path, "a", buffering=1)  # line-buffered
+        # Truncate (not append): one run.py invocation == one fresh capture.
+        # A supervisor day-retry re-runs the whole day, so appending would
+        # double-write that day's ledger; "w" makes each attempt authoritative.
+        self._fh = open(path, "w", buffering=1)  # line-buffered, truncating
         self._lock = threading.Lock()
 
     def write(self, rec: dict) -> None:
