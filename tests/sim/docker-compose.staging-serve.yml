@@ -28,7 +28,7 @@ services:
   serve-staging:
     container_name: smarthub-serve-staging
     image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
-    restart: "no"                       # a test container, not a managed service
+    restart: unless-stopped             # multi-day test: survive daemon/host restarts
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
@@ -58,3 +58,42 @@ services:
       - "127.0.0.1:8001:8000"           # host-side access only on localhost
     volumes:
       - ./data:/app/data
+
+  # The week-long replay driver, as a MANAGED container (not `docker exec -d`,
+  # which dies when prefect-worker is recreated). restart:unless-stopped brings
+  # it back after a daemon/host restart; --hold-when-done keeps it Up (idle)
+  # after finishing so it is not restart-looped. It resumes from the checkpoint
+  # in the ledger dir, and _wait_healthy gates each day on the serve being ready.
+  # sim_test.sh copies tests/sim/*.py into ./data/sim and exports the SIM_* vars.
+  sim-supervisor:
+    container_name: smarthub-sim-supervisor
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      SLACK_WEBHOOK: ${SLACK_WEBHOOK:-}
+      SIM_URL: ${SIM_URL:-http://serve-staging:8000}
+      SIM_DATA: ${SIM_DATA:-/app/data/sim/snapshot.parquet}
+      SIM_LEDGER_DIR: ${SIM_LEDGER_DIR:-/app/data/sim/ledgers}
+      SIM_DAYS: ${SIM_DAYS:-4}
+      SIM_SEGMENT_MINUTES: ${SIM_SEGMENT_MINUTES:-1440}
+      SIM_SPEED: ${SIM_SPEED:-1}
+      SIM_BURST_PROB: ${SIM_BURST_PROB:-0.6}
+      SIM_API_KEY: ${SIM_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app/data/sim
+    volumes:
+      - ./data:/app/data
+    command:
+      - sh
+      - -c
+      - >-
+        python supervisor.py
+        --data "$$SIM_DATA" --url "$$SIM_URL"
+        --days "$$SIM_DAYS" --segment-minutes "$$SIM_SEGMENT_MINUTES"
+        --speed "$$SIM_SPEED" --burst-prob "$$SIM_BURST_PROB"
+        --ledger-dir "$$SIM_LEDGER_DIR" --hold-when-done
+        $${SIM_API_KEY:+--api-key "$$SIM_API_KEY"}

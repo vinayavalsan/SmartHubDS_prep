@@ -126,18 +126,21 @@ cmd_start(){
   # host-side monitors (stdlib python3; samples the staging serve + postgres + disk)
   pkill -f "monitors.py" 2>/dev/null
   nohup python3 tests/sim/monitors.py --interval 30 --out data/sim/health.csv \
-      --serve-container "$STAGING" --pg-container "$PG" --disk-path data/sim \
+      --serve-container "$STAGING" --pg-container "$PG" --pg-db smarthub_staging \
+      --disk-path data/sim \
       > data/sim/monitors.log 2>&1 &
   log "monitors started -> data/sim/health.csv"
-  # the supervised replay, inside the worker (where pandas/requests live)
-  docker exec -e SLACK_WEBHOOK="${SLACK_WEBHOOK:-}" -d "$WORKER" sh -c \
-    "cd /app/data/sim && python supervisor.py --data $DATA --url $URL \
-       --days $DAYS --segment-minutes $SEGMENT_MINUTES --speed $SPEED \
-       --burst-prob $BURST_PROB --ledger-dir $LEDGERS ${API_KEY:+--api-key $API_KEY} \
-       > /app/data/sim/supervisor.log 2>&1"
-  log "replay started: days=$DAYS speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
+  # the supervised replay as a MANAGED container (not `docker exec -d`, which
+  # dies when prefect-worker is recreated). It survives daemon/host restarts and
+  # resumes from the checkpoint; config is passed via SIM_* env for the service.
+  export SIM_URL="$URL" SIM_DATA="$DATA" SIM_LEDGER_DIR="$LEDGERS" \
+         SIM_DAYS="$DAYS" SIM_SEGMENT_MINUTES="$SEGMENT_MINUTES" \
+         SIM_SPEED="$SPEED" SIM_BURST_PROB="$BURST_PROB" \
+         SIM_API_KEY="${API_KEY:-}" SLACK_WEBHOOK="${SLACK_WEBHOOK:-}"
+  $COMPOSE up -d sim-supervisor || exit 1
+  log "replay started (managed): days=$DAYS speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
   echo
-  echo "  watch:   tail -f data/sim/supervisor.log"
+  echo "  watch:   docker logs -f smarthub-sim-supervisor"
   echo "  report:  bash tests/sim/sim_test.sh report"
   echo "  stop:    bash tests/sim/sim_test.sh stop"
 }
@@ -153,30 +156,15 @@ cmd_report(){
 
 cmd_stop(){
   log "stopping replay + monitors"
-  # the worker image has no pkill/pgrep — scan /proc from python (always present)
-  docker exec "$WORKER" python -c '
-import os, signal
-for p in os.listdir("/proc"):
-    if not p.isdigit():
-        continue
-    try:
-        cl = open("/proc/%s/cmdline" % p, "rb").read().decode("utf-8", "ignore")
-    except Exception:
-        continue
-    if "supervisor.py" in cl or "/app/data/sim/run.py" in cl:
-        try:
-            os.kill(int(p), signal.SIGTERM)
-        except Exception:
-            pass
-' 2>/dev/null
-  pkill -f "tests/sim/monitors.py" 2>/dev/null   # monitors run on the host (has pkill)
+  $COMPOSE stop sim-supervisor 2>/dev/null        # stop the managed replay container
+  pkill -f "tests/sim/monitors.py" 2>/dev/null    # monitors run on the host (has pkill)
   log "stopped (staging serve left running — use '\''down'\'' to remove it)"
 }
 
 cmd_down(){
   cmd_stop
-  log "removing $STAGING and dropping throwaway DB"
-  $COMPOSE rm -sf serve-staging
+  log "removing staging serve + supervisor and dropping throwaway DB"
+  $COMPOSE rm -sf serve-staging sim-supervisor
   docker exec "$PG" psql -U prefect -c "DROP DATABASE IF EXISTS smarthub_staging;"
 }
 
