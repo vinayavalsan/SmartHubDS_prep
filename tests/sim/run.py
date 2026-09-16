@@ -35,12 +35,22 @@ from sender import Ledger, Sender, Stats
 
 
 def _load_payloads(
-    data: str, n_needed: int, rng: random.Random, lead_type_ids: list[int] | None
+    data: str,
+    n_needed: int,
+    rng: random.Random,
+    lead_type_ids: list[int] | None,
+    biddable_only: bool = True,
 ) -> tuple[list[dict], int]:
     """Sample rows from the snapshot and build valid request bodies.
 
     Returns (payloads, skipped) where skipped = rows missing a required field.
     Samples ~15% extra to cover skips, without replacement when possible.
+
+    biddable_only (default): keep only rows with expected_revenue > 0 -- the
+    leads the real caller would actually bid on. Rows with a null or <=0
+    expected_revenue (~56% of pings) are dropped BEFORE sampling, so every
+    scheduled request is a real bid and none is wasted on a guaranteed 422.
+    Pass --include-nonbiddable to replay the full population instead.
     """
     import pyarrow.parquet as pq
 
@@ -49,6 +59,14 @@ def _load_payloads(
     df = pd.read_parquet(data, columns=cols)
     if lead_type_ids:
         df = df[df["lead_type_id"].isin(lead_type_ids)]
+    if biddable_only and "expected_revenue" in df.columns:
+        total = len(df)
+        er = pd.to_numeric(df["expected_revenue"], errors="coerce")
+        df = df[er > 0]
+        print(
+            f"biddable filter: kept {len(df):,}/{total:,} rows "
+            f"(expected_revenue > 0); dropped {total - len(df):,} null/<=0"
+        )
     if df.empty:
         raise SystemExit(f"No rows in {data} for lead_type_ids={lead_type_ids}")
 
@@ -142,6 +160,12 @@ def main(argv=None) -> int:
         default=None,
         help="restrict replay to these lead types (default: all in file)",
     )
+    ap.add_argument(
+        "--include-nonbiddable",
+        action="store_true",
+        help="also replay rows with null/<=0 expected_revenue "
+        "(default: skip them, sending only biddable leads)",
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
         "--dispatch",
@@ -168,7 +192,11 @@ def main(argv=None) -> int:
     )
     schedule, _infos = arrivals.build_schedule(rng, args.minutes, cfg)
     payloads, skipped = _load_payloads(
-        args.data, len(schedule), rng, args.lead_type_ids
+        args.data,
+        len(schedule),
+        rng,
+        args.lead_type_ids,
+        biddable_only=not args.include_nonbiddable,
     )
 
     print(
