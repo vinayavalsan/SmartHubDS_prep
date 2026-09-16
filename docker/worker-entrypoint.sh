@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Wire everything up at container start, then run the worker:
 #   1. wait for the Prefect server API
-#   2. create the work pool + queue (idempotent)
+#   2. create the work pool + queues (idempotent)
 #   3. register deployments from prefect.yaml
-#   4. start the worker on the pool/queue
+#   4. start the worker on the configured queues
 set -euo pipefail
 
 : "${PREFECT_API_URL:?PREFECT_API_URL must be set}"
 POOL="${PREFECT_WORK_POOL:-smarthub-pool}"
 # Space-separated; one worker serves all of these queues in the pool.
-QUEUES="${PREFECT_WORK_QUEUES:-default features training}"
+QUEUES="${PREFECT_WORK_QUEUES:-default features training monitoring}"
 
 cd /app
 
