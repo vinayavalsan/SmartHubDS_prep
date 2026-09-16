@@ -78,13 +78,27 @@ wait_health(){
   for i in $(seq 1 40); do
     if docker exec "$WORKER" python -c \
         "import urllib.request,json,sys; \
-r=json.load(urllib.request.urlopen('$URL/health?lead_type_id=6')); \
+r=json.load(urllib.request.urlopen('$URL/health?lead_type_id=6', timeout=8)); \
 sys.exit(0 if r.get('model_loaded') else 1)" 2>/dev/null; then
       log "staging serve healthy (model_loaded=true)"; return 0
     fi
     sleep 5
   done
   log "ERROR: staging serve did not become healthy — check: docker logs $STAGING"; return 1
+}
+
+show_model(){
+  # Print WHICH model artifact the staging serve resolved for each replayed
+  # lead type (model_uri from /health), so you can confirm the right model is
+  # serving — important once Vinaya promotes the final model.
+  for lt in 6 1; do
+    info=$(docker exec "$WORKER" python -c \
+      "import urllib.request,json; \
+r=json.load(urllib.request.urlopen('$URL/health?lead_type_id=$lt', timeout=8)); \
+print('loaded=%s  model_uri=%s' % (r.get('model_loaded'), r.get('model_uri') or 'NONE'))" \
+      2>/dev/null)
+    log "model[lead_type=$lt]: ${info:-<unreachable>}"
+  done
 }
 
 cmd_up(){
@@ -95,6 +109,7 @@ cmd_up(){
   # loaded on the serve's first authenticated request (no 60s cache-TTL wait).
   $COMPOSE up -d --force-recreate serve-staging || exit 1
   wait_health || exit 1
+  show_model               # report which model artifact is actually loaded
 }
 
 cmd_start(){
