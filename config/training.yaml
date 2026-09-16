@@ -58,39 +58,39 @@ training:
       name: auto
       model_type: lightgbm
       calibration:
-        enabled: false
-        method: sigmoid
+        enabled: true
+        method: isotonic
         cv: 3
       models:
         lightgbm:
           verbosity: -1
           n_jobs: 1
           subsample_freq: 1
-          num_leaves: 50
-          max_depth: 8
-          learning_rate: 0.03756926249576086
-          min_child_samples: 36
-          subsample: 0.9878338511058234
-          colsample_bytree: 0.9100531293444458
-          reg_alpha: 3.7713131110779936
-          reg_lambda: 3.4131967734309536
+          num_leaves: 102
+          max_depth: 6
+          learning_rate: 0.02816612639771406
+          min_child_samples: 35
+          subsample: 0.9077744952992656
+          colsample_bytree: 0.6010261853723655
+          reg_alpha: 0.0005580560706517769
+          reg_lambda: 0.00038991489561787304
     1:
       name: home
       model_type: lightgbm
       calibration:
-        enabled: false
-        method: sigmoid
+        enabled: true
+        method: isotonic
         cv: 3
       models:
         lightgbm:
           verbosity: -1
           n_jobs: 1
           subsample_freq: 1
-          num_leaves: 74
-          max_depth: 4
-          learning_rate: 0.01676274385834696
-          min_child_samples: 24
-          subsample: 0.9372071507683247
-          colsample_bytree: 0.7015232654362487
-          reg_alpha: 3.2830306860572816e-05
-          reg_lambda: 0.956199464029356
+          num_leaves: 85
+          max_depth: 8
+          learning_rate: 0.007995122776833112
+          min_child_samples: 19
+          subsample: 0.9214235974277101
+          colsample_bytree: 0.8384631038813102
+          reg_alpha: 7.1813813673666054e-06
+          reg_lambda: 0.0013513952834439506
