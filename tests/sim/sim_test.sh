@@ -102,6 +102,21 @@ show_model(){
     || log "could not read model info (serve down, or prod storage not configured?)"
 }
 
+cmd_dash_staging(){
+  # Give host port 8500 to the STAGING dashboard for the test window: stop the
+  # prod dashboard (frees 8500), then bring up dashboard-staging (staging DB).
+  log "swapping host:8500 -> STAGING dashboard (prod dashboard stopped)"
+  $COMPOSE stop dashboard 2>/dev/null
+  $COMPOSE up -d dashboard-staging || log "WARN: dashboard-staging failed to start"
+}
+
+cmd_dash_prod(){
+  # Hand host port 8500 back to PROD: remove the staging dashboard, restart prod.
+  log "handing host:8500 back to the PROD dashboard"
+  $COMPOSE rm -sf dashboard-staging 2>/dev/null
+  $COMPOSE up -d dashboard || log "WARN: prod dashboard failed to restart"
+}
+
 cmd_up(){
   ensure_db
   mint_key || exit 1        # key must exist in the DB before the serve caches it
@@ -143,8 +158,10 @@ cmd_start(){
          SIM_API_KEY="${API_KEY:-}"
   $COMPOSE up -d sim-supervisor || exit 1
   log "replay started (managed): days=$DAYS speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
+  cmd_dash_staging          # host:8500 now shows ONLY the replay (staging DB)
   echo
   echo "  watch:   docker logs -f smarthub-sim-supervisor"
+  echo "  ui:      http://<ec2-host>:8500   (staging predictions only)"
   echo "  report:  bash tests/sim/sim_test.sh report"
   echo "  stop:    bash tests/sim/sim_test.sh stop"
 }
@@ -167,6 +184,7 @@ cmd_stop(){
 
 cmd_down(){
   cmd_stop
+  cmd_dash_prod                                   # give 8500 back to prod
   log "removing staging serve + supervisor and dropping throwaway DB"
   $COMPOSE rm -sf serve-staging sim-supervisor
   docker exec "$PG" psql -U prefect -c "DROP DATABASE IF EXISTS smarthub_staging;"
@@ -204,5 +222,7 @@ case "${1:-}" in
   stop)   cmd_stop ;;
   down)   cmd_down ;;
   test)   cmd_test_alert ;;
-  *) echo "usage: $0 {up|start|report|stop|down|test}"; exit 1 ;;
+  dash-staging) cmd_dash_staging ;;
+  dash-prod)    cmd_dash_prod ;;
+  *) echo "usage: $0 {up|start|report|stop|down|test|dash-staging|dash-prod}"; exit 1 ;;
 esac
