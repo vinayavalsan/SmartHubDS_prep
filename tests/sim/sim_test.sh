@@ -105,16 +105,27 @@ show_model(){
 cmd_dash_staging(){
   # Give host port 8500 to the STAGING dashboard for the test window: stop the
   # prod dashboard (frees 8500), then bring up dashboard-staging (staging DB).
-  log "swapping host:8500 -> STAGING dashboard (prod dashboard stopped)"
-  $COMPOSE stop dashboard 2>/dev/null
+  log "swapping host:8500 -> STAGING dashboard (prod + diag stopped)"
+  $COMPOSE stop dashboard 2>/dev/null            # prod dashboard (base compose)
+  $COMPOSE stop dashboard-diag 2>/dev/null       # free 8500 from diag if up
   $COMPOSE up -d dashboard-staging || log "WARN: dashboard-staging failed to start"
 }
 
 cmd_dash_prod(){
   # Hand host port 8500 back to PROD: remove the staging dashboard, restart prod.
   log "handing host:8500 back to the PROD dashboard"
-  $COMPOSE rm -sf dashboard-staging 2>/dev/null
+  $COMPOSE rm -sf dashboard-staging dashboard-diag 2>/dev/null
   $COMPOSE up -d dashboard || log "WARN: prod dashboard failed to restart"
+}
+
+cmd_dash_diag(){
+  # Flip host:8500 to the model-diagnostics app (post-training model eval).
+  # Stops prod + staging dashboards to free 8500, then brings up dashboard-diag.
+  log "swapping host:8500 -> MODEL-DIAGNOSTICS app (prod + staging stopped)"
+  $COMPOSE stop dashboard 2>/dev/null
+  $COMPOSE stop dashboard-staging 2>/dev/null
+  $COMPOSE up -d dashboard-diag || log "WARN: dashboard-diag failed to start"
+  log "model-diagnostics on http://<ec2>:8500 (flip back: dash-staging / dash-prod)"
 }
 
 cmd_up(){
@@ -192,7 +203,7 @@ cmd_down(){
   cmd_stop
   cmd_dash_prod                                   # give 8500 back to prod
   log "removing staging serve + supervisor and dropping throwaway DB"
-  $COMPOSE rm -sf serve-staging sim-supervisor
+  $COMPOSE rm -sf serve-staging sim-supervisor dashboard-diag
   docker exec "$PG" psql -U prefect -c "DROP DATABASE IF EXISTS smarthub_staging;"
 }
 
@@ -230,5 +241,6 @@ case "${1:-}" in
   test)   cmd_test_alert ;;
   dash-staging) cmd_dash_staging ;;
   dash-prod)    cmd_dash_prod ;;
-  *) echo "usage: $0 {up|start|report|stop|down|test|dash-staging|dash-prod}"; exit 1 ;;
+  dash-diag)    cmd_dash_diag ;;
+  *) echo "usage: $0 {up|start|report|stop|down|test|dash-staging|dash-prod|dash-diag}"; exit 1 ;;
 esac

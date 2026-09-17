@@ -132,3 +132,37 @@ services:
       - "8500:8501"          # SAME host port as prod; swapped in for the test window
     volumes:
       - ./data:/app/data
+      # override just this one file so the Performance page's hours/days window
+      # applies without rebuilding the dashboard image (pip install -e).
+      - ./src/smarthub/monitoring/performance_app.py:/app/src/smarthub/monitoring/performance_app.py:ro
+
+  # The post-training model-diagnostics app (normally on 8511) bound to host
+  # 8500, so `dash-diag` can flip 8500 to it without a firewall change. Reads
+  # model-eval artifacts from ./data + the mlflow DB (same as smarthub-model-
+  # diagnostics); shows the models under test, not replay traffic.
+  dashboard-diag:
+    container_name: smarthub-dashboard-diag
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      SMARTHUB_MLFLOW_TRACKING_URI: postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - streamlit
+      - run
+      - src/smarthub/model_diagnostics/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8502
+      - --server.headless=true
+      - --server.fileWatcherType=none
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8500:8502"          # flip target for `dash-diag` (same host port)
+    volumes:
+      - ./data:/app/data
