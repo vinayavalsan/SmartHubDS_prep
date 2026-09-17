@@ -142,6 +142,12 @@ cmd_start(){
     mv data/sim/ledgers/supervisor.ckpt.json "$arch"/ 2>/dev/null
     log "archived previous ledgers -> $arch"
   fi
+  # Fresh run: clear the staging prediction log so the dashboard's Predictions
+  # page shows ONLY this run (the serve accumulates rows across runs until down).
+  if docker exec "$PG" psql -U prefect -d smarthub_staging -c \
+       "TRUNCATE smarthub_prediction_log" >/dev/null 2>&1; then
+    log "cleared staging prediction log (dashboard Predictions = this run only)"
+  fi
   # host-side monitors (stdlib python3; samples the staging serve + postgres + disk)
   pkill -f "monitors.py" 2>/dev/null
   nohup python3 tests/sim/monitors.py --interval 30 --out data/sim/health.csv \
