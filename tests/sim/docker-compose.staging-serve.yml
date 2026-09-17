@@ -96,3 +96,39 @@ services:
         --speed "$$SIM_SPEED" --burst-prob "$$SIM_BURST_PROB"
         --ledger-dir "$$SIM_LEDGER_DIR" --hold-when-done
         $${SIM_API_KEY:+--api-key "$$SIM_API_KEY"}
+
+  # Streamlit dashboard pointed at the THROWAWAY staging DB, so the UI shows
+  # ONLY the replay's predictions -- never prod. sim_test.sh stops the prod
+  # dashboard and runs this on the SAME host port 8500 for the test window, then
+  # hands 8500 back to prod on `down`/`dash-prod`. Predictions page reads the
+  # prediction-log DB below; parquet-backed pages still read the shared ./data.
+  dashboard-staging:
+    container_name: smarthub-dashboard-staging
+    image: ${IMAGE_REPO:-smarthub/smarthub}:dashboard-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    mem_limit: ${DASHBOARD_MEM:-2g}
+    tty: true
+    stdin_open: true
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      STORAGE_BACKEND: parquet
+      # >>> point BOTH DBs at the throwaway staging DB (the replay's data) <<<
+      SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - streamlit
+      - run
+      - src/smarthub/monitoring/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --server.fileWatcherType=none
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8500:8501"          # SAME host port as prod; swapped in for the test window
+    volumes:
+      - ./data:/app/data
