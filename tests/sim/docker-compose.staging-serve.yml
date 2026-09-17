@@ -72,7 +72,6 @@ services:
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
-      SLACK_WEBHOOK: ${SLACK_WEBHOOK:-}
       SIM_URL: ${SIM_URL:-http://serve-staging:8000}
       SIM_DATA: ${SIM_DATA:-/app/data/sim/snapshot.parquet}
       SIM_LEDGER_DIR: ${SIM_LEDGER_DIR:-/app/data/sim/ledgers}
