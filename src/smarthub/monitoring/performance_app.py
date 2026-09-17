@@ -209,7 +209,7 @@ def load_leads(days: int):
 
 
 @st.cache_data
-def load_prediction_monitoring(days: int) -> pd.DataFrame:
+def load_prediction_monitoring(days: float) -> pd.DataFrame:
     """Load recent prediction-monitoring rows from local parquet storage.
 
     Inputs
@@ -260,7 +260,7 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
 
     time_col = "served_at" if "served_at" in df.columns else "created_at"
     if time_col in df.columns:
-        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=int(days))
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=float(days))
         df = df[df[time_col].ge(cutoff)].copy()
 
     if "status" in df.columns:
@@ -1715,18 +1715,30 @@ def main():
 
     history_col, bin_type_col, bin_size_col = st.columns(3)
     with history_col:
-        days = st.number_input(
-            "History window (days)",
-            min_value=1,
-            max_value=30,
-            value=21,
-            step=1,
-            key="mon_days",
+        _history_windows = {
+            "1 hour": 1 / 24,
+            "3 hours": 3 / 24,
+            "6 hours": 6 / 24,
+            "12 hours": 12 / 24,
+            "1 day": 1.0,
+            "2 days": 2.0,
+            "3 days": 3.0,
+            "7 days": 7.0,
+            "14 days": 14.0,
+            "21 days": 21.0,
+            "30 days": 30.0,
+        }
+        _window_label = st.selectbox(
+            "History window",
+            options=list(_history_windows.keys()),
+            index=list(_history_windows.keys()).index("1 day"),
+            key="mon_window",
             help=(
-                "Days of history to load. Kept short (default 1) so the page "
-                "loads fast; widen up to 7 for a longer trend."
+                "How far back to load. Pick an hours window for the live / "
+                "real-time view; days for longer trends (21 days still here)."
             ),
         )
+        days = _history_windows[_window_label]
     with bin_type_col:
         bin_type = st.selectbox(
             "Bin type",
@@ -1768,7 +1780,7 @@ def main():
             bin_size = None
 
     try:
-        leads_df = load_leads(int(days))
+        leads_df = load_leads(max(1, int(days)))
     except io.DataNotFoundError as exc:
         st.error(str(exc))
         st.stop()
@@ -1915,7 +1927,7 @@ def main():
         plot_df = df
         if show_ml_metrics:
             try:
-                prediction_df = load_prediction_monitoring(int(days))
+                prediction_df = load_prediction_monitoring(days)
             except io.DataNotFoundError as exc:
                 st.warning(str(exc))
                 prediction_df = pd.DataFrame()
