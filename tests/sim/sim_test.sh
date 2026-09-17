@@ -37,6 +37,10 @@ SPEED=${SPEED:-1}                            # 1 = real time; 60 = compressed re
 SEGMENT_MINUTES=${SEGMENT_MINUTES:-1440}     # minutes per "day"
 export SERVE_WORKERS=${SERVE_WORKERS:-4}
 API_KEY=${API_KEY:-}                          # bearer key; auto-minted by mint_key() if empty
+# Supervisor alerts/heartbeats post to SLACK_WEBHOOK. Keep the secret OUT of
+# git: set SLACK_WEBHOOK=<url> in .env (gitignored) -- the sim-supervisor reads
+# it via env_file. You can also just export SLACK_WEBHOOK in your shell.
+SLACK_WEBHOOK=${SLACK_WEBHOOK:-}
 
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -136,7 +140,7 @@ cmd_start(){
   export SIM_URL="$URL" SIM_DATA="$DATA" SIM_LEDGER_DIR="$LEDGERS" \
          SIM_DAYS="$DAYS" SIM_SEGMENT_MINUTES="$SEGMENT_MINUTES" \
          SIM_SPEED="$SPEED" SIM_BURST_PROB="$BURST_PROB" \
-         SIM_API_KEY="${API_KEY:-}" SLACK_WEBHOOK="${SLACK_WEBHOOK:-}"
+         SIM_API_KEY="${API_KEY:-}"
   $COMPOSE up -d sim-supervisor || exit 1
   log "replay started (managed): days=$DAYS speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
   echo
@@ -168,11 +172,37 @@ cmd_down(){
   docker exec "$PG" psql -U prefect -c "DROP DATABASE IF EXISTS smarthub_staging;"
 }
 
+cmd_test_alert(){
+  local hook="${SLACK_WEBHOOK:-}"
+  if [ -z "$hook" ] && [ -f .env ]; then          # fall back to .env (gitignored)
+    hook=$(sed -n 's/^SLACK_WEBHOOK=//p' .env | tail -1 | tr -d '"'"'"'"')
+  fi
+  if [ -z "$hook" ]; then
+    log "no SLACK_WEBHOOK -- set it in .env or export it"; return 1
+  fi
+  local msg=":wrench: SmartHub replay: test alert from $(hostname) at \
+$(date -u +%Y-%m-%dT%H:%M:%SZ) — Slack alerts are wired."
+  if command -v curl >/dev/null 2>&1; then
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      -H 'Content-Type: application/json' --data "{\"text\":\"$msg\"}" "$hook")
+    log "posted test alert -> Slack (HTTP $code; 200 = delivered)"
+  else
+    log "curl not found; posting via the worker container"
+    docker exec -e HOOK="$hook" -e MSG="$msg" "$WORKER" python -c \
+      "import os,json,urllib.request; \
+r=urllib.request.urlopen(urllib.request.Request(os.environ['HOOK'], \
+data=json.dumps({'text':os.environ['MSG']}).encode(), \
+headers={'Content-Type':'application/json'}), timeout=10); \
+print('HTTP', r.status)"
+  fi
+}
+
 case "${1:-}" in
   up)     cmd_up ;;
   start)  cmd_start ;;
   report) cmd_report ;;
   stop)   cmd_stop ;;
   down)   cmd_down ;;
-  *) echo "usage: $0 {up|start|report|stop|down}"; exit 1 ;;
+  test)   cmd_test_alert ;;
+  *) echo "usage: $0 {up|start|report|stop|down|test}"; exit 1 ;;
 esac
