@@ -28,22 +28,26 @@ deployments:
     work_pool:
       name: smarthub-pool
       work_queue_name: default
+    # Shared defaults; each schedule overrides the lead type below.
+    # Runs every 4h and pulls from (last record - overlap) -> now, so a 1h
+    # overlap means each run covers ~the last 4h plus 1h of re-pull.
     parameters:
       overlap_hours: 1
       default_lookback_hours: 168
       with_expected_revenue: true
       selected_only: true
     schedules:
-      - cron: "0 */4 * * *"
+      - cron: "0 */4 * * *"      # auto
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-      - cron: "15 */4 * * *"
+      - cron: "15 */4 * * *"     # home (staggered 15 min)
         timezone: "UTC"
         parameters:
           lead_type_id: 1
 
   # STEP 2 — RUN AFTER data-pull.
+  # Feature extraction: same work pool, separate queue ('features').
   - name: build-features
     entrypoint: src/smarthub/feature_engineering/flow.py:build_features_flow
     description: >-
@@ -54,19 +58,22 @@ deployments:
     work_pool:
       name: smarthub-pool
       work_queue_name: features
+    # window_days omitted -> flow uses TRAINING_WINDOW_DAYS env (default 21).
     schedules:
-      - cron: "30 */4 * * *"
+      - cron: "30 */4 * * *"     # auto, after the pulls
         timezone: "UTC"
         parameters:
           lead_type_id: 6
           lead_type_name: auto
-      - cron: "45 */4 * * *"
+      - cron: "45 */4 * * *"     # home
         timezone: "UTC"
         parameters:
           lead_type_id: 1
           lead_type_name: home
 
   # STEP 3 — RUN AFTER build-features.
+  # Model training + offline bid-optimizer evaluation. Separate queue
+  # ('training'). Requires the `ml` extra (installed in the worker image).
   - name: train-model
     entrypoint: src/smarthub/train_and_predict/flow.py:train_flow
     description: >-
@@ -81,31 +88,11 @@ deployments:
     parameters:
       register_mlflow: true
     schedules:
-      - cron: "0 5 * * *"
+      - cron: "0 5 * * *"        # auto, daily after the 4-hourly builds settle
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-      - cron: "20 5 * * *"
-        timezone: "UTC"
-        parameters:
-          lead_type_id: 1
-
-  # Production model monitoring. Each schedule passes the required lead type.
-  - name: model-degradation
-    entrypoint: src/smarthub/monitoring/flow.py:model_degradation_flow
-    description: >-
-      Compares realized auction wins with predicted win probabilities and
-      notifies Slack when a persisted warning or critical status changes.
-    tags: ["monitoring", "model-degradation", "pipeline-smarthub"]
-    work_pool:
-      name: smarthub-pool
-      work_queue_name: monitoring
-    schedules:
-      - cron: "5 * * * *"
-        timezone: "UTC"
-        parameters:
-          lead_type_id: 6
-      - cron: "10 * * * *"
+      - cron: "20 5 * * *"       # home
         timezone: "UTC"
         parameters:
           lead_type_id: 1
