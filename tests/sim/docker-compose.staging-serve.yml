@@ -82,6 +82,8 @@ services:
       SIM_SEGMENT_MINUTES: ${SIM_SEGMENT_MINUTES:-1440}
       SIM_SPEED: ${SIM_SPEED:-1}
       SIM_BURST_PROB: ${SIM_BURST_PROB:-0.6}
+      SIM_RATE_MIN: ${SIM_RATE_MIN:-100}
+      SIM_RATE_MAX: ${SIM_RATE_MAX:-150}
       SIM_API_KEY: ${SIM_API_KEY:-}
     depends_on:
       postgres:
@@ -97,6 +99,7 @@ services:
         --data "$$SIM_DATA" --url "$$SIM_URL"
         --days "$$SIM_DAYS" --segment-minutes "$$SIM_SEGMENT_MINUTES"
         --speed "$$SIM_SPEED" --burst-prob "$$SIM_BURST_PROB"
+        --rate-min "$$SIM_RATE_MIN" --rate-max "$$SIM_RATE_MAX"
         --ledger-dir "$$SIM_LEDGER_DIR" --hold-when-done
         $${SIM_API_KEY:+--api-key "$$SIM_API_KEY"}
 

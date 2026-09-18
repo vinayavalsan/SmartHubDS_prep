@@ -35,6 +35,8 @@ DAYS=${DAYS:-4}
 BURST_PROB=${BURST_PROB:-0.6}
 SPEED=${SPEED:-1}                            # 1 = real time; 60 = compressed rehearsal
 SEGMENT_MINUTES=${SEGMENT_MINUTES:-1440}     # minutes per "day"
+RATE_MIN=${RATE_MIN:-${RATE:-100}}           # requests/min band (RATE=N sets both)
+RATE_MAX=${RATE_MAX:-${RATE:-150}}
 export SERVE_WORKERS=${SERVE_WORKERS:-4}
 API_KEY=${API_KEY:-}                          # bearer key; auto-minted by mint_key() if empty
 # Supervisor alerts/heartbeats post to SLACK_WEBHOOK. Keep the secret OUT of
@@ -172,9 +174,10 @@ cmd_start(){
   export SIM_URL="$URL" SIM_DATA="$DATA" SIM_LEDGER_DIR="$LEDGERS" \
          SIM_DAYS="$DAYS" SIM_SEGMENT_MINUTES="$SEGMENT_MINUTES" \
          SIM_SPEED="$SPEED" SIM_BURST_PROB="$BURST_PROB" \
+         SIM_RATE_MIN="$RATE_MIN" SIM_RATE_MAX="$RATE_MAX" \
          SIM_API_KEY="${API_KEY:-}"
   $COMPOSE up -d sim-supervisor || exit 1
-  log "replay started (managed): days=$DAYS speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
+  log "replay started (managed): days=$DAYS rate=${RATE_MIN}-${RATE_MAX}/min speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
   cmd_dash_staging          # host:8500 now shows ONLY the replay (staging DB)
   echo
   echo "  watch:   docker logs -f smarthub-sim-supervisor"
