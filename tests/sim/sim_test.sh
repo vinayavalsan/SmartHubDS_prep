@@ -215,18 +215,30 @@ cmd_test_alert(){
   if [ -z "$hook" ]; then
     log "no SLACK_WEBHOOK -- set it in .env or export it"; return 1
   fi
-  local msg=":wrench: SmartHub replay: test alert from $(hostname) at \
-$(date -u +%Y-%m-%dT%H:%M:%SZ) — Slack alerts are wired."
+  local host when payload
+  host=$(hostname)
+  when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # Same colour-coded attachment format the supervisor uses (info = green).
+  payload=$(cat <<JSON
+{"attachments":[{"color":"#2eb67d","blocks":[
+{"type":"section","text":{"type":"mrkdwn","text":":large_green_circle: *SmartHub replay - Slack alerts wired*"}},
+{"type":"section","fields":[
+{"type":"mrkdwn","text":"*Host:*\\n$host"},
+{"type":"mrkdwn","text":"*When (UTC):*\\n$when"},
+{"type":"mrkdwn","text":"*Component:*\\nreplay wiring test"}
+]}]}]}
+JSON
+)
   if command -v curl >/dev/null 2>&1; then
     code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-      -H 'Content-Type: application/json' --data "{\"text\":\"$msg\"}" "$hook")
+      -H 'Content-Type: application/json' --data "$payload" "$hook")
     log "posted test alert -> Slack (HTTP $code; 200 = delivered)"
   else
     log "curl not found; posting via the worker container"
-    docker exec -e HOOK="$hook" -e MSG="$msg" "$WORKER" python -c \
-      "import os,json,urllib.request; \
+    docker exec -e HOOK="$hook" -e PAYLOAD="$payload" "$WORKER" python -c \
+      "import os,urllib.request; \
 r=urllib.request.urlopen(urllib.request.Request(os.environ['HOOK'], \
-data=json.dumps({'text':os.environ['MSG']}).encode(), \
+data=os.environ['PAYLOAD'].encode(), \
 headers={'Content-Type':'application/json'}), timeout=10); \
 print('HTTP', r.status)"
   fi

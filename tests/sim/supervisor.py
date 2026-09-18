@@ -30,21 +30,74 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def heartbeat(text: str) -> None:
-    """Post to Slack if SLACK_WEBHOOK is set; always echo locally."""
-    print(f"[heartbeat] {text}", flush=True)
+# level -> (Slack attachment colour, leading emoji)
+_LEVELS = {
+    "info": ("#2eb67d", ":large_green_circle:"),
+    "warn": ("#ecb22e", ":large_yellow_circle:"),
+    "error": ("#e01e5a", ":red_circle:"),
+}
+
+
+def notify(title: str, detail: str = "", level: str = "info") -> None:
+    """Post a colour-coded Slack alert if SLACK_WEBHOOK is set; always echo.
+
+    ``level`` is one of info/warn/error. On an errors-only channel, set
+    SIM_ALERTS_ERRORS_ONLY=1 to suppress routine info-level lifecycle posts
+    (start / day-complete / finished) while still delivering warn + error.
+    """
+    import socket
+
+    line = f"[{level}] {title}" + (f" - {detail}" if detail else "")
+    print(f"[alert] {line}", flush=True)
+
     hook = os.environ.get("SLACK_WEBHOOK")
     if not hook:
         return
+    if level == "info" and os.environ.get(
+        "SIM_ALERTS_ERRORS_ONLY", ""
+    ).strip().lower() in {"1", "true", "yes"}:
+        return
+
+    color, emoji = _LEVELS.get(level, _LEVELS["info"])
+    when = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"{emoji} *{title}*"},
+        }
+    ]
+    if detail:
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": detail}}
+        )
+    blocks.append(
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Host:*\n{socket.gethostname()}"},
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Target:*\n{os.environ.get('SIM_URL', 'n/a')}",
+                },
+                {"type": "mrkdwn", "text": f"*When (UTC):*\n{when}"},
+                {"type": "mrkdwn", "text": "*Component:*\nreplay-supervisor"},
+            ],
+        }
+    )
+    payload = {"attachments": [{"color": color, "blocks": blocks}]}
     try:
         req = urllib.request.Request(
             hook,
-            data=json.dumps({"text": text}).encode(),
+            data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
         urllib.request.urlopen(req, timeout=10)
     except Exception as exc:  # noqa: BLE001 - never let alerting kill the run
-        print(f"[heartbeat] slack post failed: {exc}", flush=True)
+        print(f"[alert] slack post failed: {exc}", flush=True)
+
+
+def heartbeat(text: str) -> None:  # back-compat shim
+    notify(text, level="info")
 
 
 def load_ckpt(path: str) -> int:
@@ -138,9 +191,10 @@ def run_day(args, day: int, ledger: str) -> bool:
         cmd += ["--api-key", args.api_key]
     for attempt in range(1, args.max_restarts + 1):
         if not _wait_healthy(args.url, args.api_key):
-            heartbeat(
-                f":warning: serve not healthy before day {day} "
-                f"attempt {attempt} -- retrying"
+            notify(
+                f"Serve not healthy before day {day}",
+                f"attempt {attempt} - retrying",
+                level="warn",
             )
             time.sleep(min(30, 5 * attempt))
             continue
@@ -148,9 +202,10 @@ def run_day(args, day: int, ledger: str) -> bool:
         rc = subprocess.run(cmd).returncode
         if rc == 0:
             return True
-        heartbeat(
-            f":warning: replay day {day} exited rc={rc} "
-            f"(attempt {attempt}/{args.max_restarts}) — restarting"
+        notify(
+            f"Replay day {day} restarting",
+            f"exited rc={rc} (attempt {attempt}/{args.max_restarts})",
+            level="warn",
         )
         time.sleep(min(30, 5 * attempt))
     return False
@@ -211,26 +266,34 @@ def main() -> int:
         print(f"All {args.days} days already complete (checkpoint={ckpt}).")
         return _finish(args)
 
-    heartbeat(
-        f":rocket: replay supervisor starting — days {done+1}..{args.days}, "
-        f"target {args.url}"
+    notify(
+        "Replay supervisor started",
+        f"Days {done+1}-{args.days}  |  target `{args.url}`",
+        level="info",
     )
     for day in range(done + 1, args.days + 1):
         ledger = os.path.join(args.ledger_dir, f"day{day}.jsonl")
         ok = run_day(args, day, ledger)
         if not ok:
-            heartbeat(
-                f":rotating_light: replay day {day} FAILED after "
-                f"{args.max_restarts} restarts — supervisor stopping."
+            notify(
+                f"Replay day {day} FAILED",
+                f"after {args.max_restarts} restarts - supervisor stopping",
+                level="error",
             )
             return 1
         summary = rollup(args, day, ledger)
         save_ckpt(ckpt, day)
-        heartbeat(
-            f":white_check_mark: replay day {day}/{args.days} complete — {summary}"
+        notify(
+            f"Replay day {day}/{args.days} complete",
+            summary,
+            level="info",
         )
 
-    heartbeat(f":checkered_flag: replay finished all {args.days} historical days.")
+    notify(
+        "Replay finished all historical days",
+        f"{args.days} days complete",
+        level="info",
+    )
     return _finish(args)
 
 
