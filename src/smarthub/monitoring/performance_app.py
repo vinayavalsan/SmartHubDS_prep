@@ -233,14 +233,7 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
         )
 
     df = pd.read_parquet(PREDICTION_MONITORING_PATH)
-    diagnostics = {
-        "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
-        "rows_read": len(df),
-        "columns_read": len(df.columns),
-    }
     if df.empty:
-        diagnostics["result"] = "parquet file contains no rows"
-        df.attrs["load_diagnostics"] = diagnostics
         return df
 
     for column in ("created_at", "served_at"):
@@ -266,95 +259,24 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
             df[column] = pd.to_numeric(df[column], errors="coerce")
 
     time_col = "served_at" if "served_at" in df.columns else "created_at"
-    diagnostics["time_column"] = time_col if time_col in df.columns else "missing"
     if time_col in df.columns:
         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=int(days))
-        diagnostics["window_cutoff_utc"] = str(cutoff)
         df = df[df[time_col].ge(cutoff)].copy()
-    diagnostics["rows_after_time_window"] = len(df)
 
     if "status" in df.columns:
-        diagnostics["status_counts_before_filter"] = (
-            df["status"]
-            .astype("string")
-            .fillna("<NA>")
-            .value_counts(dropna=False)
-            .to_dict()
-        )
         df = df[
             df["status"].astype("string").str.lower().isin({"success", "ok"})
         ].copy()
-    diagnostics["rows_after_status_filter"] = len(df)
 
     if "lead_ping_id" not in df.columns:
-        diagnostics["result"] = "required column lead_ping_id is missing"
-        empty = pd.DataFrame()
-        empty.attrs["load_diagnostics"] = diagnostics
-        return empty
+        return pd.DataFrame()
 
     df = df[df["lead_ping_id"].notna()].copy()
-    diagnostics["rows_with_lead_ping_id"] = len(df)
     sort_col = "served_at" if "served_at" in df.columns else "created_at"
     if sort_col in df.columns:
         df = df.sort_values(sort_col, ascending=False, na_position="last")
 
-    df = df.drop_duplicates("lead_ping_id", keep="first").reset_index(drop=True)
-    diagnostics["rows_after_lead_ping_id_deduplication"] = len(df)
-    diagnostics["result"] = "loaded"
-    df.attrs["load_diagnostics"] = diagnostics
-    return df
-
-
-def _ml_debug_rows(
-    *,
-    load_diagnostics: dict,
-    prediction_df: pd.DataFrame,
-    historical_df: pd.DataFrame,
-    attached_df: pd.DataFrame,
-    selected_lead_type: int,
-) -> pd.DataFrame:
-    """Build compact diagnostics for an unavailable ML-metrics overlay."""
-    rows = [(key, value) for key, value in load_diagnostics.items()]
-    rows.extend(
-        [
-            ("selected_lead_type_id", selected_lead_type),
-            ("prediction_rows_after_ui_filters", len(prediction_df)),
-            ("historical_rows_after_ui_filters", len(historical_df)),
-        ]
-    )
-
-    if "lead_ping_id" in prediction_df.columns and "id" in historical_df.columns:
-        prediction_ids = set(
-            pd.to_numeric(prediction_df["lead_ping_id"], errors="coerce")
-            .dropna()
-            .astype("int64")
-        )
-        historical_ids = set(
-            pd.to_numeric(historical_df["id"], errors="coerce")
-            .dropna()
-            .astype("int64")
-        )
-        rows.append(("matching_lead_ping_ids", len(prediction_ids & historical_ids)))
-    else:
-        rows.append(("matching_lead_ping_ids", "not computable"))
-
-    required = (
-        "recommended_bid",
-        "recommended_bid_predicted_win_rate",
-        "recommended_bid_predicted_revenue",
-        "recommended_bid_predicted_bid_cost",
-        "recommended_bid_predicted_profit",
-    )
-    missing = [column for column in required if column not in attached_df.columns]
-    rows.append(("missing_ml_columns_after_join", ", ".join(missing) or "none"))
-    for column in required:
-        if column in attached_df.columns:
-            numeric = pd.to_numeric(attached_df[column], errors="coerce")
-            rows.append((f"usable_rows:{column}", int(numeric.notna().sum())))
-
-    available = transforms.recommended_bid_metrics_available_mask(attached_df)
-    rows.append(("rows_with_complete_ml_metrics", int(available.sum())))
-    return pd.DataFrame(rows, columns=["diagnostic", "value"])
+    return df.drop_duplicates("lead_ping_id", keep="first").reset_index(drop=True)
 
 
 def attach_prediction_monitoring(
@@ -1991,20 +1913,11 @@ def main():
             )
 
         plot_df = df
-        prediction_df = pd.DataFrame()
-        prediction_load_diagnostics = {}
         if show_ml_metrics:
             try:
                 prediction_df = load_prediction_monitoring(int(days))
-                prediction_load_diagnostics = prediction_df.attrs.get(
-                    "load_diagnostics", {}
-                )
             except io.DataNotFoundError as exc:
                 st.warning(str(exc))
-                prediction_load_diagnostics = {
-                    "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
-                    "result": str(exc),
-                }
                 prediction_df = pd.DataFrame()
 
             if not prediction_df.empty:
@@ -2134,22 +2047,6 @@ def main():
                     "ML metrics are not available for the selected filters; "
                     "showing historical metrics only."
                 )
-                with st.expander("ML metrics diagnostics", expanded=True):
-                    st.caption(
-                        "Use the counts below to locate where monitoring rows were "
-                        "removed or failed to join to historical leads."
-                    )
-                    st.dataframe(
-                        _ml_debug_rows(
-                            load_diagnostics=prediction_load_diagnostics,
-                            prediction_df=prediction_df,
-                            historical_df=df,
-                            attached_df=plot_df,
-                            selected_lead_type=int(selected_lead_type),
-                        ),
-                        hide_index=True,
-                        width="stretch",
-                    )
                 show_ml_metrics = False
             else:
                 ml_columns = merge_keys + [
