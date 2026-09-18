@@ -38,7 +38,13 @@ _LEVELS = {
 }
 
 
-def notify(title: str, detail: str = "", level: str = "info") -> None:
+def notify(
+    title: str,
+    detail: str = "",
+    level: str = "info",
+    code: str = "",
+    suggestion: str = "",
+) -> None:
     """Post a colour-coded Slack alert if SLACK_WEBHOOK is set; always echo.
 
     ``level`` is one of info/warn/error. On an errors-only channel, set
@@ -70,6 +76,26 @@ def notify(title: str, detail: str = "", level: str = "info") -> None:
         blocks.append(
             {"type": "section", "text": {"type": "mrkdwn", "text": detail}}
         )
+    if code:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Traceback (tail):*\n```" + code[-2500:] + "```",
+                },
+            }
+        )
+    if suggestion:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": ":bulb: *Suggested fix (LLM):*\n" + suggestion[:2500],
+                },
+            }
+        )
     blocks.append(
         {
             "type": "section",
@@ -98,6 +124,59 @@ def notify(title: str, detail: str = "", level: str = "info") -> None:
 
 def heartbeat(text: str) -> None:  # back-compat shim
     notify(text, level="info")
+
+
+# Last captured child output of a failed day, so the FAILED alert in main() can
+# attach the traceback + an LLM fix suggestion.
+_LAST_FAIL_OUTPUT = ""
+
+
+def _tail_lines(text: str, n: int) -> str:
+    return "\n".join(text.rstrip("\n").splitlines()[-n:])
+
+
+def _run_capture(cmd, tail_lines: int = 120):
+    """Run cmd, stream its output live to the console, and return
+    (returncode, tail) where tail is the last N lines (incl. any traceback)."""
+    from collections import deque
+
+    buf: deque = deque(maxlen=tail_lines)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # fold stderr in so tracebacks are captured
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    for ln in proc.stdout:
+        print(ln, end="", flush=True)
+        buf.append(ln)
+    proc.wait()
+    return proc.returncode, "".join(buf)
+
+
+def _llm_fix_suggestion(tb_text: str) -> str:
+    """Ask the SAME local LLM prod uses (llm_explain.call_ollama) for a terse
+    root-cause + fix. Returns a fallback string if the LLM is unreachable."""
+    if not tb_text.strip():
+        return ""
+    try:
+        from smarthub.train_and_predict.llm_explain import call_ollama
+    except Exception as exc:  # noqa: BLE001
+        return f"(LLM unavailable: {exc})"
+    prompt = (
+        "You are an SRE assistant for the SmartHub bid-recommendation service. "
+        "A replay/load-test day just failed. From the traceback below, reply "
+        "with (1) the single most likely root cause in one sentence, then "
+        "(2) 1-3 concrete fix steps as short bullet lines. Be terse and "
+        "technical; do not repeat the traceback.\n\nTRACEBACK:\n"
+        + tb_text[-4000:]
+    )
+    try:
+        return call_ollama(prompt)
+    except Exception as exc:  # noqa: BLE001
+        return f"(LLM suggestion failed: {exc})"
 
 
 def load_ckpt(path: str) -> int:
@@ -199,13 +278,16 @@ def run_day(args, day: int, ledger: str) -> bool:
             time.sleep(min(30, 5 * attempt))
             continue
         print(f"\n=== day {day} attempt {attempt}: {' '.join(cmd)}", flush=True)
-        rc = subprocess.run(cmd).returncode
+        rc, tail = _run_capture(cmd)
         if rc == 0:
             return True
+        global _LAST_FAIL_OUTPUT
+        _LAST_FAIL_OUTPUT = tail
         notify(
             f"Replay day {day} restarting",
             f"exited rc={rc} (attempt {attempt}/{args.max_restarts})",
             level="warn",
+            code=_tail_lines(tail, 25),
         )
         time.sleep(min(30, 5 * attempt))
     return False
@@ -275,10 +357,13 @@ def main() -> int:
         ledger = os.path.join(args.ledger_dir, f"day{day}.jsonl")
         ok = run_day(args, day, ledger)
         if not ok:
+            suggestion = _llm_fix_suggestion(_LAST_FAIL_OUTPUT)
             notify(
                 f"Replay day {day} FAILED",
                 f"after {args.max_restarts} restarts - supervisor stopping",
                 level="error",
+                code=_tail_lines(_LAST_FAIL_OUTPUT, 40),
+                suggestion=suggestion,
             )
             return 1
         summary = rollup(args, day, ledger)

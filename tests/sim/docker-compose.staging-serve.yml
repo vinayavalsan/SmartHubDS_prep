@@ -72,6 +72,9 @@ services:
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
+      # Same local LLM prod uses, so failure alerts can attach a fix suggestion.
+      SMARTHUB_OLLAMA_HOST: ${SMARTHUB_OLLAMA_HOST:-http://ollama:11434}
+      SMARTHUB_LLM_MODEL: ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}
       SIM_URL: ${SIM_URL:-http://serve-staging:8000}
       SIM_DATA: ${SIM_DATA:-/app/data/sim/snapshot.parquet}
       SIM_LEDGER_DIR: ${SIM_LEDGER_DIR:-/app/data/sim/ledgers}
