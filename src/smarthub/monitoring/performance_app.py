@@ -233,12 +233,18 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
         )
 
     df = pd.read_parquet(PREDICTION_MONITORING_PATH)
+    diagnostics = {
+        "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
+        "rows_read": len(df),
+        "columns_read": len(df.columns),
+    }
     if df.empty:
+        diagnostics["result"] = "parquet file contains no rows"
+        df.attrs["load_diagnostics"] = diagnostics
         return df
 
-    for column in ("created_at", "served_at"):
-        if column in df.columns:
-            df[column] = pd.to_datetime(df[column], errors="coerce", utc=True)
+    if "created_at" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
 
     numeric_columns = (
         "lead_ping_id",
@@ -258,25 +264,121 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    time_col = "served_at" if "served_at" in df.columns else "created_at"
-    if time_col in df.columns:
+    diagnostics["time_column"] = "created_at"
+    if "created_at" in df.columns:
         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=int(days))
-        df = df[df[time_col].ge(cutoff)].copy()
+        diagnostics["window_cutoff_utc"] = str(cutoff)
+        df = df[df["created_at"].ge(cutoff)].copy()
+    else:
+        diagnostics["result"] = "required time column created_at is missing"
+        empty = pd.DataFrame()
+        empty.attrs["load_diagnostics"] = diagnostics
+        return empty
+    diagnostics["rows_after_time_window"] = len(df)
 
     if "status" in df.columns:
+        diagnostics["status_counts_before_filter"] = (
+            df["status"]
+            .astype("string")
+            .fillna("<NA>")
+            .value_counts(dropna=False)
+            .to_dict()
+        )
         df = df[
             df["status"].astype("string").str.lower().isin({"success", "ok"})
         ].copy()
+    diagnostics["rows_after_status_filter"] = len(df)
 
     if "lead_ping_id" not in df.columns:
-        return pd.DataFrame()
+        diagnostics["result"] = "required column lead_ping_id is missing"
+        empty = pd.DataFrame()
+        empty.attrs["load_diagnostics"] = diagnostics
+        return empty
 
     df = df[df["lead_ping_id"].notna()].copy()
-    sort_col = "served_at" if "served_at" in df.columns else "created_at"
-    if sort_col in df.columns:
-        df = df.sort_values(sort_col, ascending=False, na_position="last")
+    diagnostics["rows_with_lead_ping_id"] = len(df)
+    df = df.sort_values("created_at", ascending=False, na_position="last")
 
-    return df.drop_duplicates("lead_ping_id", keep="first").reset_index(drop=True)
+    df = df.drop_duplicates("lead_ping_id", keep="first").reset_index(drop=True)
+    diagnostics["rows_after_lead_ping_id_deduplication"] = len(df)
+    diagnostics["result"] = "loaded"
+    df.attrs["load_diagnostics"] = diagnostics
+    return df
+
+
+def _ml_debug_rows(
+    *,
+    load_diagnostics: dict,
+    prediction_df: pd.DataFrame,
+    selected_lead_type: int,
+) -> pd.DataFrame:
+    """Build diagnostics directly from live prediction-monitoring rows."""
+    rows = [(key, value) for key, value in load_diagnostics.items()]
+    rows.extend(
+        [
+            ("selected_lead_type_id", selected_lead_type),
+            ("prediction_rows_after_ui_filters", len(prediction_df)),
+        ]
+    )
+
+    if prediction_df.empty:
+        return pd.DataFrame(rows, columns=["diagnostic", "value"])
+
+    if "created_at" in prediction_df.columns:
+        timestamps = pd.to_datetime(
+            prediction_df["created_at"], errors="coerce", utc=True
+        )
+        rows.extend(
+            [
+                ("filtered_time_column", "created_at"),
+                ("earliest_prediction_utc", timestamps.min()),
+                ("latest_prediction_utc", timestamps.max()),
+                ("rows_with_valid_prediction_time", int(timestamps.notna().sum())),
+            ]
+        )
+
+    if "status" in prediction_df.columns:
+        rows.append(
+            (
+                "filtered_status_counts",
+                prediction_df["status"]
+                .astype("string")
+                .fillna("<NA>")
+                .value_counts(dropna=False)
+                .to_dict(),
+            )
+        )
+
+    required = (
+        "recommended_bid",
+        "recommended_bid_predicted_win_rate",
+        "recommended_bid_predicted_profit",
+        "expected_revenue",
+    )
+    missing = [column for column in required if column not in prediction_df.columns]
+    rows.append(("missing_live_prediction_columns", ", ".join(missing) or "none"))
+
+    complete = pd.Series(True, index=prediction_df.index, dtype="bool")
+    for column in required:
+        if column not in prediction_df.columns:
+            complete &= False
+            continue
+        numeric = pd.to_numeric(prediction_df[column], errors="coerce")
+        rows.append((f"usable_rows:{column}", int(numeric.notna().sum())))
+        complete &= numeric.notna()
+
+    complete_count = int(complete.sum())
+    rows.append(("rows_with_complete_live_ml_metrics", complete_count))
+    if complete_count > 0:
+        rows.append(
+            (
+                "diagnosis",
+                "Prediction rows contain the required ML fields, but no ML "
+                "aggregate was produced. Check the aggregation keys and selected "
+                "time buckets.",
+            )
+        )
+    return pd.DataFrame(rows, columns=["diagnostic", "value"])
 
 
 def attach_prediction_monitoring(
@@ -314,7 +416,6 @@ def attach_prediction_monitoring(
         for column in (
             "_lead_ping_id",
             "prediction_id",
-            "served_at",
             "model_name",
             "model_version",
             "model_type",
@@ -1913,11 +2014,20 @@ def main():
             )
 
         plot_df = df
+        prediction_df = pd.DataFrame()
+        prediction_load_diagnostics = {}
         if show_ml_metrics:
             try:
                 prediction_df = load_prediction_monitoring(int(days))
+                prediction_load_diagnostics = prediction_df.attrs.get(
+                    "load_diagnostics", {}
+                )
             except io.DataNotFoundError as exc:
                 st.warning(str(exc))
+                prediction_load_diagnostics = {
+                    "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
+                    "result": str(exc),
+                }
                 prediction_df = pd.DataFrame()
 
             if not prediction_df.empty:
@@ -2047,6 +2157,20 @@ def main():
                     "ML metrics are not available for the selected filters; "
                     "showing historical metrics only."
                 )
+                with st.expander("ML metrics diagnostics", expanded=True):
+                    st.caption(
+                        "Prediction-monitoring diagnostics after applying the "
+                        "selected date range, lead type, and optional filters."
+                    )
+                    st.dataframe(
+                        _ml_debug_rows(
+                            load_diagnostics=prediction_load_diagnostics,
+                            prediction_df=prediction_df,
+                            selected_lead_type=int(selected_lead_type),
+                        ),
+                        hide_index=True,
+                        width="stretch",
+                    )
                 show_ml_metrics = False
             else:
                 ml_columns = merge_keys + [
