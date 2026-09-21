@@ -9,6 +9,8 @@ Run with:
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 import streamlit as st
 
 from smarthub.monitoring import (
@@ -21,6 +23,17 @@ from smarthub.monitoring import (
 from smarthub.monitoring._auth import require_password
 
 st.set_page_config(page_title="SmartHub DS", layout="wide")
+
+
+def _render_app_version():
+    """Show the SmartHub package version defined in pyproject.toml."""
+    try:
+        app_version = version("smarthub")
+    except PackageNotFoundError:
+        app_version = "unknown"
+
+    st.sidebar.divider()
+    st.sidebar.caption(f"Repo version: {app_version}")
 
 
 def config_page():
@@ -39,6 +52,7 @@ def main():
         st.Page(config_page, title="Config", url_path="config"),
     ]
     st.navigation(pages).run()
+    _render_app_version()
 
 
 if __name__ == "__main__":
