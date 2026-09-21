@@ -1,6 +1,6 @@
 """SmartHub Performance dashboard.
 
-This module loads historical and prediction-monitoring data, computes business and
+This module loads lead/outcome and prediction-monitoring data, computes business and
 ML performance metrics, and renders interactive performance views.
 """
 
@@ -193,7 +193,7 @@ _FEATURE_EXCLUDE = {
 
 @st.cache_data
 def load_leads(days: int):
-    """Load a recent window of historical leads.
+    """Load a recent window of pulled lead/outcome rows.
 
     Inputs
     ------
@@ -203,7 +203,7 @@ def load_leads(days: int):
     Returns
     -------
     pandas.DataFrame
-        Historical lead rows within the requested window.
+        Pulled lead/outcome rows within the requested window.
     """
     return io.load_leads_window(days)
 
@@ -310,9 +310,18 @@ def _ml_debug_rows(
     *,
     load_diagnostics: dict,
     prediction_df: pd.DataFrame,
+    lead_df: pd.DataFrame,
+    attached_df: pd.DataFrame,
     selected_lead_type: int,
 ) -> pd.DataFrame:
-    """Build diagnostics directly from live prediction-monitoring rows."""
+    """Build diagnostics for prediction-to-lead matching and ML aggregation."""
+
+    def _as_arrow_safe_frame(values) -> pd.DataFrame:
+        frame = pd.DataFrame(values, columns=["diagnostic", "value"])
+        frame["diagnostic"] = frame["diagnostic"].astype("string")
+        frame["value"] = frame["value"].map(str).astype("string")
+        return frame
+
     rows = [(key, value) for key, value in load_diagnostics.items()]
     rows.extend(
         [
@@ -322,7 +331,26 @@ def _ml_debug_rows(
     )
 
     if prediction_df.empty:
-        return pd.DataFrame(rows, columns=["diagnostic", "value"])
+        return _as_arrow_safe_frame(rows)
+
+    matching_ids = 0
+    if "lead_ping_id" in prediction_df.columns and "id" in lead_df.columns:
+        prediction_ids = set(
+            pd.to_numeric(prediction_df["lead_ping_id"], errors="coerce")
+            .dropna()
+            .astype("int64")
+        )
+        lead_ids = set(
+            pd.to_numeric(lead_df["id"], errors="coerce").dropna().astype("int64")
+        )
+        matching_ids = len(prediction_ids & lead_ids)
+        rows.extend(
+            [
+                ("unique_prediction_lead_ping_ids", len(prediction_ids)),
+                ("unique_pulled_lead_ids", len(lead_ids)),
+                ("matching_lead_ids", matching_ids),
+            ]
+        )
 
     if "created_at" in prediction_df.columns:
         timestamps = pd.to_datetime(
@@ -369,35 +397,53 @@ def _ml_debug_rows(
 
     complete_count = int(complete.sum())
     rows.append(("rows_with_complete_live_ml_metrics", complete_count))
-    if complete_count > 0:
+    attached_complete = transforms.recommended_bid_metrics_available_mask(attached_df)
+    attached_complete_count = int(attached_complete.sum())
+    rows.append(("matched_rows_with_complete_ml_metrics", attached_complete_count))
+    if matching_ids == 0:
         rows.append(
             (
                 "diagnosis",
-                "Prediction rows contain the required ML fields, but no ML "
-                "aggregate was produced. Check the aggregation keys and selected "
-                "time buckets.",
+                "No prediction lead_ping_id values match the pulled lead id "
+                "values for the selected filters.",
             )
         )
-    return pd.DataFrame(rows, columns=["diagnostic", "value"])
+    elif complete_count > 0 and attached_complete_count == 0:
+        rows.append(
+            (
+                "diagnosis",
+                "Lead IDs match, but no joined rows contain all required ML "
+                "metric fields.",
+            )
+        )
+    elif attached_complete_count > 0:
+        rows.append(
+            (
+                "diagnosis",
+                "Joined lead and prediction rows contain complete ML metrics. "
+                "Check the selected aggregation keys and time buckets.",
+            )
+        )
+    return _as_arrow_safe_frame(rows)
 
 
 def attach_prediction_monitoring(
     leads_df: pd.DataFrame,
     prediction_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Attach prediction-monitoring metrics to historical lead rows.
+    """Attach prediction-monitoring metrics to pulled lead/outcome rows.
 
     Inputs
     ------
     leads_df : pandas.DataFrame
-        Historical leads to enrich.
+        Pulled lead/outcome rows to enrich.
     prediction_df : pandas.DataFrame
         Prediction-monitoring rows keyed by lead ping identifier.
 
     Returns
     -------
     pandas.DataFrame
-        Historical leads with the latest matching prediction metrics and derived ML
+        Lead/outcome rows with the latest matching prediction metrics and derived ML
         economics.
     """
     if prediction_df.empty or "id" not in leads_df.columns:
@@ -777,7 +823,7 @@ def _feature_bid_chart(summary: pd.DataFrame, feature: str, kind: str) -> go.Fig
         )
     fig.update_layout(
         title=dict(
-            text=f"Historical and ML Bid by {feature}",
+            text=f"Observed and ML Bid by {feature}",
             y=0.98,
             yanchor="top",
         ),
@@ -841,7 +887,7 @@ def _feature_economics_chart(
             )
     fig.update_layout(
         title=dict(
-            text=f"Historical and ML Economics by {feature}",
+            text=f"Observed and ML Economics by {feature}",
             y=0.98,
             yanchor="top",
         ),
@@ -1761,7 +1807,7 @@ def _render_ml_kpis(df: pd.DataFrame) -> None:
             "(expected_revenue - recommended_bid)]. recommended_bid comes from "
             "the prediction log.\n\n"
             "Observed Expected Profit = sum[won x (expected_revenue - bid)]. "
-            "bid comes from the historical/raw lead data.\n\n"
+            "bid comes from the pulled lead data.\n\n"
             "A positive value means ML predicted profit was higher than the "
             "observed expected profit; a negative value means it was lower. "
             "Values closer to zero indicate better agreement."
@@ -1801,7 +1847,7 @@ def _render_ml_kpis(df: pd.DataFrame) -> None:
         f"${observed_expected_profit:,.2f}",
         help=(
             "sum[won x (expected_revenue - bid)]. "
-            "bid is taken from the historical/raw lead data."
+            "bid is taken from the pulled lead data."
         ),
     )
 
@@ -2050,8 +2096,8 @@ def main():
 
             plot_df = attach_prediction_monitoring(df, prediction_df)
 
-        # Always aggregate historical metrics on the full filtered lead cohort.
-        # ML metrics remain a sparse overlay on the same bins.
+        # Aggregate realized lead/outcome metrics on the full filtered cohort.
+        # ML metrics remain a sparse overlay on the same matched rows and bins.
         if bin_type == "Time":
             x_col = "datetime_min"
             x_label = "Time"
@@ -2155,7 +2201,7 @@ def main():
             if ml_agg.empty:
                 st.info(
                     "ML metrics are not available for the selected filters; "
-                    "showing historical metrics only."
+                    "showing realized lead/outcome metrics only."
                 )
                 with st.expander("ML metrics diagnostics", expanded=True):
                     st.caption(
@@ -2166,6 +2212,8 @@ def main():
                         _ml_debug_rows(
                             load_diagnostics=prediction_load_diagnostics,
                             prediction_df=prediction_df,
+                            lead_df=df,
+                            attached_df=plot_df,
                             selected_lead_type=int(selected_lead_type),
                         ),
                         hide_index=True,
@@ -2450,7 +2498,7 @@ def main():
 
     with feature_tab:
         st.caption(
-            "Historical and ML production performance by feature value or numeric "
+            "Observed and ML production performance by feature value or numeric "
             "bucket. ML series use matched production predictions when Show ML "
             "Metrics is enabled. The global filters above apply to this analysis."
         )
