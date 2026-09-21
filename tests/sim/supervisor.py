@@ -73,9 +73,7 @@ def notify(
         }
     ]
     if detail:
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": detail}}
-        )
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": detail}})
     if code:
         blocks.append(
             {
@@ -170,8 +168,7 @@ def _llm_fix_suggestion(tb_text: str) -> str:
         "A replay/load-test day just failed. From the traceback below, reply "
         "with (1) the single most likely root cause in one sentence, then "
         "(2) 1-3 concrete fix steps as short bullet lines. Be terse and "
-        "technical; do not repeat the traceback.\n\nTRACEBACK:\n"
-        + tb_text[-4000:]
+        "technical; do not repeat the traceback.\n\nTRACEBACK:\n" + tb_text[-4000:]
     )
     try:
         return call_ollama(prompt)
