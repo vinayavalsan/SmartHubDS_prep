@@ -35,8 +35,14 @@ DAYS=${DAYS:-4}
 BURST_PROB=${BURST_PROB:-0.6}
 SPEED=${SPEED:-1}                            # 1 = real time; 60 = compressed rehearsal
 SEGMENT_MINUTES=${SEGMENT_MINUTES:-1440}     # minutes per "day"
+RATE_MIN=${RATE_MIN:-${RATE:-100}}           # requests/min band (RATE=N sets both)
+RATE_MAX=${RATE_MAX:-${RATE:-150}}
 export SERVE_WORKERS=${SERVE_WORKERS:-4}
 API_KEY=${API_KEY:-}                          # bearer key; auto-minted by mint_key() if empty
+# Supervisor alerts/heartbeats post to SLACK_WEBHOOK. Keep the secret OUT of
+# git: set SLACK_WEBHOOK=<url> in .env (gitignored) -- the sim-supervisor reads
+# it via env_file. You can also just export SLACK_WEBHOOK in your shell.
+SLACK_WEBHOOK=${SLACK_WEBHOOK:-}
 
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -78,13 +84,50 @@ wait_health(){
   for i in $(seq 1 40); do
     if docker exec "$WORKER" python -c \
         "import urllib.request,json,sys; \
-r=json.load(urllib.request.urlopen('$URL/health?lead_type_id=6')); \
+r=json.load(urllib.request.urlopen('$URL/health?lead_type_id=6', timeout=8)); \
 sys.exit(0 if r.get('model_loaded') else 1)" 2>/dev/null; then
       log "staging serve healthy (model_loaded=true)"; return 0
     fi
     sleep 5
   done
   log "ERROR: staging serve did not become healthy — check: docker logs $STAGING"; return 1
+}
+
+show_model(){
+  # Report WHICH promoted model each lead type resolves to, from the production
+  # serving pointer (the S3/MinIO current.json): promoted version, the UTC time
+  # it was promoted, the resolved artifact, and whether it changed since the
+  # last run. Runs inside the serve container (it has the production-storage env).
+  cp tests/sim/model_info.py data/sim/ 2>/dev/null   # ensure helper is on the mount
+  log "resolved model(s) from production store (S3/MinIO current.json):"
+  docker exec "$STAGING" python /app/data/sim/model_info.py 2>/dev/null \
+    || log "could not read model info (serve down, or prod storage not configured?)"
+}
+
+cmd_dash_staging(){
+  # Give host port 8500 to the STAGING dashboard for the test window: stop the
+  # prod dashboard (frees 8500), then bring up dashboard-staging (staging DB).
+  log "swapping host:8500 -> STAGING dashboard (prod + diag stopped)"
+  $COMPOSE stop dashboard 2>/dev/null            # prod dashboard (base compose)
+  $COMPOSE stop dashboard-diag 2>/dev/null       # free 8500 from diag if up
+  $COMPOSE up -d dashboard-staging || log "WARN: dashboard-staging failed to start"
+}
+
+cmd_dash_prod(){
+  # Hand host port 8500 back to PROD: remove the staging dashboard, restart prod.
+  log "handing host:8500 back to the PROD dashboard"
+  $COMPOSE rm -sf dashboard-staging dashboard-diag 2>/dev/null
+  $COMPOSE up -d dashboard || log "WARN: prod dashboard failed to restart"
+}
+
+cmd_dash_diag(){
+  # Flip host:8500 to the model-diagnostics app (post-training model eval).
+  # Stops prod + staging dashboards to free 8500, then brings up dashboard-diag.
+  log "swapping host:8500 -> MODEL-DIAGNOSTICS app (prod + staging stopped)"
+  $COMPOSE stop dashboard 2>/dev/null
+  $COMPOSE stop dashboard-staging 2>/dev/null
+  $COMPOSE up -d dashboard-diag || log "WARN: dashboard-diag failed to start"
+  log "model-diagnostics on http://<ec2>:8500 (flip back: dash-staging / dash-prod)"
 }
 
 cmd_up(){
@@ -95,6 +138,7 @@ cmd_up(){
   # loaded on the serve's first authenticated request (no 60s cache-TTL wait).
   $COMPOSE up -d --force-recreate serve-staging || exit 1
   wait_health || exit 1
+  show_model               # report which model artifact is actually loaded
 }
 
 cmd_start(){
@@ -111,21 +155,33 @@ cmd_start(){
     mv data/sim/ledgers/supervisor.ckpt.json "$arch"/ 2>/dev/null
     log "archived previous ledgers -> $arch"
   fi
+  # Fresh run: clear the staging prediction log so the dashboard's Predictions
+  # page shows ONLY this run (the serve accumulates rows across runs until down).
+  if docker exec "$PG" psql -U prefect -d smarthub_staging -c \
+       "TRUNCATE smarthub_prediction_log" >/dev/null 2>&1; then
+    log "cleared staging prediction log (dashboard Predictions = this run only)"
+  fi
   # host-side monitors (stdlib python3; samples the staging serve + postgres + disk)
   pkill -f "monitors.py" 2>/dev/null
   nohup python3 tests/sim/monitors.py --interval 30 --out data/sim/health.csv \
-      --serve-container "$STAGING" --pg-container "$PG" --disk-path data/sim \
+      --serve-container "$STAGING" --pg-container "$PG" --pg-db smarthub_staging \
+      --disk-path data/sim \
       > data/sim/monitors.log 2>&1 &
   log "monitors started -> data/sim/health.csv"
-  # the supervised replay, inside the worker (where pandas/requests live)
-  docker exec -e SLACK_WEBHOOK="${SLACK_WEBHOOK:-}" -d "$WORKER" sh -c \
-    "cd /app/data/sim && python supervisor.py --data $DATA --url $URL \
-       --days $DAYS --segment-minutes $SEGMENT_MINUTES --speed $SPEED \
-       --burst-prob $BURST_PROB --ledger-dir $LEDGERS ${API_KEY:+--api-key $API_KEY} \
-       > /app/data/sim/supervisor.log 2>&1"
-  log "replay started: days=$DAYS speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
+  # the supervised replay as a MANAGED container (not `docker exec -d`, which
+  # dies when prefect-worker is recreated). It survives daemon/host restarts and
+  # resumes from the checkpoint; config is passed via SIM_* env for the service.
+  export SIM_URL="$URL" SIM_DATA="$DATA" SIM_LEDGER_DIR="$LEDGERS" \
+         SIM_DAYS="$DAYS" SIM_SEGMENT_MINUTES="$SEGMENT_MINUTES" \
+         SIM_SPEED="$SPEED" SIM_BURST_PROB="$BURST_PROB" \
+         SIM_RATE_MIN="$RATE_MIN" SIM_RATE_MAX="$RATE_MAX" \
+         SIM_API_KEY="${API_KEY:-}"
+  $COMPOSE up -d sim-supervisor || exit 1
+  log "replay started (managed): days=$DAYS rate=${RATE_MIN}-${RATE_MAX}/min speed=${SPEED}x burst_prob=$BURST_PROB -> $URL"
+  cmd_dash_staging          # host:8500 now shows ONLY the replay (staging DB)
   echo
-  echo "  watch:   tail -f data/sim/supervisor.log"
+  echo "  watch:   docker logs -f smarthub-sim-supervisor"
+  echo "  ui:      http://<ec2-host>:8500   (staging predictions only)"
   echo "  report:  bash tests/sim/sim_test.sh report"
   echo "  stop:    bash tests/sim/sim_test.sh stop"
 }
@@ -141,31 +197,54 @@ cmd_report(){
 
 cmd_stop(){
   log "stopping replay + monitors"
-  # the worker image has no pkill/pgrep — scan /proc from python (always present)
-  docker exec "$WORKER" python -c '
-import os, signal
-for p in os.listdir("/proc"):
-    if not p.isdigit():
-        continue
-    try:
-        cl = open("/proc/%s/cmdline" % p, "rb").read().decode("utf-8", "ignore")
-    except Exception:
-        continue
-    if "supervisor.py" in cl or "/app/data/sim/run.py" in cl:
-        try:
-            os.kill(int(p), signal.SIGTERM)
-        except Exception:
-            pass
-' 2>/dev/null
-  pkill -f "tests/sim/monitors.py" 2>/dev/null   # monitors run on the host (has pkill)
+  $COMPOSE stop sim-supervisor 2>/dev/null        # stop the managed replay container
+  pkill -f "tests/sim/monitors.py" 2>/dev/null    # monitors run on the host (has pkill)
   log "stopped (staging serve left running — use '\''down'\'' to remove it)"
 }
 
 cmd_down(){
   cmd_stop
-  log "removing $STAGING and dropping throwaway DB"
-  $COMPOSE rm -sf serve-staging
+  cmd_dash_prod                                   # give 8500 back to prod
+  log "removing staging serve + supervisor and dropping throwaway DB"
+  $COMPOSE rm -sf serve-staging sim-supervisor dashboard-diag
   docker exec "$PG" psql -U prefect -c "DROP DATABASE IF EXISTS smarthub_staging;"
+}
+
+cmd_test_alert(){
+  local hook="${SLACK_WEBHOOK:-}"
+  if [ -z "$hook" ] && [ -f .env ]; then          # fall back to .env (gitignored)
+    hook=$(sed -n 's/^SLACK_WEBHOOK=//p' .env | tail -1 | tr -d '"'"'"'"')
+  fi
+  if [ -z "$hook" ]; then
+    log "no SLACK_WEBHOOK -- set it in .env or export it"; return 1
+  fi
+  local host when payload
+  host=$(hostname)
+  when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # Same colour-coded attachment format the supervisor uses (info = green).
+  payload=$(cat <<JSON
+{"attachments":[{"color":"#2eb67d","blocks":[
+{"type":"section","text":{"type":"mrkdwn","text":":large_green_circle: *SmartHub replay - Slack alerts wired*"}},
+{"type":"section","fields":[
+{"type":"mrkdwn","text":"*Host:*\\n$host"},
+{"type":"mrkdwn","text":"*When (UTC):*\\n$when"},
+{"type":"mrkdwn","text":"*Component:*\\nreplay wiring test"}
+]}]}]}
+JSON
+)
+  if command -v curl >/dev/null 2>&1; then
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      -H 'Content-Type: application/json' --data "$payload" "$hook")
+    log "posted test alert -> Slack (HTTP $code; 200 = delivered)"
+  else
+    log "curl not found; posting via the worker container"
+    docker exec -e HOOK="$hook" -e PAYLOAD="$payload" "$WORKER" python -c \
+      "import os,urllib.request; \
+r=urllib.request.urlopen(urllib.request.Request(os.environ['HOOK'], \
+data=os.environ['PAYLOAD'].encode(), \
+headers={'Content-Type':'application/json'}), timeout=10); \
+print('HTTP', r.status)"
+  fi
 }
 
 case "${1:-}" in
@@ -174,5 +253,9 @@ case "${1:-}" in
   report) cmd_report ;;
   stop)   cmd_stop ;;
   down)   cmd_down ;;
-  *) echo "usage: $0 {up|start|report|stop|down}"; exit 1 ;;
+  test)   cmd_test_alert ;;
+  dash-staging) cmd_dash_staging ;;
+  dash-prod)    cmd_dash_prod ;;
+  dash-diag)    cmd_dash_diag ;;
+  *) echo "usage: $0 {up|start|report|stop|down|test|dash-staging|dash-prod|dash-diag}"; exit 1 ;;
 esac

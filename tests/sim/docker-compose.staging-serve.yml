@@ -28,7 +28,7 @@ services:
   serve-staging:
     container_name: smarthub-serve-staging
     image: ${IMAGE_REPO:-smarthub/smarthub}:serve-${IMAGE_TAG:-latest}
-    restart: "no"                       # a test container, not a managed service
+    restart: unless-stopped             # multi-day test: survive daemon/host restarts
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
@@ -56,5 +56,119 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8001:8000"           # host-side access only on localhost
+    volumes:
+      - ./data:/app/data
+
+  # The week-long replay driver, as a MANAGED container (not `docker exec -d`,
+  # which dies when prefect-worker is recreated). restart:unless-stopped brings
+  # it back after a daemon/host restart; --hold-when-done keeps it Up (idle)
+  # after finishing so it is not restart-looped. It resumes from the checkpoint
+  # in the ledger dir, and _wait_healthy gates each day on the serve being ready.
+  # sim_test.sh copies tests/sim/*.py into ./data/sim and exports the SIM_* vars.
+  sim-supervisor:
+    container_name: smarthub-sim-supervisor
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      # Same local LLM prod uses, so failure alerts can attach a fix suggestion.
+      SMARTHUB_OLLAMA_HOST: ${SMARTHUB_OLLAMA_HOST:-http://ollama:11434}
+      SMARTHUB_LLM_MODEL: ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}
+      SIM_URL: ${SIM_URL:-http://serve-staging:8000}
+      SIM_DATA: ${SIM_DATA:-/app/data/sim/snapshot.parquet}
+      SIM_LEDGER_DIR: ${SIM_LEDGER_DIR:-/app/data/sim/ledgers}
+      SIM_DAYS: ${SIM_DAYS:-4}
+      SIM_SEGMENT_MINUTES: ${SIM_SEGMENT_MINUTES:-1440}
+      SIM_SPEED: ${SIM_SPEED:-1}
+      SIM_BURST_PROB: ${SIM_BURST_PROB:-0.6}
+      SIM_RATE_MIN: ${SIM_RATE_MIN:-100}
+      SIM_RATE_MAX: ${SIM_RATE_MAX:-150}
+      SIM_API_KEY: ${SIM_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app/data/sim
+    volumes:
+      - ./data:/app/data
+    command:
+      - sh
+      - -c
+      - >-
+        python supervisor.py
+        --data "$$SIM_DATA" --url "$$SIM_URL"
+        --days "$$SIM_DAYS" --segment-minutes "$$SIM_SEGMENT_MINUTES"
+        --speed "$$SIM_SPEED" --burst-prob "$$SIM_BURST_PROB"
+        --rate-min "$$SIM_RATE_MIN" --rate-max "$$SIM_RATE_MAX"
+        --ledger-dir "$$SIM_LEDGER_DIR" --hold-when-done
+        $${SIM_API_KEY:+--api-key "$$SIM_API_KEY"}
+
+  # Streamlit dashboard pointed at the THROWAWAY staging DB, so the UI shows
+  # ONLY the replay's predictions -- never prod. sim_test.sh stops the prod
+  # dashboard and runs this on the SAME host port 8500 for the test window, then
+  # hands 8500 back to prod on `down`/`dash-prod`. Predictions page reads the
+  # prediction-log DB below; parquet-backed pages still read the shared ./data.
+  dashboard-staging:
+    container_name: smarthub-dashboard-staging
+    image: ${IMAGE_REPO:-smarthub/smarthub}:dashboard-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    mem_limit: ${DASHBOARD_MEM:-2g}
+    tty: true
+    stdin_open: true
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      STORAGE_BACKEND: parquet
+      # >>> point BOTH DBs at the throwaway staging DB (the replay's data) <<<
+      SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging
+      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_staging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - streamlit
+      - run
+      - src/smarthub/monitoring/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --server.fileWatcherType=none
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8500:8501"          # SAME host port as prod; swapped in for the test window
+    volumes:
+      - ./data:/app/data
+      # override just this one file so the Performance page's hours/days window
+      # applies without rebuilding the dashboard image (pip install -e).
+      - ./src/smarthub/monitoring/performance_app.py:/app/src/smarthub/monitoring/performance_app.py:ro
+
+  # The post-training model-diagnostics app (normally on 8511) bound to host
+  # 8500, so `dash-diag` can flip 8500 to it without a firewall change. Reads
+  # model-eval artifacts from ./data + the mlflow DB (same as smarthub-model-
+  # diagnostics); shows the models under test, not replay traffic.
+  dashboard-diag:
+    container_name: smarthub-dashboard-diag
+    image: ${IMAGE_REPO:-smarthub/smarthub}:worker-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    env_file: .env
+    environment:
+      SMARTHUB_ROOT: /app
+      SMARTHUB_MLFLOW_TRACKING_URI: postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - streamlit
+      - run
+      - src/smarthub/model_diagnostics/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8502
+      - --server.headless=true
+      - --server.fileWatcherType=none
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8500:8502"          # flip target for `dash-diag` (same host port)
     volumes:
       - ./data:/app/data

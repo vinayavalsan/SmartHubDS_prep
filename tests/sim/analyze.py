@@ -152,16 +152,48 @@ def analyze(
                 }
             )
             comp["diff"] = (comp["recommended_bid"] - comp["actual_bid"]).round(2)
-            # "won/loss if the bid is chosen by the ML model" = the model's own
-            # call at its recommended bid (win_prob >= 0.5). It is an ESTIMATE,
-            # not observed truth (we never see the market's response to a new bid).
-            comp["model_says"] = comp["model_win_prob"].apply(
-                lambda p: (
-                    "win"
-                    if pd.notna(p) and p >= 0.5
-                    else ("loss" if pd.notna(p) else "n/a")
+
+            # Ground-truth-anchored win/loss for the MODEL's bid, decided by the
+            # KNOWN historical outcome at the ACTUAL bid (not a model self-estimate):
+            #   won at actual  & recommended >= actual -> WIN  (>= a winning bid wins)
+            #   lost at actual & recommended <= actual -> LOSS (<= a losing bid loses)
+            # anything else is UNCERTAIN: the counterfactual price region we never
+            # placed a bid in, so the true outcome there is unobservable.
+            def _ground_truth(row):
+                won = row["historical_won"]
+                rec, act = row["recommended_bid"], row["actual_bid"]
+                if pd.isna(won) or pd.isna(rec) or pd.isna(act):
+                    return "n/a"
+                if won == 1:
+                    return "win" if rec >= act else "uncertain"
+                return "loss" if rec <= act else "uncertain"
+
+            comp["ground_truth"] = comp.apply(_ground_truth, axis=1)
+
+            # Plain-english conclusion comparing the model's bid to the bid
+            # actually placed, given the known outcome. "actual_bid" IS the
+            # historical bid (lead_pings.bid) -- the single number we placed and
+            # observed; there is no separate historical bid.
+            def _conclude(row):
+                rec, act = row["recommended_bid"], row["actual_bid"]
+                won = row["historical_won"]
+                if pd.isna(rec) or pd.isna(act):
+                    return "n/a"
+                d = rec - act
+                if abs(d) < 0.50:  # within 50c -> effectively the same bid
+                    return "matches actual"
+                if pd.isna(won):
+                    return "bids higher" if d > 0 else "bids lower"
+                if won == 1:  # the actual bid WON the lead
+                    return (
+                        "wins, overpays" if d > 0 else "maybe wins cheaper (unproven)"
+                    )
+                # the actual bid LOST the lead
+                return (
+                    "chases the loss (unproven)" if d > 0 else "also loses (bids less)"
                 )
-            )
+
+            comp["conclusion"] = comp.apply(_conclude, axis=1)
             comp = comp[
                 [
                     "lead_ping_id",
@@ -170,8 +202,9 @@ def analyze(
                     "actual_bid",
                     "diff",
                     "model_win_prob",
-                    "model_says",
                     "historical_won",
+                    "ground_truth",
+                    "conclusion",
                     "decision_path",
                 ]
             ]
@@ -184,7 +217,6 @@ def analyze(
                 print(comp.head(12).to_string(index=False))
 
             d = comp["diff"].dropna()
-            mw = (comp["model_says"] == "win").sum()
             hw = comp["historical_won"].dropna()
             print("\n--- parity summary (served bids) ---")
             if len(d):
@@ -193,9 +225,15 @@ def analyze(
                     f"mean Δ {d.mean():+.2f}  p50 Δ {_pct(d, 50):+.2f}  "
                     f"(model bids {'higher' if d.mean() > 0 else 'lower'} on avg)"
                 )
+            print("recommended vs actual (conclusion):")
+            for label, cnt in comp["conclusion"].value_counts().items():
+                print(f"    {cnt:>5}  {label}")
+            gt = comp["ground_truth"].value_counts().to_dict()
             print(
-                f"model says WIN at its bid : {mw}/{len(comp)} "
-                f"({100*mw/len(comp):.0f}%)  [model's own estimate]"
+                f"ground-truth outcome      : "
+                f"win {gt.get('win', 0)}  loss {gt.get('loss', 0)}  "
+                f"uncertain {gt.get('uncertain', 0)}  "
+                f"[settled by the actual bid's known result]"
             )
             if len(hw):
                 print(

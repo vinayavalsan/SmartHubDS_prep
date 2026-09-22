@@ -90,22 +90,27 @@ deployments:
         parameters:
           lead_type_id: 1
 
-  # Production model monitoring. Each schedule passes the required lead type.
-  - name: model-degradation
-    entrypoint: src/smarthub/monitoring/flow.py:model_degradation_flow
-    description: >-
-      Compares realized auction wins with predicted win probabilities and
-      notifies Slack when a persisted warning or critical status changes.
-    tags: ["monitoring", "model-degradation", "pipeline-smarthub"]
-    work_pool:
-      name: smarthub-pool
-      work_queue_name: monitoring
-    schedules:
-      - cron: "5 * * * *"
-        timezone: "UTC"
-        parameters:
-          lead_type_id: 6
-      - cron: "10 * * * *"
-        timezone: "UTC"
-        parameters:
-          lead_type_id: 1
+  # DISABLED 2026-09-17 (worker crash-loop fix): the entrypoint below,
+  # src/smarthub/monitoring/flow.py:model_degradation_flow, does NOT exist on
+  # this branch (there is no monitoring/flow.py, and no model_degradation_flow
+  # is defined anywhere in src/smarthub). `prefect deploy` fails on it, which
+  # exits the worker's startup non-zero and Docker restart-loops prefect-worker.
+  # Re-enable once the monitoring flow is implemented and this entrypoint fixed.
+  # - name: model-degradation
+  #   entrypoint: src/smarthub/monitoring/flow.py:model_degradation_flow
+  #   description: >-
+  #     Compares realized auction wins with predicted win probabilities and
+  #     notifies Slack when a persisted warning or critical status changes.
+  #   tags: ["monitoring", "model-degradation", "pipeline-smarthub"]
+  #   work_pool:
+  #     name: smarthub-pool
+  #     work_queue_name: monitoring
+  #   schedules:
+  #     - cron: "5 * * * *"
+  #       timezone: "UTC"
+  #       parameters:
+  #         lead_type_id: 6
+  #     - cron: "10 * * * *"
+  #       timezone: "UTC"
+  #       parameters:
+  #         lead_type_id: 1

@@ -30,21 +30,150 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def heartbeat(text: str) -> None:
-    """Post to Slack if SLACK_WEBHOOK is set; always echo locally."""
-    print(f"[heartbeat] {text}", flush=True)
+# level -> (Slack attachment colour, leading emoji)
+_LEVELS = {
+    "info": ("#2eb67d", ":large_green_circle:"),
+    "warn": ("#ecb22e", ":large_yellow_circle:"),
+    "error": ("#e01e5a", ":red_circle:"),
+}
+
+
+def notify(
+    title: str,
+    detail: str = "",
+    level: str = "info",
+    code: str = "",
+    suggestion: str = "",
+) -> None:
+    """Post a colour-coded Slack alert if SLACK_WEBHOOK is set; always echo.
+
+    ``level`` is one of info/warn/error. On an errors-only channel, set
+    SIM_ALERTS_ERRORS_ONLY=1 to suppress routine info-level lifecycle posts
+    (start / day-complete / finished) while still delivering warn + error.
+    """
+    import socket
+
+    line = f"[{level}] {title}" + (f" - {detail}" if detail else "")
+    print(f"[alert] {line}", flush=True)
+
     hook = os.environ.get("SLACK_WEBHOOK")
     if not hook:
         return
+    if level == "info" and os.environ.get(
+        "SIM_ALERTS_ERRORS_ONLY", ""
+    ).strip().lower() in {"1", "true", "yes"}:
+        return
+
+    color, emoji = _LEVELS.get(level, _LEVELS["info"])
+    when = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"{emoji} *{title}*"},
+        }
+    ]
+    if detail:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": detail}})
+    if code:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Traceback (tail):*\n```" + code[-2500:] + "```",
+                },
+            }
+        )
+    if suggestion:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": ":bulb: *Suggested fix (LLM):*\n" + suggestion[:2500],
+                },
+            }
+        )
+    blocks.append(
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Host:*\n{socket.gethostname()}"},
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Target:*\n{os.environ.get('SIM_URL', 'n/a')}",
+                },
+                {"type": "mrkdwn", "text": f"*When (UTC):*\n{when}"},
+                {"type": "mrkdwn", "text": "*Component:*\nreplay-supervisor"},
+            ],
+        }
+    )
+    payload = {"attachments": [{"color": color, "blocks": blocks}]}
     try:
         req = urllib.request.Request(
             hook,
-            data=json.dumps({"text": text}).encode(),
+            data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
         urllib.request.urlopen(req, timeout=10)
     except Exception as exc:  # noqa: BLE001 - never let alerting kill the run
-        print(f"[heartbeat] slack post failed: {exc}", flush=True)
+        print(f"[alert] slack post failed: {exc}", flush=True)
+
+
+def heartbeat(text: str) -> None:  # back-compat shim
+    notify(text, level="info")
+
+
+# Last captured child output of a failed day, so the FAILED alert in main() can
+# attach the traceback + an LLM fix suggestion.
+_LAST_FAIL_OUTPUT = ""
+
+
+def _tail_lines(text: str, n: int) -> str:
+    return "\n".join(text.rstrip("\n").splitlines()[-n:])
+
+
+def _run_capture(cmd, tail_lines: int = 120):
+    """Run cmd, stream its output live to the console, and return
+    (returncode, tail) where tail is the last N lines (incl. any traceback)."""
+    from collections import deque
+
+    buf: deque = deque(maxlen=tail_lines)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # fold stderr in so tracebacks are captured
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    for ln in proc.stdout:
+        print(ln, end="", flush=True)
+        buf.append(ln)
+    proc.wait()
+    return proc.returncode, "".join(buf)
+
+
+def _llm_fix_suggestion(tb_text: str) -> str:
+    """Ask the SAME local LLM prod uses (llm_explain.call_ollama) for a terse
+    root-cause + fix. Returns a fallback string if the LLM is unreachable."""
+    if not tb_text.strip():
+        return ""
+    try:
+        from smarthub.train_and_predict.llm_explain import call_ollama
+    except Exception as exc:  # noqa: BLE001
+        return f"(LLM unavailable: {exc})"
+    prompt = (
+        "You are an SRE assistant for the SmartHub bid-recommendation service. "
+        "A replay/load-test day just failed. From the traceback below, reply "
+        "with (1) the single most likely root cause in one sentence, then "
+        "(2) 1-3 concrete fix steps as short bullet lines. Be terse and "
+        "technical; do not repeat the traceback.\n\nTRACEBACK:\n" + tb_text[-4000:]
+    )
+    try:
+        return call_ollama(prompt)
+    except Exception as exc:  # noqa: BLE001
+        return f"(LLM suggestion failed: {exc})"
 
 
 def load_ckpt(path: str) -> int:
@@ -66,6 +195,41 @@ def save_ckpt(path: str, day: int) -> None:
             f,
         )
     os.replace(tmp, path)
+
+
+def _wait_healthy(url: str, api_key: str | None, timeout_s: float = 180.0) -> bool:
+    """Poll <url>/health until the model is loaded, so a day never runs against
+    a cold or just-rebooted serve. Returns True once healthy, else False."""
+    import urllib.request
+
+    deadline = time.time() + timeout_s
+    probe = url.rstrip("/") + "/health?lead_type_id=6"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(probe, timeout=8) as resp:
+                if json.load(resp).get("model_loaded"):
+                    return True
+        except Exception:  # noqa: BLE001 - serve still starting; keep polling
+            pass
+        time.sleep(5)
+    return False
+
+
+def _finish(args) -> int:
+    """Exit 0, or -- for a restart:unless-stopped container -- hold idle so a
+    completed run is not restart-looped by the container manager."""
+    if getattr(args, "hold_when_done", False):
+        print(
+            "[supervisor] all days complete -- holding idle "
+            "(use 'sim_test.sh down' to remove).",
+            flush=True,
+        )
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+    return 0
 
 
 def run_day(args, day: int, ledger: str) -> bool:
@@ -102,13 +266,25 @@ def run_day(args, day: int, ledger: str) -> bool:
     if args.api_key:
         cmd += ["--api-key", args.api_key]
     for attempt in range(1, args.max_restarts + 1):
+        if not _wait_healthy(args.url, args.api_key):
+            notify(
+                f"Serve not healthy before day {day}",
+                f"attempt {attempt} - retrying",
+                level="warn",
+            )
+            time.sleep(min(30, 5 * attempt))
+            continue
         print(f"\n=== day {day} attempt {attempt}: {' '.join(cmd)}", flush=True)
-        rc = subprocess.run(cmd).returncode
+        rc, tail = _run_capture(cmd)
         if rc == 0:
             return True
-        heartbeat(
-            f":warning: replay day {day} exited rc={rc} "
-            f"(attempt {attempt}/{args.max_restarts}) — restarting"
+        global _LAST_FAIL_OUTPUT
+        _LAST_FAIL_OUTPUT = tail
+        notify(
+            f"Replay day {day} restarting",
+            f"exited rc={rc} (attempt {attempt}/{args.max_restarts})",
+            level="warn",
+            code=_tail_lines(tail, 25),
         )
         time.sleep(min(30, 5 * attempt))
     return False
@@ -153,6 +329,12 @@ def main() -> int:
     ap.add_argument("--api-key", default=None)
     ap.add_argument("--max-restarts", type=int, default=5)
     ap.add_argument("--no-analyze", dest="analyze", action="store_false")
+    ap.add_argument(
+        "--hold-when-done",
+        action="store_true",
+        help="after all days complete, sleep instead of exiting (keeps a "
+        "restart:unless-stopped container Up without a restart loop)",
+    )
     ap.add_argument("--python", default=sys.executable)
     args = ap.parse_args()
 
@@ -161,29 +343,40 @@ def main() -> int:
     done = load_ckpt(ckpt)
     if done >= args.days:
         print(f"All {args.days} days already complete (checkpoint={ckpt}).")
-        return 0
+        return _finish(args)
 
-    heartbeat(
-        f":rocket: replay supervisor starting — days {done+1}..{args.days}, "
-        f"target {args.url}"
+    notify(
+        "Replay supervisor started",
+        f"Days {done+1}-{args.days}  |  target `{args.url}`",
+        level="info",
     )
     for day in range(done + 1, args.days + 1):
         ledger = os.path.join(args.ledger_dir, f"day{day}.jsonl")
         ok = run_day(args, day, ledger)
         if not ok:
-            heartbeat(
-                f":rotating_light: replay day {day} FAILED after "
-                f"{args.max_restarts} restarts — supervisor stopping."
+            suggestion = _llm_fix_suggestion(_LAST_FAIL_OUTPUT)
+            notify(
+                f"Replay day {day} FAILED",
+                f"after {args.max_restarts} restarts - supervisor stopping",
+                level="error",
+                code=_tail_lines(_LAST_FAIL_OUTPUT, 40),
+                suggestion=suggestion,
             )
             return 1
         summary = rollup(args, day, ledger)
         save_ckpt(ckpt, day)
-        heartbeat(
-            f":white_check_mark: replay day {day}/{args.days} complete — {summary}"
+        notify(
+            f"Replay day {day}/{args.days} complete",
+            summary,
+            level="info",
         )
 
-    heartbeat(f":checkered_flag: replay finished all {args.days} historical days.")
-    return 0
+    notify(
+        "Replay finished all historical days",
+        f"{args.days} days complete",
+        level="info",
+    )
+    return _finish(args)
 
 
 if __name__ == "__main__":
