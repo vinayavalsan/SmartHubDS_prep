@@ -1862,16 +1862,14 @@ def main():
 
     history_col, bin_type_col, bin_size_col = st.columns(3)
     with history_col:
-        days = st.number_input(
+        days = st.selectbox(
             "History window (days)",
-            min_value=1,
-            max_value=30,
-            value=21,
-            step=1,
+            options=[1, 3, 7, 14, 30],
+            index=0,
             key="mon_days",
             help=(
-                "Days of history to load. Kept short (default 1) so the page "
-                "loads fast; widen up to 7 for a longer trend."
+                "Days of history to load. Defaults to 1 day so the page loads "
+                "fast; pick a wider window for a longer trend."
             ),
         )
     with bin_type_col:

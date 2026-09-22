@@ -920,7 +920,7 @@ def main():
             "History window (days)",
             min_value=1,
             max_value=21,
-            value=3,
+            value=1,
             step=1,
         )
     if st.button("🔄 Reload Data"):

@@ -254,6 +254,9 @@ services:
       STORAGE_BACKEND: parquet
       SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: dashboard
+      # Version tag of the built image, so the dashboard's "Repo version"
+      # reflects the deployed Docker image rather than stale package metadata.
+      SMARTHUB_IMAGE_TAG: ${IMAGE_TAG:-}
       SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
       # Hardcoded (not ${...}) so a stray export can't repoint the prediction log
       # at a per-container sqlite file -- the stack always shares this Postgres.
