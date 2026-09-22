@@ -9,6 +9,7 @@ Run with:
 
 from __future__ import annotations
 
+import os
 from importlib.metadata import PackageNotFoundError, version
 
 import streamlit as st
@@ -26,11 +27,19 @@ st.set_page_config(page_title="SmartHub DS", layout="wide")
 
 
 def _render_app_version():
-    """Show the SmartHub package version defined in pyproject.toml."""
-    try:
-        app_version = version("smarthub")
-    except PackageNotFoundError:
-        app_version = "unknown"
+    """Show the version of the running (built/deployed) Docker image.
+
+    Prefers ``SMARTHUB_IMAGE_TAG`` -- the image tag this container was deployed
+    as (e.g. ``v0.1.3``), injected by docker-compose from ``IMAGE_TAG`` -- so the
+    sidebar reflects the built image rather than possibly-stale installed
+    package metadata. Falls back to the packaged version, then ``unknown``.
+    """
+    app_version = os.environ.get("SMARTHUB_IMAGE_TAG", "").strip()
+    if not app_version:
+        try:
+            app_version = version("smarthub")
+        except PackageNotFoundError:
+            app_version = "unknown"
 
     st.sidebar.divider()
     st.sidebar.caption(f"Repo version: {app_version}")
