@@ -188,6 +188,9 @@ _FEATURE_EXCLUDE = {
     "recommended_bid_predicted_profit_on_sold",
     "recommended_bid_predicted_win_rate",
     "recommended_bid_predicted_cm",
+    "candidate_bid_count",
+    "minimum_candidate_bid",
+    "maximum_candidate_bid",
 }
 
 
@@ -256,6 +259,9 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
         "recommended_bid_predicted_win_rate",
         "recommended_bid_predicted_profit",
         "recommended_bid_predicted_cm",
+        "candidate_bid_count",
+        "minimum_candidate_bid",
+        "maximum_candidate_bid",
         "tat_seconds",
         "lead_rev",
         "lead_exp_rev",
@@ -473,6 +479,9 @@ def attach_prediction_monitoring(
             "recommended_bid_predicted_win_rate",
             "recommended_bid_predicted_profit",
             "recommended_bid_predicted_cm",
+            "candidate_bid_count",
+            "minimum_candidate_bid",
+            "maximum_candidate_bid",
             "tat_seconds",
             "lead_won",
             "lead_rev",
@@ -1848,6 +1857,318 @@ def _render_ml_bid_histogram(df: pd.DataFrame) -> None:
     st.plotly_chart(fig, width="stretch")
 
 
+def _render_candidate_bid_plots(df: pd.DataFrame) -> None:
+    """Show the size of the logged search grid and where the chosen bid falls."""
+    st.markdown("#### Candidate Bid Diagnostics")
+    required = (
+        "candidate_bid_count",
+        "minimum_candidate_bid",
+        "maximum_candidate_bid",
+        "recommended_bid",
+    )
+    if any(column not in df.columns for column in required):
+        st.info(
+            "Candidate bid data is unavailable. "
+            "Refresh the prediction monitoring dataset to see these plots."
+        )
+        return
+
+    bids = df.loc[:, required].apply(pd.to_numeric, errors="coerce")
+    bids = bids.replace([np.inf, -np.inf], np.nan).dropna()
+    bids = bids.loc[
+        (bids["candidate_bid_count"] >= 1)
+        & (bids["minimum_candidate_bid"] <= bids["maximum_candidate_bid"])
+        & (bids["recommended_bid"] >= bids["minimum_candidate_bid"] - 1e-6)
+        & (bids["recommended_bid"] <= bids["maximum_candidate_bid"] + 1e-6)
+    ]
+    if bids.empty:
+        st.info("No logged candidate bid grids are available for the selected leads.")
+        return
+
+    count = bids["candidate_bid_count"].astype(int)
+    counts = count.value_counts().sort_index()
+    fig = go.Figure(
+        go.Bar(
+            x=counts.index,
+            y=counts.values,
+            marker_color="#1f77b4",
+            hovertemplate="Candidate bids: %{x:,d}<br>Leads: %{y:,d}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Number of Candidate Bids per Lead",
+        xaxis_title="Candidate Bid Count",
+        yaxis_title="Lead Count",
+        showlegend=False,
+    )
+    fig.update_xaxes(tickformat=",d")
+    fig.update_yaxes(tickformat=",d")
+    st.plotly_chart(fig, width="stretch")
+
+    minimum = bids["minimum_candidate_bid"].to_numpy()
+    maximum = bids["maximum_candidate_bid"].to_numpy()
+    recommended = bids["recommended_bid"].to_numpy()
+    at_min = np.isclose(recommended, minimum, atol=1e-6, rtol=0)
+    at_max = np.isclose(recommended, maximum, atol=1e-6, rtol=0) & ~at_min
+    interior = ~(at_min | at_max)
+    position = np.where(
+        maximum > minimum,
+        (recommended - minimum) / np.where(maximum > minimum, maximum - minimum, 1),
+        0.0,
+    )
+    position = np.clip(position, 0, 1)
+    fig = go.Figure(
+        go.Histogram(
+            x=position,
+            xbins=dict(start=0, end=1.000001, size=0.05),
+            marker_color="#1f77b4",
+            hovertemplate="Bid position: %{x:.0%}<br>Leads: %{y:,d}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Recommended Bid Position in Candidate Range",
+        xaxis_title="Position (0% = minimum, 100% = maximum)",
+        yaxis_title="Lead Count",
+        bargap=0,
+    )
+    fig.update_xaxes(tickformat=".0%", range=[0, 1.01])
+    fig.update_yaxes(tickformat=",d")
+    st.plotly_chart(fig, width="stretch")
+
+    labels = ["Minimum bid", "Interior", "Maximum candidate bid"]
+    category_counts = [int(at_min.sum()), int(interior.sum()), int(at_max.sum())]
+    fractions = np.array(category_counts) / len(bids)
+    fig = go.Figure(
+        go.Bar(
+            x=labels,
+            y=fractions,
+            marker_color=["#1f77b4", "#2ca02c", "#ff7f0e"],
+            text=[
+                f"{fraction:.1%} ({n:,})"
+                for fraction, n in zip(fractions, category_counts)
+            ],
+            textposition="outside",
+            customdata=category_counts,
+            hovertemplate="%{x}<br>Fraction: %{y:.1%}<br>Leads: "
+            "%{customdata:,d}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Recommendation at Minimum, Interior, or Maximum Candidate Bid",
+        xaxis_title="Recommended Bid Location",
+        yaxis_title="Fraction of Leads",
+        yaxis_range=[0, max(1.05, float(max(fractions)) * 1.15)],
+        showlegend=False,
+    )
+    fig.update_yaxes(tickformat=".0%")
+    st.caption(
+        f"Based on {len(bids):,} leads with a valid logged candidate grid. "
+        "A single candidate bid counts as minimum."
+    )
+    st.plotly_chart(fig, width="stretch")
+
+
+def _render_feature_bid_distributions(
+    frame: pd.DataFrame,
+    summary: pd.DataFrame,
+    feature: str,
+    *,
+    bins: int,
+    binning: str,
+    top_n: int,
+    min_support: int,
+) -> None:
+    """Render sold bids and candidate diagnostics for each displayed feature value."""
+    st.subheader("Bid Distributions by Feature Value")
+    st.caption(
+        "Each row uses the selected feature value or bucket. Bid bins are $0.25; "
+        "histogram heights are percentages within that row's eligible leads. "
+        "The three plots can have different lead counts."
+    )
+    work = frame.copy()
+    work["_feature_bid_bucket"] = _feature_buckets(
+        work,
+        feature,
+        bins=bins,
+        binning=binning,
+        top_n=top_n,
+        min_support=min_support,
+    )
+    groups = dict(tuple(work.groupby("_feature_bid_bucket", observed=False)))
+    candidate_columns = {
+        "candidate_bid_count",
+        "minimum_candidate_bid",
+        "maximum_candidate_bid",
+        "recommended_bid",
+    }
+    has_candidate_data = candidate_columns.issubset(work.columns)
+
+    sold = pd.to_numeric(work.get("sold"), errors="coerce").fillna(0).gt(0)
+    bid_costs = pd.to_numeric(work.get("bid_cost"), errors="coerce")
+    usable_sold_bids = bid_costs.loc[sold & np.isfinite(bid_costs)]
+    max_sold_bid = (
+        max(0.0, float(usable_sold_bids.max())) if not usable_sold_bids.empty else 0.0
+    )
+    last_step = int(np.floor(max_sold_bid / 0.25)) + 1
+    bid_edges = np.arange(0, last_step + 1) * 0.25
+
+    for row_number, row in enumerate(summary.itertuples(index=False)):
+        bucket = str(row.feature_bucket)
+        group = groups.get(bucket)
+        if group is None:
+            continue
+        st.markdown(f"#### {bucket} · {len(group):,} leads")
+        sold_col, count_col, location_col = st.columns(3)
+
+        with sold_col:
+            st.markdown("**Sold lead bid distribution**")
+            sold_mask = pd.to_numeric(group["sold"], errors="coerce").fillna(0).gt(0)
+            values = pd.to_numeric(group.loc[sold_mask, "bid_cost"], errors="coerce")
+            values = values.loc[np.isfinite(values) & values.ge(0)]
+            if values.empty:
+                st.info("No sold lead bid costs.")
+            else:
+                counts, _ = np.histogram(values.to_numpy(), bins=bid_edges)
+                fig = go.Figure(
+                    go.Bar(
+                        x=bid_edges[:-1] + 0.125,
+                        y=counts / len(values),
+                        width=0.25,
+                        customdata=np.column_stack(
+                            (bid_edges[:-1], bid_edges[1:], counts)
+                        ),
+                        marker_color=_STYLE_MAP["bid_cost"]["color"],
+                        hovertemplate=(
+                            "Bid bin: [$%{customdata[0]:.2f}, "
+                            "$%{customdata[1]:.2f})<br>"
+                            "Fraction: %{y:.1%}<br>"
+                            "Leads: %{customdata[2]:,d}<extra></extra>"
+                        ),
+                    )
+                )
+                fig.update_layout(
+                    xaxis_title="Bid cost ($)",
+                    yaxis_title="Fraction of sold leads",
+                    bargap=0,
+                    showlegend=False,
+                    height=260,
+                )
+                fig.update_xaxes(tickprefix="$", range=[0, bid_edges[-1]])
+                fig.update_yaxes(tickformat=".0%")
+                st.caption(f"{len(values):,} sold leads with bid costs")
+                st.plotly_chart(
+                    fig, width="stretch", key=f"feature_sold_bids_{row_number}"
+                )
+
+        with count_col:
+            st.markdown("**Candidate bid count**")
+            if not has_candidate_data:
+                st.info("Candidate bid data is unavailable.")
+            else:
+                candidate_counts = pd.to_numeric(
+                    group["candidate_bid_count"], errors="coerce"
+                )
+                candidate_counts = candidate_counts.loc[
+                    np.isfinite(candidate_counts) & candidate_counts.ge(1)
+                ].astype(int)
+                if candidate_counts.empty:
+                    st.info("No candidate bid counts.")
+                else:
+                    distribution = candidate_counts.value_counts().sort_index()
+                    fig = go.Figure(
+                        go.Bar(
+                            x=distribution.index,
+                            y=distribution.values / len(candidate_counts),
+                            customdata=distribution.values,
+                            marker_color="#1f77b4",
+                            hovertemplate=(
+                                "Candidate bids: %{x:,d}<br>"
+                                "Fraction: %{y:.1%}<br>Leads: %{customdata:,d}"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+                    fig.update_layout(
+                        xaxis_title="Candidate bids per lead",
+                        yaxis_title="Fraction of eligible leads",
+                        showlegend=False,
+                        height=260,
+                    )
+                    fig.update_xaxes(tickformat=",d")
+                    fig.update_yaxes(tickformat=".0%")
+                    st.caption(f"{len(candidate_counts):,} leads with candidate counts")
+                    st.plotly_chart(
+                        fig,
+                        width="stretch",
+                        key=f"feature_candidate_counts_{row_number}",
+                    )
+
+        with location_col:
+            st.markdown("**Recommended bid location**")
+            if not has_candidate_data:
+                st.info("Candidate bid data is unavailable.")
+            else:
+                bids = group[
+                    [
+                        "candidate_bid_count",
+                        "minimum_candidate_bid",
+                        "maximum_candidate_bid",
+                        "recommended_bid",
+                    ]
+                ].apply(pd.to_numeric, errors="coerce")
+                bids = bids.replace([np.inf, -np.inf], np.nan).dropna()
+                bids = bids.loc[
+                    bids["candidate_bid_count"].ge(1)
+                    & bids["minimum_candidate_bid"].le(bids["maximum_candidate_bid"])
+                    & bids["recommended_bid"].ge(bids["minimum_candidate_bid"] - 1e-6)
+                    & bids["recommended_bid"].le(bids["maximum_candidate_bid"] + 1e-6)
+                ]
+                if bids.empty:
+                    st.info("No recommendations with a valid candidate grid.")
+                else:
+                    recommended = bids["recommended_bid"].to_numpy()
+                    minimum = bids["minimum_candidate_bid"].to_numpy()
+                    maximum = bids["maximum_candidate_bid"].to_numpy()
+                    at_min = np.isclose(recommended, minimum, atol=1e-6, rtol=0)
+                    at_max = (
+                        np.isclose(recommended, maximum, atol=1e-6, rtol=0) & ~at_min
+                    )
+                    category_counts = np.array(
+                        [
+                            int(at_min.sum()),
+                            int((~(at_min | at_max)).sum()),
+                            int(at_max.sum()),
+                        ]
+                    )
+                    fig = go.Figure(
+                        go.Bar(
+                            x=["Minimum", "Interior", "Maximum"],
+                            y=category_counts / len(bids),
+                            customdata=category_counts,
+                            marker_color=["#1f77b4", "#2ca02c", "#ff7f0e"],
+                            hovertemplate=(
+                                "%{x}<br>Fraction: %{y:.1%}<br>"
+                                "Leads: %{customdata:,d}<extra></extra>"
+                            ),
+                        )
+                    )
+                    fig.update_layout(
+                        xaxis_title="Recommended bid",
+                        yaxis_title="Fraction of valid recommendations",
+                        yaxis_range=[0, 1.05],
+                        showlegend=False,
+                        height=260,
+                    )
+                    fig.update_yaxes(tickformat=".0%")
+                    st.caption(
+                        f"{len(bids):,} valid recommendations; "
+                        "one bid counts as minimum"
+                    )
+                    st.plotly_chart(
+                        fig, width="stretch", key=f"feature_bid_location_{row_number}"
+                    )
+
+
 def _render_ml_kpis(df: pd.DataFrame) -> None:
     """Render production prediction-vs-observed KPIs."""
     mask = transforms.recommended_bid_metrics_available_mask(df)
@@ -2142,56 +2463,47 @@ def main():
                     disabled=True,
                 )
 
-        checkbox1, checkbox2, _ = st.columns([1, 1, 2])
-        with checkbox1:
-            show_table = st.checkbox(
-                "Show table",
-                value=False,
-                key="mon_show_table",
-            )
-        with checkbox2:
-            show_ml_metrics = st.checkbox(
-                "Show ML Metrics",
-                value=True,
-                key="mon_show_ml_metrics",
-            )
+        show_table = st.checkbox(
+            "Show table",
+            value=False,
+            key="mon_show_table",
+        )
 
         plot_df = df
         prediction_df = pd.DataFrame()
         prediction_load_diagnostics = {}
-        if show_ml_metrics:
-            try:
-                prediction_df = load_prediction_monitoring(int(days))
-                prediction_load_diagnostics = prediction_df.attrs.get(
-                    "load_diagnostics", {}
-                )
-            except io.DataNotFoundError as exc:
-                st.warning(str(exc))
-                prediction_load_diagnostics = {
-                    "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
-                    "result": str(exc),
-                }
-                prediction_df = pd.DataFrame()
+        try:
+            prediction_df = load_prediction_monitoring(int(days))
+            prediction_load_diagnostics = prediction_df.attrs.get(
+                "load_diagnostics", {}
+            )
+        except io.DataNotFoundError as exc:
+            st.warning(str(exc))
+            prediction_load_diagnostics = {
+                "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
+                "result": str(exc),
+            }
+            prediction_df = pd.DataFrame()
 
-            if not prediction_df.empty:
-                prediction_df = prediction_df[
-                    prediction_df["lead_type_id"].eq(int(selected_lead_type))
-                ].copy()
+        if not prediction_df.empty:
+            prediction_df = prediction_df[
+                prediction_df["lead_type_id"].eq(int(selected_lead_type))
+            ].copy()
 
-                for dimension, value in (
-                    (filter1_dimension, filter1_value),
-                    (filter2_dimension, filter2_value),
+            for dimension, value in (
+                (filter1_dimension, filter1_value),
+                (filter2_dimension, filter2_value),
+            ):
+                if (
+                    dimension != "None"
+                    and value not in {"None", "All"}
+                    and dimension in prediction_df.columns
                 ):
-                    if (
-                        dimension != "None"
-                        and value not in {"None", "All"}
-                        and dimension in prediction_df.columns
-                    ):
-                        prediction_df = prediction_df[
-                            prediction_df[dimension].astype(str) == value
-                        ].copy()
+                    prediction_df = prediction_df[
+                        prediction_df[dimension].astype(str) == value
+                    ].copy()
 
-            plot_df = attach_prediction_monitoring(df, prediction_df)
+        plot_df = attach_prediction_monitoring(df, prediction_df)
 
         # Aggregate realized lead/outcome metrics on the full filtered cohort.
         # ML metrics remain a sparse overlay on the same matched rows and bins.
@@ -2264,77 +2576,76 @@ def main():
 
         agg = historical_agg
 
-        if show_ml_metrics:
-            if bin_type == "Time":
-                ml_agg = transforms.aggregate_recommended_bid_comparison(
-                    plot_df,
-                    freq=_BIN_MAP[bin_size],
-                    group_col=group_col,
-                )
-                merge_keys = ["datetime_min"] + ([group_col] if group_col else [])
+        if bin_type == "Time":
+            ml_agg = transforms.aggregate_recommended_bid_comparison(
+                plot_df,
+                freq=_BIN_MAP[bin_size],
+                group_col=group_col,
+            )
+            merge_keys = ["datetime_min"] + ([group_col] if group_col else [])
 
-            else:
-                count_type = "won" if bin_type == "Won count" else "opportunity"
-                ml_agg = _aggregate_ml_by_count(
-                    plot_df,
-                    count_per_bin=int(count_per_bin),
-                    count_type=count_type,
-                    group_col=group_col,
-                )
-                count_bin_col = (
-                    "won_count_bin" if count_type == "won" else "opportunity_count_bin"
-                )
-                merge_keys = [count_bin_col] + ([group_col] if group_col else [])
+        else:
+            count_type = "won" if bin_type == "Won count" else "opportunity"
+            ml_agg = _aggregate_ml_by_count(
+                plot_df,
+                count_per_bin=int(count_per_bin),
+                count_type=count_type,
+                group_col=group_col,
+            )
+            count_bin_col = (
+                "won_count_bin" if count_type == "won" else "opportunity_count_bin"
+            )
+            merge_keys = [count_bin_col] + ([group_col] if group_col else [])
 
-            if not ml_agg.empty and {
-                "recommended_bid_predicted_revenue",
-                "recommended_bid_predicted_profit",
-            }.issubset(ml_agg.columns):
-                ml_agg["recommended_bid_predicted_bid_cost"] = (
-                    ml_agg["recommended_bid_predicted_revenue"]
-                    - ml_agg["recommended_bid_predicted_profit"]
-                )
+        if not ml_agg.empty and {
+            "recommended_bid_predicted_revenue",
+            "recommended_bid_predicted_profit",
+        }.issubset(ml_agg.columns):
+            ml_agg["recommended_bid_predicted_bid_cost"] = (
+                ml_agg["recommended_bid_predicted_revenue"]
+                - ml_agg["recommended_bid_predicted_profit"]
+            )
 
-            if ml_agg.empty:
-                st.info(
-                    "ML metrics are not available for the selected filters; "
-                    "showing realized lead/outcome metrics only."
+        ml_metrics_available = not ml_agg.empty
+        if not ml_metrics_available:
+            st.info(
+                "ML metrics are not available for the selected filters; "
+                "showing realized lead/outcome metrics only."
+            )
+            with st.expander("ML metrics diagnostics", expanded=True):
+                st.caption(
+                    "Prediction-monitoring diagnostics after applying the "
+                    "selected date range, lead type, and optional filters."
                 )
-                with st.expander("ML metrics diagnostics", expanded=True):
-                    st.caption(
-                        "Prediction-monitoring diagnostics after applying the "
-                        "selected date range, lead type, and optional filters."
-                    )
-                    st.dataframe(
-                        _ml_debug_rows(
-                            load_diagnostics=prediction_load_diagnostics,
-                            prediction_df=prediction_df,
-                            lead_df=df,
-                            attached_df=plot_df,
-                            selected_lead_type=int(selected_lead_type),
-                        ),
-                        hide_index=True,
-                        width="stretch",
-                    )
-                show_ml_metrics = False
-            else:
-                ml_columns = merge_keys + [
-                    column
-                    for column in (
-                        "recommended_bid_predicted_revenue",
-                        "recommended_bid_predicted_bid_cost",
-                        "recommended_bid_predicted_profit",
-                        "recommended_bid_predicted_win_rate",
-                        "recommended_bid_predicted_cm",
-                    )
-                    if column in ml_agg.columns
-                ]
-                agg = historical_agg.merge(
-                    ml_agg[ml_columns],
-                    on=merge_keys,
-                    how="left",
-                    validate="one_to_one",
+                st.dataframe(
+                    _ml_debug_rows(
+                        load_diagnostics=prediction_load_diagnostics,
+                        prediction_df=prediction_df,
+                        lead_df=df,
+                        attached_df=plot_df,
+                        selected_lead_type=int(selected_lead_type),
+                    ),
+                    hide_index=True,
+                    width="stretch",
                 )
+        else:
+            ml_columns = merge_keys + [
+                column
+                for column in (
+                    "recommended_bid_predicted_revenue",
+                    "recommended_bid_predicted_bid_cost",
+                    "recommended_bid_predicted_profit",
+                    "recommended_bid_predicted_win_rate",
+                    "recommended_bid_predicted_cm",
+                )
+                if column in ml_agg.columns
+            ]
+            agg = historical_agg.merge(
+                ml_agg[ml_columns],
+                on=merge_keys,
+                how="left",
+                validate="one_to_one",
+            )
 
         def _plot_group(
             cols,
@@ -2414,12 +2725,14 @@ def main():
             "expected_cm_on_wins",
         ]
 
-        if show_ml_metrics:
+        if ml_metrics_available:
             winrate_cols.append("recommended_bid_predicted_win_rate")
             cm_cols.append("recommended_bid_predicted_cm")
 
         if selected_metric == "All":
-            business_tab, ml_tab = st.tabs(["Business Performance", "ML Performance"])
+            business_tab, ml_tab, candidate_tab = st.tabs(
+                ["Business Performance", "ML Performance", "Candidate Bids"]
+            )
 
             with business_tab:
                 st.caption(
@@ -2498,7 +2811,7 @@ def main():
                     "Production ML prediction performance for the selected cohort: "
                     "predicted values compared with observed auction outcomes."
                 )
-                if show_ml_metrics:
+                if ml_metrics_available:
                     _render_ml_kpis(plot_df)
                     _render_ml_bid_histogram(plot_df)
                     _render_win_rate_bias_plot(agg)
@@ -2534,7 +2847,14 @@ def main():
                             "CM",
                         )
                 else:
-                    st.info("Enable Show ML Metrics to display ML performance plots.")
+                    st.info("No ML metrics are available for the selected filters.")
+
+            with candidate_tab:
+                st.caption(
+                    "Candidate bids evaluated per lead and the location of the "
+                    "recommended bid within that range."
+                )
+                _render_candidate_bid_plots(plot_df)
 
         elif selected_metric == "Sold Lead Revenue":
             _plot_group(
@@ -2550,16 +2870,16 @@ def main():
                 "Amount ($)",
             )
         elif selected_metric == "ML Revenue Comparison":
-            if show_ml_metrics:
+            if ml_metrics_available:
                 _plot_group(
                     ml_revenue_comparison_cols,
                     "Revenue: ML Predicted on All Leads vs Expected on Won Leads",
                     "Amount ($)",
                 )
             else:
-                st.info("Enable Show ML Metrics to display the ML revenue comparison.")
+                st.info("No ML metrics are available for the selected filters.")
         elif selected_metric == "ML Profit Comparison":
-            if show_ml_metrics:
+            if ml_metrics_available:
                 _plot_group(
                     [
                         "recommended_bid_predicted_profit",
@@ -2569,7 +2889,7 @@ def main():
                     "Amount ($)",
                 )
             else:
-                st.info("Enable Show ML Metrics to display the ML profit comparison.")
+                st.info("No ML metrics are available for the selected filters.")
         elif selected_metric == "Win Rate":
             _plot_group(winrate_cols, "Win Rate", "Rate")
         elif selected_metric == "P(Sold | Won)":
@@ -2598,8 +2918,8 @@ def main():
     with feature_tab:
         st.caption(
             "Observed and ML production performance by feature value or numeric "
-            "bucket. ML series use matched production predictions when Show ML "
-            "Metrics is enabled. The global filters above apply to this analysis."
+            "bucket. ML series use matched production predictions. "
+            "The global filters above apply to this analysis."
         )
         monitoring_feature_frame = plot_df.copy()
 
@@ -2613,6 +2933,7 @@ def main():
             feature = st.selectbox(
                 "Feature",
                 options=features,
+                index=features.index("account_id") if "account_id" in features else 0,
                 key="mon_feature_analysis_feature",
             )
 
@@ -2669,6 +2990,12 @@ def main():
             )
             st.stop()
 
+        show_bid_distribution = st.checkbox(
+            "Show bid distribution by feature value",
+            value=False,
+            key="mon_feature_bid_distribution",
+        )
+
         left, right = st.columns(2)
         with left:
             st.plotly_chart(
@@ -2691,6 +3018,17 @@ def main():
             st.plotly_chart(
                 _feature_cm_chart(summary, feature, kind),
                 width="stretch",
+            )
+
+        if show_bid_distribution:
+            _render_feature_bid_distributions(
+                monitoring_feature_frame,
+                summary,
+                feature,
+                bins=int(bins),
+                binning=binning,
+                top_n=int(top_n),
+                min_support=int(min_support),
             )
 
         st.subheader("Feature Summary")
