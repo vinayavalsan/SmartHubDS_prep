@@ -103,7 +103,7 @@ services:
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
       PREFECT_WORK_POOL: smarthub-pool
-      PREFECT_WORK_QUEUES: "default features training"
+      PREFECT_WORK_QUEUES: "default features training monitoring"
       SMARTHUB_ROOT: /app
       # Thread caps for training math libs. Without these, LightGBM/BLAS spawn one
       # OpenMP thread per host core and, on a shared box, busy-wait (spin) at 100%
@@ -425,18 +425,6 @@ services:
       - "8000:80"                   # http://<host>:8000  (bid API, via proxy)
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-
-  # CD auto-deploy (prod profile ONLY). Polls Docker Hub and recreates labelled
-  # containers on a new push. Gated behind `--profile prod` so it never clobbers a
-  # local source build.
-  watchtower:
-    container_name: smarthub-watchtower
-    image: containrrr/watchtower
-    restart: unless-stopped
-    profiles: ["prod"]
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --label-enable --cleanup --poll-interval ${WATCHTOWER_POLL_INTERVAL:-300}
 
 volumes:
   postgres-data:
