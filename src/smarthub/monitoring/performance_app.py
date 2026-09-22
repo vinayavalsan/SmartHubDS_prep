@@ -71,7 +71,7 @@ _STYLE_MAP = {
     "expected_revenue_on_sold": dict(color="#1f77b4", dash="dot"),
     "recommended_bid_predicted_revenue_on_sold": dict(color="#1f77b4", dash="dash"),
     # Bid-cost family.
-    "bid_cost": dict(color="#000000", dash="solid"),
+    "bid_cost": dict(color="#7f7f7f", dash="solid"),
     "recommended_bid_predicted_bid_cost": dict(color="#000000", dash="dash"),
     # Profit family.
     "realized_profit": dict(color="#ff7f0e", dash="solid"),
@@ -1751,6 +1751,103 @@ def _render_win_rate_bias_plot(agg: pd.DataFrame) -> None:
     st.plotly_chart(fig, width="stretch")
 
 
+def _render_sold_bid_cost_histogram(df: pd.DataFrame) -> None:
+    """Render per-lead bid costs for sold leads in the filtered cohort."""
+    st.markdown("#### Sold Leads Bid Cost Distribution — $0.25 bins")
+    sold = pd.to_numeric(
+        df.get("sold", pd.Series(index=df.index, dtype=float)), errors="coerce"
+    ).gt(0)
+    bids = pd.to_numeric(
+        df.get("bid_cost", pd.Series(index=df.index, dtype=float)), errors="coerce"
+    ).loc[sold]
+    bids = bids.loc[np.isfinite(bids)]
+    if bids.empty:
+        st.info("No sold-lead bid costs are available for the selected filters.")
+        return
+
+    st.caption(
+        "Bid cost per sold lead for the selected filters, "
+        "in bins [0, 0.25), [0.25, 0.50), and so on. "
+        "Missing or non-finite costs are excluded."
+    )
+    bin_size = 0.25
+    first_step = min(0, int(np.floor(bids.min() / bin_size)))
+    last_step = int(np.floor(bids.max() / bin_size)) + 1
+    edges = np.arange(first_step, last_step + 1) * bin_size
+    centers = (edges[:-1] + edges[1:]) / 2
+    counts, _ = np.histogram(bids.to_numpy(dtype=float), bins=edges)
+    fig = go.Figure(
+        go.Bar(
+            x=centers,
+            y=counts,
+            width=bin_size,
+            customdata=np.column_stack((edges[:-1], edges[1:])),
+            name="Sold lead bid cost",
+            marker_color=_STYLE_MAP["bid_cost"]["color"],
+            hovertemplate=(
+                "Bin: [$%{customdata[0]:,.2f}, $%{customdata[1]:,.2f})<br>"
+                "Bin width: $0.25<br>Lead count: %{y:,.0f}<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        xaxis_title="Sold Lead Bid Cost ($)",
+        yaxis_title="Lead Count",
+        bargap=0,
+        showlegend=False,
+    )
+    fig.update_xaxes(tickprefix="$", tickformat=",.2f", showgrid=True)
+    fig.update_yaxes(tickformat=",d", showgrid=True)
+    st.plotly_chart(fig, width="stretch")
+
+
+def _render_ml_bid_histogram(df: pd.DataFrame) -> None:
+    """Render the distribution of logged ML bids for the filtered leads."""
+    st.markdown("#### ML Predicted Bid Distribution — $0.25 bins")
+    bids = pd.to_numeric(
+        df.get("recommended_bid", pd.Series(dtype=float)), errors="coerce"
+    )
+    bids = bids.loc[np.isfinite(bids)]
+    if bids.empty:
+        st.info("No ML predicted bids are available for the selected filters.")
+        return
+
+    st.caption(
+        "Recommended bids from the prediction log for the selected leads, "
+        "including won and lost leads, in bins [0, 0.25), [0.25, 0.50), and so on. "
+        "Missing or non-finite bids are excluded."
+    )
+    bin_size = 0.25
+    first_step = min(0, int(np.floor(bids.min() / bin_size)))
+    last_step = int(np.floor(bids.max() / bin_size)) + 1
+    edges = np.arange(first_step, last_step + 1) * bin_size
+    centers = (edges[:-1] + edges[1:]) / 2
+    counts, _ = np.histogram(bids.to_numpy(dtype=float), bins=edges)
+    fig = go.Figure(
+        go.Bar(
+            x=centers,
+            y=counts,
+            width=bin_size,
+            customdata=np.column_stack((edges[:-1], edges[1:])),
+            name="ML predicted bid",
+            marker_color=_FEATURE_STYLE_MAP["ml_recommended_bid"]["color"],
+            hovertemplate=(
+                "Bin: [$%{customdata[0]:,.2f}, $%{customdata[1]:,.2f})<br>"
+                "Bin width: $0.25<br>Lead count: %{y:,.0f}<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        xaxis_title="ML Predicted Bid ($)",
+        yaxis_title="Lead Count",
+        bargap=0,
+        showlegend=False,
+    )
+    fig.update_xaxes(tickprefix="$", tickformat=",.2f", showgrid=True)
+    fig.update_yaxes(tickformat=",d", showgrid=True)
+    st.plotly_chart(fig, width="stretch")
+
+
 def _render_ml_kpis(df: pd.DataFrame) -> None:
     """Render production prediction-vs-observed KPIs."""
     mask = transforms.recommended_bid_metrics_available_mask(df)
@@ -1862,14 +1959,16 @@ def main():
 
     history_col, bin_type_col, bin_size_col = st.columns(3)
     with history_col:
-        days = st.selectbox(
+        days = st.number_input(
             "History window (days)",
-            options=[1, 3, 7, 14, 30],
-            index=0,
+            min_value=1,
+            max_value=30,
+            value=7,
+            step=1,
             key="mon_days",
             help=(
-                "Days of history to load. Defaults to 1 day so the page loads "
-                "fast; pick a wider window for a longer trend."
+                "Days of history to load. Kept short (default 7) so the page "
+                "loads fast; widen up to 30 for a longer trend."
             ),
         )
     with bin_type_col:
@@ -1884,7 +1983,7 @@ def main():
             bin_size = st.selectbox(
                 "Bin size",
                 options=list(_BIN_MAP.keys()),
-                index=1,
+                index=3,
                 key="mon_bin_size",
                 help=(
                     "Time-bucket width for the trend charts. With a 1-day "
@@ -2333,6 +2432,7 @@ def main():
                     "Amount ($)",
                     legendonly_columns=sold_revenue_legendonly,
                 )
+                _render_sold_bid_cost_histogram(df)
                 _plot_group(
                     sold_profit_cols,
                     "Sold Leads — Realized Profit and Expected Profit",
@@ -2400,6 +2500,7 @@ def main():
                 )
                 if show_ml_metrics:
                     _render_ml_kpis(plot_df)
+                    _render_ml_bid_histogram(plot_df)
                     _render_win_rate_bias_plot(agg)
                     _plot_group(
                         [

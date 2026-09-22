@@ -738,6 +738,8 @@ def save_monitoring(df: pd.DataFrame, settings: StorageSettings) -> dict[str, ob
     enabled (native upsert), Parquet when enabled (read-merge-rewrite, atomic).
     The upsert is what lets a later pull fill in an outcome that resolved after
     the prediction was made, rather than appending duplicates. No-op on empty.
+    Each Parquet rewrite retains only the 30 days ending at the merged data's
+    newest ``created_at`` (inclusive cutoff). Undated rows are excluded.
 
     Returns row counts / locations written.
     """
@@ -764,6 +766,29 @@ def save_monitoring(df: pd.DataFrame, settings: StorageSettings) -> dict[str, ob
         else:
             combined = df
         combined = _dedupe(combined, key=MONITORING_KEY)
+        if "created_at" not in combined.columns:
+            raise StorageError("Monitoring retention requires created_at.")
+        created = pd.to_datetime(
+            combined["created_at"], errors="coerce", utc=True, format="mixed"
+        )
+        newest = created.max()
+        if pd.isna(newest):
+            raise StorageError(
+                "Monitoring retention requires at least one valid created_at; "
+                "existing Parquet file was not replaced."
+            )
+        cutoff = newest - pd.Timedelta(days=30)
+        keep = created.ge(cutoff)
+        logger.info(
+            "save_monitoring: Parquet retention newest=%s cutoff=%s "
+            "kept=%s removed_old=%s removed_invalid_created_at=%s",
+            newest.isoformat(),
+            cutoff.isoformat(),
+            int(keep.sum()),
+            int(created.lt(cutoff).sum()),
+            int(created.isna().sum()),
+        )
+        combined = combined.loc[keep].copy()
         fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".parquet.tmp")
         os.close(fd)
         combined.to_parquet(tmp, index=False)
