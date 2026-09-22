@@ -1,0 +1,80 @@
+name: version-bump
+
+# Auto-bump the repo version on every PR merged into the deploy branch.
+# The PR's label decides the size:  major | minor | patch   (no label -> patch).
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [smarthub.etl.pipeline]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deploy branch
+        uses: actions/checkout@v4
+        with:
+          ref: smarthub.etl.pipeline
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide bump level from PR labels
+        id: level
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          set -euo pipefail
+          level=patch
+          for l in $LABELS; do
+            case "$l" in
+              major) level=major; break ;;
+              minor) [ "$level" != "major" ] && level=minor ;;
+            esac
+          done
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "Bump level: $level   (labels: ${LABELS:-none})"
+
+      - name: Compute + write new version
+        id: ver
+        run: |
+          set -euo pipefail
+          cur=$(grep -E '^version[[:space:]]*=' pyproject.toml | head -1 \
+                | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          IFS=. read -r MA MI PA <<< "$cur"
+          case "${{ steps.level.outputs.level }}" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+          esac
+          new="${MA}.${MI}.${PA}"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          echo "Version: $cur -> $new"
+          sed -i -E "0,/^version[[:space:]]*=.*/s//version = \"$new\"/" pyproject.toml
+          if grep -qE '__version__ *= *"[0-9]' src/smarthub/__init__.py 2>/dev/null; then
+            sed -i -E "s/__version__ = \"[0-9]+\.[0-9]+\.[0-9]+\"/__version__ = \"$new\"/" \
+              src/smarthub/__init__.py
+          fi
+
+      - name: Commit + tag + push
+        run: |
+          set -euo pipefail
+          new="${{ steps.ver.outputs.new }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git add src/smarthub/__init__.py 2>/dev/null || true
+          if git diff --cached --quiet; then echo "No change."; exit 0; fi
+          git commit -m "chore(release): v$new [skip ci]"
+          git tag "v$new"
+          git push origin HEAD:smarthub.etl.pipeline
+          git push origin "v$new"
+          echo "Released v$new"
