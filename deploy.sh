@@ -27,6 +27,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# --- release version -> IMAGE_TAG (built images carry the release number) ---
+VERSION="$(grep -E '^version[[:space:]]*=' pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+export IMAGE_TAG="v${VERSION}"
+echo ">> release ${VERSION} -> IMAGE_TAG=${IMAGE_TAG}"
+
 PREFECT_FILE="docker-compose.prefect.yml"
 LOCAL_FILE="docker-compose.local.yml"
 UIURL_FILE="docker-compose.uiurl.yml"   # generated below
