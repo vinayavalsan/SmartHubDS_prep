@@ -112,6 +112,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: cicd-${{ github.ref }}
@@ -301,9 +302,7 @@ jobs:
     name: Build Ready
     needs: pytest
 
-    if: >
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/smarthub.etl.pipeline'
+    if: github.event_name == 'workflow_dispatch'
 
     runs-on: ubuntu-latest
 
@@ -464,8 +463,7 @@ jobs:
     # its `needs` above didn't succeed.
     if: >-
       always() &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/smarthub.etl.pipeline'
+      github.event_name == 'workflow_dispatch'
 
     runs-on: ubuntu-latest
 

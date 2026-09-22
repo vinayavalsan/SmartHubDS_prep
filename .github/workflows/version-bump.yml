@@ -1,7 +1,12 @@
 name: version-bump
 
-# Auto-bump the repo version on every PR merged into the deploy branch.
-# The PR's label decides the size:  major | minor | patch   (no label -> patch).
+# One release workflow. On every PR merged into the deploy branch it:
+#   1. reads the PR label (major|minor|patch, default patch) and bumps the version
+#   2. builds + pushes the three images to Docker Hub tagged -vX.Y.Z (and -latest)
+#   3. commits the bump + pushes a vX.Y.Z tag  (only after the images succeed)
+#   4. posts a Slack "released vX.Y.Z" message
+# It runs on the merge event (a human action), so it is NOT blocked by the
+# GITHUB_TOKEN "no recursive trigger" rule -- everything happens in this one run.
 
 on:
   pull_request:
@@ -16,9 +21,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bump:
+  release:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    env:
+      REPO: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
     steps:
       - name: Checkout deploy branch
         uses: actions/checkout@v4
@@ -64,6 +71,51 @@ jobs:
               src/smarthub/__init__.py
           fi
 
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build + push worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.worker
+          push: true
+          tags: |
+            ${{ env.REPO }}:worker-v${{ steps.ver.outputs.new }}
+            ${{ env.REPO }}:worker-latest
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+
+      - name: Build + push dashboard
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.app
+          push: true
+          tags: |
+            ${{ env.REPO }}:dashboard-v${{ steps.ver.outputs.new }}
+            ${{ env.REPO }}:dashboard-latest
+          cache-from: type=gha,scope=dashboard
+          cache-to: type=gha,mode=max,scope=dashboard
+
+      - name: Build + push serve
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.serve
+          push: true
+          tags: |
+            ${{ env.REPO }}:serve-v${{ steps.ver.outputs.new }}
+            ${{ env.REPO }}:serve-latest
+          cache-from: type=gha,scope=serve
+          cache-to: type=gha,mode=max,scope=serve
+
       - name: Commit + tag + push
         run: |
           set -euo pipefail
@@ -78,3 +130,56 @@ jobs:
           git push origin HEAD:smarthub.etl.pipeline
           git push origin "v$new"
           echo "Released v$new"
+
+      - name: Notify Slack (released)
+        if: success()
+        env:
+          HOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          NEW: ${{ steps.ver.outputs.new }}
+          REPO_NS: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          hook = os.environ.get("HOOK", "")
+          if not hook:
+              print("SLACK_WEBHOOK_URL not set; skipping"); raise SystemExit(0)
+          new = os.environ["NEW"]; ns = os.environ["REPO_NS"]
+          payload = {"attachments": [{"color": "#2eb67d", "blocks": [
+              {"type": "section", "text": {"type": "mrkdwn",
+               "text": f":package: *SmartHub released — v{new}*"}},
+              {"type": "section", "fields": [
+                  {"type": "mrkdwn", "text": f"*Version:*\nv{new}"},
+                  {"type": "mrkdwn", "text": f"*By:*\n{os.environ.get('ACTOR','?')}"},
+                  {"type": "mrkdwn", "text": f"*Images:*\n`{ns}:*-v{new}` (+ latest)"},
+                  {"type": "mrkdwn", "text": f"*Run:*\n<{os.environ.get('RUN_URL','')}|logs>"},
+              ]}]}]}
+          urllib.request.urlopen(urllib.request.Request(
+              hook, data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}), timeout=10)
+          print(f"posted release v{new} to Slack")
+          PY
+
+      - name: Notify Slack (failed)
+        if: failure()
+        env:
+          HOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          NEW: ${{ steps.ver.outputs.new }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          hook = os.environ.get("HOOK", "")
+          if not hook:
+              raise SystemExit(0)
+          new = os.environ.get("NEW", "") or "?"
+          payload = {"attachments": [{"color": "#e01e5a", "blocks": [
+              {"type": "section", "text": {"type": "mrkdwn",
+               "text": f":rotating_light: *SmartHub release FAILED — v{new}*"}},
+              {"type": "section", "text": {"type": "mrkdwn",
+               "text": f"<{os.environ.get('RUN_URL','')}|See the run logs>"}}]}]}
+          urllib.request.urlopen(urllib.request.Request(
+              hook, data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}), timeout=10)
+          PY
