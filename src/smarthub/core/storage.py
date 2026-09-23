@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -537,7 +538,11 @@ def read_parquet_dataset(
 
 
 def read_parquet_window(
-    root: str | os.PathLike[str], days: int, columns: list[str] | None = None
+    root: str | os.PathLike[str],
+    days: int,
+    columns: list[str] | None = None,
+    *,
+    on_stage: Callable[[str, pd.DataFrame], None] | None = None,
 ) -> pd.DataFrame:
     """Read only the most recent ``days`` of a day-partitioned Parquet dataset.
 
@@ -561,10 +566,14 @@ def read_parquet_window(
         return pd.read_parquet(f, columns=picked or None)
 
     df = pd.concat((_read(f) for f in recent), ignore_index=True)
+    if on_stage is not None:
+        on_stage("selected_files", df)
     if days and days > 0 and "created_at" in df.columns:
         ts = pd.to_datetime(df["created_at"], errors="coerce")
         cutoff = ts.max() - pd.Timedelta(days=days)
         df = df[ts >= cutoff]
+        if on_stage is not None:
+            on_stage("history_window", df)
     return df
 
 
@@ -718,7 +727,7 @@ def read_leads_outcomes(
     return pd.DataFrame(columns=list(columns))
 
 
-def _monitoring_parquet_path(settings: StorageSettings) -> Path:
+def monitoring_parquet_path(settings: StorageSettings) -> Path:
     """Single-file Parquet location for the monitoring dataset.
 
     Placed alongside the raw leads Parquet dataset (sibling directory) so it
@@ -753,7 +762,7 @@ def save_monitoring(df: pd.DataFrame, settings: StorageSettings) -> dict[str, ob
         )
         result["duckdb_path"] = str(duckdb_path(settings.duckdb_path))
     if settings.use_parquet:
-        target = _monitoring_parquet_path(settings)
+        target = monitoring_parquet_path(settings)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             existing = pd.read_parquet(target)
@@ -826,7 +835,7 @@ def load_monitoring(
         )
 
     if settings.use_parquet:
-        target = _monitoring_parquet_path(settings)
+        target = monitoring_parquet_path(settings)
         if target.exists():
             df = pd.read_parquet(target, columns=columns)
             if days is not None and "created_at" in df.columns:
