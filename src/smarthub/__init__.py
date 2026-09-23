@@ -31,6 +31,6 @@ try:
     __version__ = _pkg_version("smarthub")
 except PackageNotFoundError:  # pragma: no cover - source tree without an install
     # Fallback for an un-installed checkout. Keep in sync with pyproject.toml.
-    __version__ = "0.1.5"
+    __version__ = "0.1.6"
 
 __all__ = ["__version__"]
