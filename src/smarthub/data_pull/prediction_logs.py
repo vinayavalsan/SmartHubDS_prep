@@ -14,6 +14,7 @@ later pull fills in outcomes that resolved after the prediction was made.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import pandas as pd
@@ -41,6 +42,7 @@ PREDICTION_COLUMNS = [
     "recommended_bid_predicted_win_rate",
     "recommended_bid_predicted_profit",
     "recommended_bid_predicted_cm",
+    "candidate_bid_generation",
     "decision_path",
     "status",
     "model_name",
@@ -141,6 +143,34 @@ def build_monitoring_dataset(
         return pd.DataFrame()
 
     preds = pred_df.copy()
+    if "candidate_bid_generation" in preds.columns:
+
+        def _candidate_grid(value):
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    return parsed if isinstance(parsed, dict) else {}
+                except (TypeError, ValueError):
+                    return {}
+            return {}
+
+        grid = preds.pop("candidate_bid_generation").map(_candidate_grid)
+        for column, key in (
+            ("candidate_bid_count", "n_candidates"),
+            ("minimum_candidate_bid", "min_bid"),
+        ):
+            preds[column] = pd.to_numeric(
+                grid.map(lambda item: item.get(key)), errors="coerce"
+            )
+        step = pd.to_numeric(
+            grid.map(lambda item: item.get("bid_step")), errors="coerce"
+        )
+        preds["maximum_candidate_bid"] = (
+            preds["minimum_candidate_bid"] + (preds["candidate_bid_count"] - 1) * step
+        )
+
     preds["lead_ping_id"] = pd.to_numeric(preds["lead_ping_id"], errors="coerce")
     dropped = int(preds["lead_ping_id"].isna().sum())
     if dropped:

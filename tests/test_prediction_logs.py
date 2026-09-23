@@ -93,6 +93,36 @@ def test_build_dataset_joins_and_drops_null_ping(store):
     assert pd.isna(row.loc["unmatched", "lead_won"])  # outcome not available yet
 
 
+def test_monitoring_dataset_keeps_actual_candidate_grid(store):
+    store.log_prediction(
+        endpoint="recommend_bid",
+        lead_type_id=6,
+        lead_type_name="auto",
+        campaign_id=40088,
+        input_features={},
+        expected_revenue=10.0,
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
+        lead_ping_id=111,
+        recommended_bid=1.0,
+        candidate_bid_generation={
+            "min_bid": 0.25,
+            "max_bid": 1.10,
+            "bid_step": 0.25,
+            "n_candidates": 4,
+        },
+        prediction_id="grid",
+    )
+    since, until = _window()
+    preds = pl.fetch_prediction_logs(since, until, 6, store=store)
+    row = pl.build_monitoring_dataset(preds, None).iloc[0]
+    assert row["candidate_bid_count"] == 4
+    assert row["minimum_candidate_bid"] == 0.25
+    assert row["maximum_candidate_bid"] == 1.0
+    assert "candidate_bid_generation" not in row.index
+
+
 def test_persist_upserts_on_late_resolving_outcome(store, settings):
     _log(store, "p1", 111)
     _log(store, "p2", 222)
