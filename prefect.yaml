@@ -114,3 +114,19 @@ deployments:
   #       timezone: "UTC"
   #       parameters:
   #         lead_type_id: 1
+
+  - name: prediction-log-refresh
+    entrypoint: src/smarthub/data_pull/flow.py:prediction_log_refresh_flow
+    description: >-
+      Hourly refresh of prediction_monitoring.parquet (all lead types),
+      independent of the 4-hourly data-pull. Upserts on prediction_id.
+    tags: ["monitoring", "pipeline-smarthub"]
+    work_pool:
+      name: smarthub-pool
+      work_queue_name: monitoring
+    parameters:
+      overlap_hours: 2
+      default_lookback_hours: 24
+    schedules:
+      - cron: "0 * * * *"
+        timezone: "UTC"

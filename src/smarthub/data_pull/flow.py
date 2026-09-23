@@ -430,5 +430,35 @@ def _report(lead_type_id, min_s, max_s, df, result, prev_wm, new_wm) -> None:
     )
 
 
+@flow(
+    name="smarthub-prediction-log-refresh",
+    on_failure=[notifications.flow_failure_hook],
+)
+def prediction_log_refresh_flow(
+    overlap_hours: float = 2.0,
+    default_lookback_hours: float = 24.0,
+) -> dict:
+    """Hourly refresh of prediction_monitoring.parquet for ALL lead types.
+
+    Independent of the 4-hourly leads pull: resolves its own incremental window
+    from a dedicated watermark, pulls the prediction logs created in that window,
+    joins outcomes, and upserts the monitoring parquet. ``overlap_hours`` re-pulls
+    a little before the watermark so outcomes that resolve late still get filled
+    -- ``save_monitoring`` upserts on ``prediction_id``, so an overlapping re-pull
+    never creates duplicates.
+    """
+    from smarthub.data_pull.prediction_logs import pull_and_persist_prediction_logs
+
+    logger = get_run_logger()
+    var_name = "prediction_log_last_pull_timestamp"
+    min_s, max_s = resolve_window(var_name, overlap_hours, default_lookback_hours)
+    logger.info("prediction-log refresh window %s -> %s", min_s, max_s)
+    result = pull_and_persist_prediction_logs(min_s, max_s)
+    if result.get("prediction_rows", 0):
+        Variable.set(var_name, max_s, overwrite=True)
+    logger.info("prediction-log refresh result: %s", result)
+    return result
+
+
 if __name__ == "__main__":
     data_pull_flow(lead_type_id=6)
