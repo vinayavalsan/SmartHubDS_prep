@@ -55,8 +55,8 @@ def main():
     """Register the pages and run the Streamlit multipage navigation."""
     pages = [
         st.Page(health_app.main, title="Health", url_path="health"),
-        st.Page(leads_app.main, title="Leads", url_path="leads", default=True),
-        st.Page(performance_app.main, title="Performance", url_path="performance"),
+        st.Page(leads_app.main, title="Leads", url_path="leads"),
+        st.Page(performance_app.main, title="Performance", url_path="performance", default=True),
         st.Page(predictions_app.main, title="Predictions", url_path="predictions"),
         st.Page(config_page, title="Config", url_path="config"),
     ]
