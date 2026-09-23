@@ -1,128 +1,107 @@
 #!/usr/bin/env bash
-# deploy.sh -- bring the SmartHub/Anton Docker stack up on EC2 or locally.
-#
-# This captures the runtime steps that made the stack work end-to-end:
-#   * point the browser-facing Prefect UI at the right API host (public IP on
-#     EC2, localhost locally) -- otherwise the UI calls 127.0.0.1 and a remote
-#     browser can't reach it;
-#   * guarantee the `mlflow` Postgres database exists (mlflow-ui crash-loops and
-#     hammers Postgres with reconnects without it);
-#   * start prefect-server, wait for it to report healthy, then bring the worker
-#     up (its depends_on:service_healthy gate keeps it 'Created' until then).
-#
-# The compose files themselves already carry the other fixes (Postgres
-# max_connections=300, prefect-server SQLAlchemy pool caps, the /api/health
-# healthcheck, shap/slo healthcheck disable). This script just orchestrates.
+# deploy.sh -- deploy the SmartHub stack by PULLING pre-built, versioned images
+# from Docker Hub. The images are built + pushed by the version-bump CI on every
+# release, so what runs here is byte-identical to what CI built and tagged -- no
+# source rebuild on the box.
 #
 # Usage:
-#   ./deploy.sh                       # auto-detect: EC2 if instance metadata is
-#                                     #   reachable, else local
-#   ./deploy.sh local                 # force local  -> UI API at localhost:4200
-#   ./deploy.sh ec2                   # force EC2     -> UI API at <public-ip>:4200
-#   PREFECT_UI_HOST=1.2.3.4 ./deploy.sh ec2   # pin the host used in the UI URL
-#                                             #   (use your Elastic IP / DNS)
+#   ./deploy.sh v0.1.5     # deploy a specific released version
+#   ./deploy.sh 0.1.5      # the leading 'v' is optional
+#   ./deploy.sh            # deploy the ':*-latest' images
 #
-# Safe to re-run.
-
+# .env keys used (this folder):
+#   IMAGE_REPO=<dockerhubuser>/smarthub   # namespace CI pushes to; REQUIRED unless
+#                                         # it really is 'smarthub/smarthub'
+#   SLACK_WEBHOOK_URL=...                  # deploy notification (optional)
+#   DEPLOY_MODE=local|ec2 / PREFECT_UI_HOST=1.2.3.4  # override Prefect UI host
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# --- release version -> IMAGE_TAG (built images carry the release number) ---
-VERSION="$(grep -E '^version[[:space:]]*=' pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
-export IMAGE_TAG="v${VERSION}"
-echo ">> release ${VERSION} -> IMAGE_TAG=${IMAGE_TAG}"
+COMPOSE_FILE="docker-compose.yaml"
+HOST_NAME="$(hostname)"
+APP_SERVICES="worker dashboard serve"
 
-PREFECT_FILE="docker-compose.prefect.yml"
-LOCAL_FILE="docker-compose.local.yml"
-UIURL_FILE="docker-compose.uiurl.yml"   # generated below
+envval() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "\"'"; }
 
-# ---------------------------------------------------------------------------
-# 1. Decide mode + the host the *browser* will use to reach the Prefect API.
-# ---------------------------------------------------------------------------
-MODE="${1:-auto}"
+# ---- 1. which version to pull ---------------------------------------------
+REQ="${1:-}"
+if [ -n "$REQ" ]; then
+  case "$REQ" in v*) TAG="$REQ" ;; *) TAG="v$REQ" ;; esac
+else
+  TAG="latest"
+fi
+export IMAGE_TAG="$TAG"
 
+# ---- 2. which Docker Hub namespace ----------------------------------------
+IMAGE_REPO="$(envval IMAGE_REPO)"; [ -z "$IMAGE_REPO" ] && IMAGE_REPO="smarthub/smarthub"
+export IMAGE_REPO
+
+# ---- Slack helper: slack <good|danger> <title> <detail> -------------------
+slack() {
+  local level="$1" title="$2" detail="$3" hook color when
+  hook="$(envval SLACK_WEBHOOK_URL)"
+  [ -z "${hook:-}" ] && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  case "$level" in danger) color="#e01e5a" ;; *) color="#2eb67d" ;; esac
+  when="$(date -u +'%Y-%m-%d %H:%M:%SZ')"
+  curl -sS -o /dev/null -X POST -H 'Content-Type: application/json' "$hook" --data @- <<JSON || true
+{"attachments":[{"color":"$color","blocks":[
+{"type":"section","text":{"type":"mrkdwn","text":"$title"}},
+{"type":"section","fields":[
+{"type":"mrkdwn","text":"*Image:*\n$IMAGE_REPO:*-$IMAGE_TAG"},
+{"type":"mrkdwn","text":"*Host:*\n$HOST_NAME"},
+{"type":"mrkdwn","text":"*When (UTC):*\n$when"}
+]}]}]}
+JSON
+}
+trap 'slack danger ":rotating_light: *SmartHub deploy FAILED*" "tag ${IMAGE_TAG} on ${HOST_NAME}"' ERR
+
+# ---- 3. Prefect UI host (public IP on EC2 so a remote browser can reach it) -
 detect_public_ip() {
-  # Try IMDSv2 (token) first, fall back to IMDSv1. Empty output => not on EC2.
-  local token ip
-  token="$(curl -s --max-time 2 -X PUT \
-             "http://169.254.169.254/latest/api/token" \
-             -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)"
-  if [ -n "$token" ]; then
-    ip="$(curl -s --max-time 2 -H "X-aws-ec2-metadata-token: $token" \
-            http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
+  local t ip
+  t="$(curl -s --max-time 2 -X PUT http://169.254.169.254/latest/api/token \
+        -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)"
+  if [ -n "$t" ]; then
+    ip="$(curl -s --max-time 2 -H "X-aws-ec2-metadata-token: $t" \
+          http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
   else
-    ip="$(curl -s --max-time 2 \
-            http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
+    ip="$(curl -s --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
   fi
   echo "$ip"
 }
-
+MODE="${DEPLOY_MODE:-auto}"
 if [ "$MODE" = "auto" ]; then
-  if detect_public_ip | grep -qE '^[0-9]+\.[0-9]+\.'; then MODE="ec2"; else MODE="local"; fi
+  detect_public_ip | grep -qE '^[0-9]+\.[0-9]+\.' && MODE=ec2 || MODE=local
 fi
+if [ "$MODE" = "ec2" ]; then UI_HOST="${PREFECT_UI_HOST:-$(detect_public_ip)}"; else UI_HOST="localhost"; fi
+export PREFECT_UI_API_URL="http://${UI_HOST}:4200/api"
 
-if [ "$MODE" = "ec2" ]; then
-  HOST="${PREFECT_UI_HOST:-$(detect_public_ip)}"
-  if [ -z "$HOST" ]; then
-    echo "ERROR: could not determine the public IP." >&2
-    echo "       Pass it explicitly: PREFECT_UI_HOST=<ip-or-dns> ./deploy.sh ec2" >&2
-    exit 1
-  fi
-else
-  HOST="localhost"
+# ---- 4. pull the released images, then start (NO build) --------------------
+echo ">> deploying ${IMAGE_REPO}:*-${IMAGE_TAG}  (Prefect UI -> ${PREFECT_UI_API_URL})"
+if ! docker compose -f "$COMPOSE_FILE" pull $APP_SERVICES; then
+  echo "ERROR: could not pull ${IMAGE_REPO}:{worker,dashboard,serve}-${IMAGE_TAG}" >&2
+  echo "       Check the tag exists and that IMAGE_REPO in .env matches the" >&2
+  echo "       Docker Hub namespace CI pushes to (DOCKERHUB_USERNAME/smarthub)." >&2
+  exit 1
 fi
+docker compose -f "$COMPOSE_FILE" up -d --no-build
 
-UI_API_URL="http://${HOST}:4200/api"
-echo ">> mode=${MODE}  PREFECT_UI_API_URL=${UI_API_URL}"
-
-# ---------------------------------------------------------------------------
-# 2. Write the UI-URL compose override (no editor needed).
-# ---------------------------------------------------------------------------
-cat > "$UIURL_FILE" <<EOF
-# Generated by deploy.sh -- the browser-facing Prefect API URL.
-# Do not edit by hand; re-run ./deploy.sh to regenerate.
-services:
-  prefect-server:
-    environment:
-      PREFECT_UI_API_URL: ${UI_API_URL}
-EOF
-
-COMPOSE=(-f "$PREFECT_FILE" -f "$LOCAL_FILE" -f "$UIURL_FILE")
-
-# ---------------------------------------------------------------------------
-# 3. Bring the stack up (builds from source via the local overlay).
-# ---------------------------------------------------------------------------
-echo ">> docker compose up -d (build + start)"
-docker compose "${COMPOSE[@]}" up -d
-
-# ---------------------------------------------------------------------------
-# 4. Ensure the `mlflow` database exists (idempotent), then nudge mlflow-ui.
-# ---------------------------------------------------------------------------
-echo ">> ensuring 'mlflow' database exists"
+# mlflow DB must exist or mlflow-ui crash-loops (idempotent).
 docker exec prefect-postgres sh -c \
   "psql -U prefect -tc \"SELECT 1 FROM pg_database WHERE datname='mlflow'\" | grep -q 1 \
-   || psql -U prefect -c 'CREATE DATABASE mlflow'"
+   || psql -U prefect -c 'CREATE DATABASE mlflow'" >/dev/null 2>&1 || true
 docker restart smarthub-mlflow-ui >/dev/null 2>&1 || true
 
-# ---------------------------------------------------------------------------
-# 5. Wait for prefect-server health, then (re)start so the worker gate opens.
-# ---------------------------------------------------------------------------
+# wait for prefect-server health, then re-up so the worker's health-gate opens.
 echo -n ">> waiting for prefect-server to be healthy "
 for _ in $(seq 1 36); do
-  status="$(docker inspect -f '{{.State.Health.Status}}' prefect-server 2>/dev/null || echo missing)"
-  [ "$status" = "healthy" ] && { echo " -> healthy"; break; }
-  echo -n "."
-  sleep 5
+  [ "$(docker inspect -f '{{.State.Health.Status}}' prefect-server 2>/dev/null || echo x)" = "healthy" ] \
+    && { echo " -> healthy"; break; }
+  echo -n "."; sleep 5
 done
-if [ "$(docker inspect -f '{{.State.Health.Status}}' prefect-server 2>/dev/null || true)" != "healthy" ]; then
-  echo
-  echo "WARN: prefect-server not healthy yet. Check: docker logs prefect-server --tail 30" >&2
-fi
-
-# Second pass: now that the server is healthy, the worker's
-# depends_on:service_healthy gate opens and it leaves 'Created'.
-docker compose "${COMPOSE[@]}" up -d
+docker compose -f "$COMPOSE_FILE" up -d --no-build
 
 echo
-echo ">> done. Prefect UI: http://${HOST}:4200"
-docker compose "${COMPOSE[@]}" ps
+docker compose -f "$COMPOSE_FILE" ps
+echo ">> deployed ${IMAGE_TAG}"
+slack good ":rocket: *SmartHub deployed -- ${IMAGE_TAG}*" "pulled ${IMAGE_REPO}:*-${IMAGE_TAG}"
