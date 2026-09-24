@@ -15,7 +15,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from smarthub.core import io
+from smarthub.core import io, paths, storage
+from smarthub.core import transforms as core_transforms
+from smarthub.core.config import StorageSettings
 from smarthub.data_pull.field_registry import RAW_FIELD_REGISTRY
 from smarthub.feature_engineering.feature_registry import FEATURES
 from smarthub.monitoring import transforms
@@ -29,10 +31,6 @@ _FILTER_DIMENSIONS = [
     "source_type_id",
     "state",
 ]
-
-PREDICTION_MONITORING_PATH = Path(
-    "data/raw_datasets/monitoring_datasets/prediction_monitoring.parquet"
-)
 
 HISTORICAL_METRIC_GROUPS = {
     "All": None,
@@ -208,17 +206,87 @@ def load_leads(days: int):
     pandas.DataFrame
         Pulled lead/outcome rows within the requested window.
     """
-    return io.load_leads_window(days)
+    settings = StorageSettings.from_env()
+    if not settings.use_parquet:
+        raise io.DataNotFoundError(
+            "Performance app requires Parquet lead files; set "
+            "STORAGE_BACKEND to parquet or both."
+        )
+    stage_rows: list[tuple[str, object]] = []
+
+    def record_stage(label: str, frame: pd.DataFrame) -> None:
+        stage_rows.extend(_frame_debug_rows(label, frame))
+
+    try:
+        raw = storage.read_parquet_window(
+            settings.parquet_dir, days, on_stage=record_stage
+        )
+    except storage.StorageError as exc:
+        raise io.DataNotFoundError(str(exc)) from exc
+    prepared = core_transforms.prepare_leads_frame(raw)
+    stage_rows.extend(_frame_debug_rows("after_bid_filter", prepared))
+    prepared.attrs["lead_stage_rows"] = stage_rows
+    return prepared
+
+
+def _leads_source_files(days: int) -> list[Path]:
+    """List the files selected by the lead loader for this history window."""
+    settings = StorageSettings.from_env()
+    if settings.use_parquet:
+        files = sorted(paths.resolve(settings.parquet_dir).glob("*/*/*.parquet"))
+        return files[-(days + 2) :] if days > 0 else files
+    return []
+
+
+def _prediction_monitoring_path() -> Path:
+    """Use the same configured Parquet destination as the data pull."""
+    return storage.monitoring_parquet_path(StorageSettings.from_env())
+
+
+def _frame_debug_rows(
+    label: str, frame: pd.DataFrame, *, id_column: str = "id"
+) -> list[tuple[str, object]]:
+    """Summarize IDs, timestamps, and lead types at one pipeline stage."""
+    ids = (
+        pd.to_numeric(frame[id_column], errors="coerce")
+        if id_column in frame.columns
+        else pd.Series(dtype="float64")
+    )
+    timestamps = (
+        pd.to_datetime(frame["created_at"], errors="coerce", utc=True)
+        if "created_at" in frame.columns
+        else pd.Series(dtype="datetime64[ns, UTC]")
+    )
+    lead_types = (
+        sorted(
+            pd.to_numeric(frame["lead_type_id"], errors="coerce")
+            .dropna()
+            .astype("int64")
+            .unique()
+            .tolist()
+        )
+        if "lead_type_id" in frame.columns
+        else []
+    )
+    return [
+        (f"{label}.rows", len(frame)),
+        (f"{label}.unique_lead_ping_ids", ids.nunique()),
+        (f"{label}.min_{id_column}", ids.min() if ids.notna().any() else None),
+        (f"{label}.max_{id_column}", ids.max() if ids.notna().any() else None),
+        (f"{label}.min_created_at_utc", timestamps.min()),
+        (f"{label}.max_created_at_utc", timestamps.max()),
+        (f"{label}.lead_type_ids", lead_types),
+    ]
 
 
 @st.cache_data
-def load_prediction_monitoring(days: int) -> pd.DataFrame:
-    """Load recent prediction-monitoring rows from local parquet storage.
+def load_prediction_monitoring(monitoring_path: Path) -> pd.DataFrame:
+    """Load prediction-monitoring rows from the configured Parquet file.
 
     Inputs
     ------
-    days : int
-        Number of recent days to retain after loading the dataset.
+    monitoring_path : Path
+        Configured monitoring Parquet path shared with the data pull.
 
     Returns
     -------
@@ -230,17 +298,16 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
     io.DataNotFoundError
         Raised when the prediction-monitoring parquet dataset does not exist.
     """
-    if not PREDICTION_MONITORING_PATH.exists():
+    if not monitoring_path.exists():
         raise io.DataNotFoundError(
-            f"Prediction monitoring dataset not found: {PREDICTION_MONITORING_PATH}"
+            f"Prediction monitoring dataset not found: {monitoring_path}"
         )
 
-    df = pd.read_parquet(PREDICTION_MONITORING_PATH)
-    diagnostics = {
-        "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
-        "rows_read": len(df),
-        "columns_read": len(df.columns),
-    }
+    df = pd.read_parquet(monitoring_path)
+    diagnostics = {"prediction_file.path": str(monitoring_path)}
+    diagnostics.update(
+        _frame_debug_rows("prediction_file", df, id_column="lead_ping_id")
+    )
     if df.empty:
         diagnostics["result"] = "parquet file contains no rows"
         df.attrs["load_diagnostics"] = diagnostics
@@ -248,6 +315,8 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
 
     if "created_at" in df.columns:
         df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
+    if "served_at" in df.columns:
+        df["served_at"] = pd.to_datetime(df["served_at"], errors="coerce", utc=True)
 
     numeric_columns = (
         "lead_ping_id",
@@ -270,18 +339,6 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    diagnostics["time_column"] = "created_at"
-    if "created_at" in df.columns:
-        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=int(days))
-        diagnostics["window_cutoff_utc"] = str(cutoff)
-        df = df[df["created_at"].ge(cutoff)].copy()
-    else:
-        diagnostics["result"] = "required time column created_at is missing"
-        empty = pd.DataFrame()
-        empty.attrs["load_diagnostics"] = diagnostics
-        return empty
-    diagnostics["rows_after_time_window"] = len(df)
-
     if "status" in df.columns:
         diagnostics["status_counts_before_filter"] = (
             df["status"]
@@ -293,6 +350,11 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
         df = df[
             df["status"].astype("string").str.lower().isin({"success", "ok"})
         ].copy()
+    diagnostics.update(
+        _frame_debug_rows(
+            "after_prediction_status_filter", df, id_column="lead_ping_id"
+        )
+    )
     diagnostics["rows_after_status_filter"] = len(df)
 
     if "lead_ping_id" not in df.columns:
@@ -302,10 +364,23 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
         return empty
 
     df = df[df["lead_ping_id"].notna()].copy()
+    diagnostics.update(
+        _frame_debug_rows("after_prediction_id_filter", df, id_column="lead_ping_id")
+    )
     diagnostics["rows_with_lead_ping_id"] = len(df)
-    df = df.sort_values("created_at", ascending=False, na_position="last")
+    sort_column = "served_at" if "served_at" in df.columns else "created_at"
+    if sort_column in df.columns:
+        df = df.sort_values(sort_column, ascending=False, na_position="last")
+    diagnostics["deduplication_time_column"] = (
+        sort_column if sort_column in df.columns else "file order"
+    )
 
     df = df.drop_duplicates("lead_ping_id", keep="first").reset_index(drop=True)
+    diagnostics.update(
+        _frame_debug_rows(
+            "after_prediction_deduplication", df, id_column="lead_ping_id"
+        )
+    )
     diagnostics["rows_after_lead_ping_id_deduplication"] = len(df)
     diagnostics["result"] = "loaded"
     df.attrs["load_diagnostics"] = diagnostics
@@ -315,122 +390,167 @@ def load_prediction_monitoring(days: int) -> pd.DataFrame:
 def _ml_debug_rows(
     *,
     load_diagnostics: dict,
+    leads_source_files: list[Path],
     prediction_df: pd.DataFrame,
-    lead_df: pd.DataFrame,
     attached_df: pd.DataFrame,
     selected_lead_type: int,
+    history_days: int,
+    stage_rows: list[tuple[str, object]],
 ) -> pd.DataFrame:
-    """Build diagnostics for prediction-to-lead matching and ML aggregation."""
+    """Show one row per file and per join or filter stage."""
+    columns = [
+        "Stage",
+        "File / filter",
+        "Rows",
+        "Unique lead_ping_ids",
+        "ID column for Min/Max ID",
+        "Min ID",
+        "Max ID",
+        "Min created_at (UTC)",
+        "Max created_at (UTC)",
+        "Lead type IDs",
+        "Matched prediction rows",
+        "Details",
+    ]
 
-    def _as_arrow_safe_frame(values) -> pd.DataFrame:
-        frame = pd.DataFrame(values, columns=["diagnostic", "value"])
-        frame["diagnostic"] = frame["diagnostic"].astype("string")
-        frame["value"] = frame["value"].map(str).astype("string")
-        return frame
+    def _row(stage: str, pairs, *, path_or_filter="", prediction=False):
+        values = {key.rsplit(".", 1)[-1]: value for key, value in pairs}
+        id_column = "lead_ping_id" if prediction else "id"
+        lead_types = values.get("lead_type_ids", [])
 
-    rows = [(key, value) for key, value in load_diagnostics.items()]
-    rows.extend(
-        [
-            ("selected_lead_type_id", selected_lead_type),
-            ("prediction_rows_after_ui_filters", len(prediction_df)),
+        def _time(value):
+            return str(value) if pd.notna(value) else ""
+
+        return {
+            "Stage": stage,
+            "File / filter": str(path_or_filter),
+            "Rows": values.get("rows"),
+            "Unique lead_ping_ids": values.get("unique_lead_ping_ids"),
+            "ID column for Min/Max ID": id_column,
+            "Min ID": values.get(f"min_{id_column}"),
+            "Max ID": values.get(f"max_{id_column}"),
+            "Min created_at (UTC)": _time(values.get("min_created_at_utc")),
+            "Max created_at (UTC)": _time(values.get("max_created_at_utc")),
+            "Lead type IDs": ", ".join(map(str, lead_types)),
+            "Matched prediction rows": values.get("rows_with_prediction"),
+            "Details": "Prediction log created_at" if prediction else "Lead created_at",
+        }
+
+    prediction_pairs = [
+        (key, value)
+        for key, value in load_diagnostics.items()
+        if key.startswith("prediction_file.")
+    ]
+    if not prediction_pairs:
+        prediction_pairs = _frame_debug_rows(
+            "prediction_file", pd.DataFrame(), id_column="lead_ping_id"
+        )
+    prediction_row = _row(
+        "Prediction monitoring file",
+        prediction_pairs,
+        path_or_filter=load_diagnostics.get(
+            "prediction_file.path", load_diagnostics.get("dataset_path", "")
+        ),
+        prediction=True,
+    )
+    prediction_row[
+        "Details"
+    ] += f"; {len(prediction_df)} successful, unique IDs available for join"
+    if load_diagnostics.get("result") not in (None, "loaded"):
+        prediction_row["Details"] += f"; {load_diagnostics['result']}"
+    rows = [prediction_row]
+
+    for label, title, selection in (
+        (
+            "after_prediction_status_filter",
+            "After prediction status filter",
+            "status = success or ok",
+        ),
+        (
+            "after_prediction_id_filter",
+            "After prediction ID filter",
+            "lead_ping_id is present",
+        ),
+        (
+            "after_prediction_deduplication",
+            "After prediction deduplication",
+            "latest prediction per lead_ping_id",
+        ),
+    ):
+        pairs = [
+            (key, value)
+            for key, value in load_diagnostics.items()
+            if key.startswith(f"{label}.")
         ]
-    )
+        if pairs:
+            rows.append(_row(title, pairs, path_or_filter=selection, prediction=True))
 
-    if prediction_df.empty:
-        return _as_arrow_safe_frame(rows)
+    for index, path in enumerate(leads_source_files, start=1):
+        label = f"leads_file_{index}"
+        try:
+            file_frame = pd.read_parquet(path)
+            pairs = _frame_debug_rows(label, file_frame)
+            file_row = _row(f"Leads file {index}", pairs, path_or_filter=path)
+        except (OSError, ValueError) as exc:
+            file_row = _row(f"Leads file {index}", [], path_or_filter=path)
+            file_row["Details"] = f"Could not read file: {exc}"
+        rows.append(file_row)
 
-    matching_ids = 0
-    if "lead_ping_id" in prediction_df.columns and "id" in lead_df.columns:
-        prediction_ids = set(
-            pd.to_numeric(prediction_df["lead_ping_id"], errors="coerce")
-            .dropna()
-            .astype("int64")
-        )
-        lead_ids = set(
-            pd.to_numeric(lead_df["id"], errors="coerce").dropna().astype("int64")
-        )
-        matching_ids = len(prediction_ids & lead_ids)
-        rows.extend(
-            [
-                ("unique_prediction_lead_ping_ids", len(prediction_ids)),
-                ("unique_pulled_lead_ids", len(lead_ids)),
-                ("matching_lead_ids", matching_ids),
-            ]
-        )
-
-    if "created_at" in prediction_df.columns:
-        timestamps = pd.to_datetime(
-            prediction_df["created_at"], errors="coerce", utc=True
-        )
-        rows.extend(
-            [
-                ("filtered_time_column", "created_at"),
-                ("earliest_prediction_utc", timestamps.min()),
-                ("latest_prediction_utc", timestamps.max()),
-                ("rows_with_valid_prediction_time", int(timestamps.notna().sum())),
-            ]
-        )
-
-    if "status" in prediction_df.columns:
-        rows.append(
-            (
-                "filtered_status_counts",
-                prediction_df["status"]
-                .astype("string")
-                .fillna("<NA>")
-                .value_counts(dropna=False)
-                .to_dict(),
-            )
-        )
-
-    required = (
-        "recommended_bid",
-        "recommended_bid_predicted_win_rate",
-        "recommended_bid_predicted_profit",
-        "expected_revenue",
-    )
-    missing = [column for column in required if column not in prediction_df.columns]
-    rows.append(("missing_live_prediction_columns", ", ".join(missing) or "none"))
-
-    complete = pd.Series(True, index=prediction_df.index, dtype="bool")
-    for column in required:
-        if column not in prediction_df.columns:
-            complete &= False
+    for label, title in (
+        ("selected_files", "Selected leads files combined"),
+        ("history_window", "After History window"),
+        ("after_bid_filter", "After bid filter"),
+        ("after_join", "After join"),
+        ("after_lead_type_filter", "After lead_type_id filter"),
+        ("after_filter_1", "After Filter 1"),
+        ("after_filter_2", "After Filter 2"),
+        ("after_ml_metric_filter", "Rows eligible for ML metrics"),
+    ):
+        pairs = [
+            (key, value) for key, value in stage_rows if key.startswith(f"{label}.")
+        ]
+        if not pairs:
             continue
-        numeric = pd.to_numeric(prediction_df[column], errors="coerce")
-        rows.append((f"usable_rows:{column}", int(numeric.notna().sum())))
-        complete &= numeric.notna()
+        values = dict(pairs)
+        selection = values.get(f"{label}.selection", "")
+        if label == "history_window":
+            selection = f"created_at within {history_days} days of latest lead"
+        elif label == "after_bid_filter":
+            selection = "bid > 0"
+        elif label == "after_join":
+            selection = "leads.id = prediction.lead_ping_id (left join)"
+        elif label == "after_ml_metric_filter":
+            selection = "complete ML metrics and valid lead created_at"
+        if label == "after_lead_type_filter":
+            selection = f"lead_type_id = {selected_lead_type}"
+        rows.append(_row(title, pairs, path_or_filter=selection))
 
-    complete_count = int(complete.sum())
-    rows.append(("rows_with_complete_live_ml_metrics", complete_count))
-    attached_complete = transforms.recommended_bid_metrics_available_mask(attached_df)
-    attached_complete_count = int(attached_complete.sum())
-    rows.append(("matched_rows_with_complete_ml_metrics", attached_complete_count))
-    if matching_ids == 0:
-        rows.append(
-            (
-                "diagnosis",
-                "No prediction lead_ping_id values match the pulled lead id "
-                "values for the selected filters.",
-            )
-        )
-    elif complete_count > 0 and attached_complete_count == 0:
-        rows.append(
-            (
-                "diagnosis",
-                "Lead IDs match, but no joined rows contain all required ML "
-                "metric fields.",
-            )
-        )
-    elif attached_complete_count > 0:
-        rows.append(
-            (
-                "diagnosis",
-                "Joined lead and prediction rows contain complete ML metrics. "
-                "Check the selected aggregation keys and time buckets.",
-            )
-        )
-    return _as_arrow_safe_frame(rows)
+    prediction_ids = (
+        set(pd.to_numeric(prediction_df["lead_ping_id"], errors="coerce").dropna())
+        if "lead_ping_id" in prediction_df.columns
+        else set()
+    )
+    lead_ids = (
+        set(pd.to_numeric(attached_df["id"], errors="coerce").dropna())
+        if "id" in attached_df.columns
+        else set()
+    )
+    matching_ids = len(prediction_ids & lead_ids)
+    complete = transforms.recommended_bid_metrics_available_mask(attached_df)
+    rows[-1]["Details"] += (
+        f"; {matching_ids} matching IDs; {int(complete.sum())} rows "
+        "with complete ML metrics"
+    )
+    frame = pd.DataFrame(rows, columns=columns)
+    for column in (
+        "Rows",
+        "Unique lead_ping_ids",
+        "Min ID",
+        "Max ID",
+        "Matched prediction rows",
+    ):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("Int64")
+    return frame
 
 
 def attach_prediction_monitoring(
@@ -2337,6 +2457,30 @@ def main():
     except io.DataNotFoundError as exc:
         st.error(str(exc))
         st.stop()
+    stage_rows = leads_df.attrs.get("lead_stage_rows", [])
+
+    prediction_df = pd.DataFrame()
+    prediction_load_diagnostics = {}
+    monitoring_path = _prediction_monitoring_path()
+    try:
+        prediction_df = load_prediction_monitoring(monitoring_path)
+        prediction_load_diagnostics = prediction_df.attrs.get("load_diagnostics", {})
+    except io.DataNotFoundError as exc:
+        st.warning(str(exc))
+        prediction_load_diagnostics = {
+            "dataset_path": str(monitoring_path),
+            "result": str(exc),
+        }
+
+    leads_df = attach_prediction_monitoring(leads_df, prediction_df)
+    stage_rows.extend(_frame_debug_rows("after_join", leads_df))
+    if "prediction_id" in leads_df.columns:
+        stage_rows.append(
+            (
+                "after_join.rows_with_prediction",
+                int(leads_df["prediction_id"].notna().sum()),
+            )
+        )
 
     lead_type_options = sorted(
         leads_df["lead_type_id"].dropna().astype(int).unique().tolist()
@@ -2357,6 +2501,7 @@ def main():
     leads_df = leads_df[
         leads_df["lead_type_id"].astype(int) == selected_lead_type
     ].copy()
+    stage_rows.extend(_frame_debug_rows("after_lead_type_filter", leads_df))
 
     filter1_col, filter1_value_col, _ = st.columns(3)
     with filter1_col:
@@ -2380,6 +2525,11 @@ def main():
         filter1_dimension,
         filter1_value,
     )
+    if filter1_dimension != "None" and filter1_value not in {"None", "All"}:
+        stage_rows.append(
+            ("after_filter_1.selection", f"{filter1_dimension} = {filter1_value}")
+        )
+        stage_rows.extend(_frame_debug_rows("after_filter_1", leads_df))
 
     filter2_dimensions = [
         dimension for dimension in _FILTER_DIMENSIONS if dimension != filter1_dimension
@@ -2406,12 +2556,44 @@ def main():
         filter2_dimension,
         filter2_value,
     )
+    if filter2_dimension != "None" and filter2_value not in {"None", "All"}:
+        stage_rows.append(
+            ("after_filter_2.selection", f"{filter2_dimension} = {filter2_value}")
+        )
+        stage_rows.extend(_frame_debug_rows("after_filter_2", leads_df))
 
     if leads_df.empty:
         st.info("No data for the selected filters.")
+        with st.expander("ML metrics diagnostics", expanded=True):
+            st.caption(
+                "Each file and processing stage has one row. Daily file counts "
+                "cover complete files; joined rows reflect the History window. "
+                "Lead IDs are counted from id, and the prediction timestamp "
+                "is when its log row was created."
+            )
+            st.dataframe(
+                _ml_debug_rows(
+                    load_diagnostics=prediction_load_diagnostics,
+                    leads_source_files=_leads_source_files(int(days)),
+                    prediction_df=prediction_df,
+                    attached_df=leads_df,
+                    selected_lead_type=int(selected_lead_type),
+                    history_days=int(days),
+                    stage_rows=stage_rows,
+                ),
+                hide_index=True,
+                width="stretch",
+            )
         st.stop()
 
     df = transforms.add_historical_business_metrics(leads_df)
+    ml_mask = transforms.recommended_bid_metrics_available_mask(df)
+    stage_rows.extend(
+        _frame_debug_rows(
+            "after_ml_metric_filter",
+            df[ml_mask & df["datetime_min"].notna()],
+        )
+    )
 
     st.markdown("---")
     overview_tab, feature_tab = st.tabs(["Overview", "Feature Analysis"])
@@ -2470,40 +2652,6 @@ def main():
         )
 
         plot_df = df
-        prediction_df = pd.DataFrame()
-        prediction_load_diagnostics = {}
-        try:
-            prediction_df = load_prediction_monitoring(int(days))
-            prediction_load_diagnostics = prediction_df.attrs.get(
-                "load_diagnostics", {}
-            )
-        except io.DataNotFoundError as exc:
-            st.warning(str(exc))
-            prediction_load_diagnostics = {
-                "dataset_path": str(PREDICTION_MONITORING_PATH.resolve()),
-                "result": str(exc),
-            }
-            prediction_df = pd.DataFrame()
-
-        if not prediction_df.empty:
-            prediction_df = prediction_df[
-                prediction_df["lead_type_id"].eq(int(selected_lead_type))
-            ].copy()
-
-            for dimension, value in (
-                (filter1_dimension, filter1_value),
-                (filter2_dimension, filter2_value),
-            ):
-                if (
-                    dimension != "None"
-                    and value not in {"None", "All"}
-                    and dimension in prediction_df.columns
-                ):
-                    prediction_df = prediction_df[
-                        prediction_df[dimension].astype(str) == value
-                    ].copy()
-
-        plot_df = attach_prediction_monitoring(df, prediction_df)
 
         # Aggregate realized lead/outcome metrics on the full filtered cohort.
         # ML metrics remain a sparse overlay on the same matched rows and bins.
@@ -2614,16 +2762,20 @@ def main():
             )
             with st.expander("ML metrics diagnostics", expanded=True):
                 st.caption(
-                    "Prediction-monitoring diagnostics after applying the "
-                    "selected date range, lead type, and optional filters."
+                    "Each file and processing stage has one row. Daily file counts "
+                    "cover complete files; joined rows reflect the History window. "
+                    "Lead IDs are counted from id, and the prediction timestamp "
+                    "is when its log row was created."
                 )
                 st.dataframe(
                     _ml_debug_rows(
                         load_diagnostics=prediction_load_diagnostics,
+                        leads_source_files=_leads_source_files(int(days)),
                         prediction_df=prediction_df,
-                        lead_df=df,
                         attached_df=plot_df,
                         selected_lead_type=int(selected_lead_type),
+                        history_days=int(days),
+                        stage_rows=stage_rows,
                     ),
                     hide_index=True,
                     width="stretch",
