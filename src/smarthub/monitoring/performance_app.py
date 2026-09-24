@@ -145,7 +145,6 @@ _FEATURE_EXCLUDE = {
     "created_at",
     "lead_created_at",
     "lead_type_id",
-    "campaign_id",
     "bid",
     "rev",
     "won",

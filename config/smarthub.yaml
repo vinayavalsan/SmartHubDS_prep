@@ -114,7 +114,8 @@ model_degradation:
 
   # Bidding strategies that are controlled by the ML bid policy. Keep empty
   # until production ML bidding_strategy_id values are known/configured.
-  ml_bidding_strategy_ids:
+  ml_bidding_strategy_ids: [4,5,7] #NOTE This configuration is only for test deployment.
+    # replace with ml bidding_startegy_ids once the ml bidding is enabled in production
 
   # Additional fields used to split each monitored strategy into cohorts.
   # bidding_strategy_id is always included automatically and must not be listed.
