@@ -2451,6 +2451,10 @@ def main():
             )
             bin_size = None
 
+    if st.button("🔄 Reload Data", key="mon_performance_reload_data"):
+        st.cache_data.clear()
+        st.rerun()
+
     try:
         leads_df = load_leads(int(days))
     except io.DataNotFoundError as exc:
