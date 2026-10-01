@@ -957,6 +957,9 @@ class HyperparameterSearchConfig:
     monotonicity: PromotionMonotonicityConfig
     output_root: str
     model_configs: dict[str, dict[str, Any]]
+    cv_jobs: int = 1
+    probability_jobs: int = 1
+    optimizer_jobs: int = 1
 
     def as_dict(self) -> dict[str, Any]:
         """Return the configuration values as a dictionary.
@@ -1493,9 +1496,38 @@ def load_hyperparameter_search_config(
     if not output_root:
         raise ValueError("output.root must not be empty.")
 
+    parallelism = _mapping(hpo_root.get("parallelism") or {}, "parallelism")
+    worker_counts = {}
+    for key in ("cv_jobs", "probability_jobs", "optimizer_jobs"):
+        value = get_with_logged_fallback(parallelism, key, 1, f"parallelism.{key}")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"parallelism.{key} must be a positive integer.")
+        worker_counts[key] = value
+    if worker_counts["cv_jobs"] > 1 and int(search["n_jobs"]) != 1:
+        raise ValueError(
+            "Parallel CV folds require search.n_jobs=1 to avoid nested parallelism."
+        )
+    if max(worker_counts.values()) > 1 and fixed_parameters.get("n_jobs", 1) != 1:
+        raise ValueError(
+            "Parallel HPO workers require model fixed_parameters.n_jobs=1."
+        )
+    if max(worker_counts.values()) > 1 and any(
+        key in search_space for key in ("n_jobs", "num_threads", "nthread")
+    ):
+        raise ValueError(
+            "Model thread counts cannot be tuned with parallel HPO workers."
+        )
+    if max(worker_counts.values()) > 1 and any(
+        fixed_parameters.get(key, 1) != 1 for key in ("num_threads", "nthread")
+    ):
+        raise ValueError("Parallel HPO workers require model thread counts of 1.")
+    if max(worker_counts.values()) > 1:
+        fixed_parameters["n_jobs"] = 1
+
     resolved_raw = copy.deepcopy(hpo_root)
     resolved_raw["lead_type_id"] = int(lead_type_id)
     resolved_raw["models"] = copy.deepcopy(model_configs)
+    resolved_raw["parallelism"] = worker_counts
     resolved_raw["early_stopping"] = early_stopping.as_dict()
     resolved_raw["resolved"] = {
         "config_path": str(resolved_path),
@@ -1527,4 +1559,5 @@ def load_hyperparameter_search_config(
         monotonicity=monotonicity,
         output_root=output_root,
         model_configs=model_configs,
+        **worker_counts,
     )

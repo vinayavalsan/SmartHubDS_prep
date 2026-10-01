@@ -578,3 +578,61 @@ def test_hpo_config_rejects_invalid_search_space_definition(tmp_path):
 
     with pytest.raises(ValueError, match="low must be less than high"):
         training_config.load_hyperparameter_search_config(6, path)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "2"])
+def test_hpo_parallelism_rejects_invalid_worker_counts(tmp_path, value):
+    from smarthub.train_and_predict import config
+
+    payload = _hpo_payload()
+    payload["hyperparameter_search"]["defaults"]["parallelism"] = {"cv_jobs": value}
+    path = tmp_path / "hpo.yaml"
+    _write_yaml(path, payload)
+    with pytest.raises(ValueError, match="parallelism.cv_jobs"):
+        config.load_hyperparameter_search_config(6, path)
+
+
+def test_hpo_parallelism_defaults_and_explicit_values(tmp_path):
+    from smarthub.train_and_predict import config
+
+    payload = _hpo_payload()
+    path = tmp_path / "hpo.yaml"
+    _write_yaml(path, payload)
+    cfg = config.load_hyperparameter_search_config(6, path)
+    assert (cfg.cv_jobs, cfg.probability_jobs, cfg.optimizer_jobs) == (1, 1, 1)
+    payload["hyperparameter_search"]["defaults"]["parallelism"] = {
+        "cv_jobs": 2,
+        "probability_jobs": 3,
+        "optimizer_jobs": 1,
+    }
+    _write_yaml(path, payload)
+    cfg = config.load_hyperparameter_search_config(6, path)
+    assert (cfg.cv_jobs, cfg.probability_jobs, cfg.optimizer_jobs) == (2, 3, 1)
+    assert cfg.as_dict()["parallelism"]["probability_jobs"] == 3
+
+
+def test_hpo_rejects_nested_trial_and_fold_parallelism(tmp_path):
+    from smarthub.train_and_predict import config
+
+    payload = _hpo_payload()
+    defaults = payload["hyperparameter_search"]["defaults"]
+    defaults["parallelism"] = {"cv_jobs": 2}
+    defaults["search"]["n_jobs"] = 2
+    path = tmp_path / "hpo.yaml"
+    _write_yaml(path, payload)
+    with pytest.raises(ValueError, match="search.n_jobs=1"):
+        config.load_hyperparameter_search_config(6, path)
+
+
+def test_hpo_rejects_nested_model_parallelism(tmp_path):
+    from smarthub.train_and_predict import config
+
+    payload = _hpo_payload()
+    payload["hyperparameter_search"]["defaults"]["parallelism"] = {"cv_jobs": 2}
+    payload["hyperparameter_search"]["lead_types"][6]["models"]["lightgbm"][
+        "fixed_parameters"
+    ]["n_jobs"] = -1
+    path = tmp_path / "hpo.yaml"
+    _write_yaml(path, payload)
+    with pytest.raises(ValueError, match="fixed_parameters.n_jobs=1"):
+        config.load_hyperparameter_search_config(6, path)

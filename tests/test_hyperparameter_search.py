@@ -608,3 +608,224 @@ def test_suggest_parameter_rejects_unknown_type():
             "x",
             {"type": "unsupported"},
         )
+
+
+def _parallel_test_job(value, delay=0, fail=False):
+    import time
+
+    time.sleep(delay)
+    if fail:
+        raise ValueError("worker failed")
+    return value
+
+
+def test_parallel_map_preserves_input_order_and_propagates_errors():
+    jobs = [dict(value=1, delay=0.1), dict(value=2)]
+    assert hpo._parallel_map(_parallel_test_job, jobs, 2) == [1, 2]
+    assert hpo._parallel_map(_parallel_test_job, [], 2) == []
+    with pytest.raises(ValueError, match="worker failed"):
+        hpo._parallel_map(_parallel_test_job, [dict(value=1, fail=True)] * 2, 2)
+
+
+def _small_hpo_frame():
+    rng = np.random.default_rng(42)
+    return pd.DataFrame(
+        {
+            "bid": rng.uniform(0.25, 4, 120),
+            "state": ["CA", "TX", "NY"] * 40,
+            hpo.config.TARGET_COL: [0, 1] * 60,
+        }
+    )
+
+
+@pytest.mark.parametrize("early_stopping", [False, True])
+def test_parallel_cv_matches_sequential_lightgbm(early_stopping):
+    frame = _small_hpo_frame()
+    estimator = hpo._build_estimator(
+        "lightgbm",
+        ["bid"],
+        ["state"],
+        dict(
+            n_estimators=12,
+            num_leaves=4,
+            min_child_samples=5,
+            random_state=42,
+            n_jobs=1,
+            verbosity=-1,
+        ),
+        "none",
+        2,
+    )
+    kwargs = dict(
+        estimator=estimator,
+        X=frame[["bid", "state"]],
+        y=frame[hpo.config.TARGET_COL],
+        scoring="neg_log_loss",
+        cross_validation=TimeSeriesSplit(n_splits=3),
+        trial_number=1,
+        total_folds=3,
+        early_stopping_settings={
+            "enabled": early_stopping,
+            "stopping_rounds": 3,
+            "metric": "binary_logloss",
+        },
+    )
+    sequential = hpo._score_trial_folds(**kwargs, n_jobs=1)
+    parallel = hpo._score_trial_folds(**kwargs, n_jobs=2)
+    assert parallel[0] == pytest.approx(sequential[0], abs=1e-12)
+    assert parallel[1] == sequential[1]
+
+
+def test_parallel_cv_reports_single_class_fold():
+    from sklearn.dummy import DummyClassifier
+
+    kwargs = dict(
+        estimator=DummyClassifier(),
+        X=pd.DataFrame({"x": range(12)}),
+        y=pd.Series([0] * 12),
+        scoring="neg_log_loss",
+        cross_validation=TimeSeriesSplit(n_splits=2),
+        trial_number=1,
+        total_folds=2,
+        early_stopping_settings={"enabled": False},
+        n_jobs=2,
+    )
+    with pytest.raises(ValueError, match="only one target class"):
+        hpo._score_trial_folds(**kwargs)
+
+
+def test_parallel_probability_finalists_match_sequential():
+    frame = _small_hpo_frame()
+    trial = optuna.trial.create_trial(
+        params={},
+        distributions={},
+        value=-0.7,
+        user_attrs={"best_iteration_median": 8},
+    )
+    study = SimpleNamespace(trials=[trial])
+    settings = {
+        "early_stopping": {"enabled": True},
+        "calibration_cv": 2,
+        "calibration_methods": ["none", "sigmoid", "isotonic"],
+        "probability_shortlist_top_n": 1,
+    }
+    kwargs = dict(
+        study=study,
+        fixed_parameters=dict(
+            n_estimators=12,
+            num_leaves=4,
+            min_child_samples=5,
+            random_state=42,
+            n_jobs=1,
+            verbosity=-1,
+        ),
+        model_type="lightgbm",
+        numeric=["bid"],
+        categorical=["state"],
+        development=frame.iloc[:90],
+        holdout=frame.iloc[90:],
+    )
+    seq = hpo._evaluate_probability_candidates(**kwargs, settings=settings)
+    par = hpo._evaluate_probability_candidates(
+        **kwargs, settings={**settings, "probability_jobs": 2}
+    )
+    assert [r["calibration_method"] for r in par] == settings["calibration_methods"]
+    for left, right in zip(seq, par):
+        assert right["probability_metrics"] == pytest.approx(
+            left["probability_metrics"]
+        )
+        assert right["_model"].predict_proba(frame[["bid", "state"]]) == pytest.approx(
+            left["_model"].predict_proba(frame[["bid", "state"]])
+        )
+    assert hpo._select_probability_finalist(seq, "neg_log_loss")[
+        "calibration_method"
+    ] == (hpo._select_probability_finalist(par, "neg_log_loss")["calibration_method"])
+
+
+def test_probability_worker_retains_skip_policy(monkeypatch):
+    def fail(**kwargs):
+        raise ValueError("invalid candidate")
+
+    monkeypatch.setattr(hpo, "_evaluate_probability_candidate", fail)
+    assert (
+        hpo._evaluate_probability_candidate_safely(
+            trial=SimpleNamespace(number=3), calibration_method="none"
+        )
+        is None
+    )
+
+
+def test_optimizer_parallel_results_update_original_candidates(monkeypatch):
+    shortlist = [
+        {
+            "_model": model,
+            "trial_number": trial_number,
+            "calibration_method": "none",
+            "probability_metrics": {"log_loss": 0.5},
+        }
+        for trial_number, model in enumerate(("a", "b"))
+    ]
+
+    def evaluate(function, jobs, n_jobs):
+        assert n_jobs == 2
+        assert [job["model"] for job in jobs] == ["a", "b"]
+        return [
+            ({"total_expected_profit": 10}, {"passed": True}),
+            ({"total_expected_profit": 20}, {"passed": False}),
+        ]
+
+    monkeypatch.setattr(hpo, "_parallel_map", evaluate)
+    hpo._evaluate_optimizer_shortlist(
+        shortlist, pd.DataFrame(), [], {"optimizer_jobs": 2}
+    )
+    assert shortlist[0]["optimizer_metrics"]["total_expected_profit"] == 10
+    assert shortlist[1]["monotonicity"]["passed"] is False
+
+
+def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(tmp_path, monkeypatch):
+    """Exercise the full search with real fits and optimizer workers."""
+    import json
+    from pathlib import Path
+
+    import yaml
+
+    payload = yaml.safe_load(
+        hpo.config.paths.resolve("config/hyperparameter_search.yaml").read_text()
+    )
+    defaults = payload["hyperparameter_search"]["defaults"]
+    defaults["search"].update(n_trials=2, cv_folds=2)
+    defaults["early_stopping"].update(max_estimators=8, stopping_rounds=2)
+    defaults["finalists"].update(probability_shortlist_top_n=2, optimizer_top_n=2)
+    defaults["parallelism"]["optimizer_jobs"] = 2
+    defaults["calibration"]["methods"] = ["none", "sigmoid"]
+    defaults["output"]["root"] = str(tmp_path / "outputs")
+    path = tmp_path / "hpo.yaml"
+    path.write_text(yaml.safe_dump(payload))
+    frame = _small_hpo_frame()
+    frame["created_at"] = pd.date_range("2026-09-01", periods=len(frame), freq="h")
+    frame[hpo.config.REVENUE_COL] = 5.0
+    summary = {
+        "training_table_version": "snapshot-test",
+        "training_rows": len(frame),
+        "data_min_created_at": str(frame["created_at"].min()),
+        "data_max_created_at": str(frame["created_at"].max()),
+        "source_row_count": len(frame),
+    }
+    monkeypatch.setattr(
+        hpo.preprocessing,
+        "prepare_training_data",
+        lambda *args: (frame, ["bid"], ["state"], summary),
+    )
+    monkeypatch.setattr(hpo, "_write_optuna_plots", lambda **kwargs: {})
+    result = hpo.run_hyperparameter_search(6, "snapshot-test", path)
+    saved = json.loads(Path(result["summary_path"]).read_text())
+    assert saved["training_table_version"] == "snapshot-test"
+    assert saved["parallelism"] == {
+        "cv_jobs": 2,
+        "probability_jobs": 2,
+        "optimizer_jobs": 2,
+    }
+    assert saved["timings"] == result["timings"]
+    assert all(value >= 0 for value in saved["timings"].values())
+    assert result["optimizer_metrics"]["evaluated_rows"] > 0
+    assert result["monotonicity"]["passed"] is True
