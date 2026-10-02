@@ -64,7 +64,7 @@ def test_failure_payload_includes_error_and_mention(monkeypatch, capture_slack):
     ok = n.notify_failure("build-features", {"Lead type": "home (1)"}, error="boom")
     assert ok is True
     payload = capture_slack["payload"]
-    assert ":red_circle:" in payload["blocks"][0]["text"]["text"]
+    assert ":x:" in payload["blocks"][0]["text"]["text"]
     assert "boom" in payload["text"]
     # mention appears somewhere in the blocks
     dumped = json.dumps(payload)
@@ -112,7 +112,7 @@ def test_flow_failure_hook_builds_fields(capture_slack):
     payload = capture_slack["payload"]
     assert "auto (6)" in payload["text"]
     assert "Redshift timeout" in payload["text"]
-    assert ":red_circle:" in payload["blocks"][0]["text"]["text"]
+    assert ":x:" in payload["blocks"][0]["text"]["text"]
 
 
 def test_flow_failure_hook_swallows_bad_input(monkeypatch):
@@ -163,3 +163,57 @@ def test_grouped_payload_skips_empty_values(capture_slack):
     assert "a: 1" in payload["text"]  # the real field renders
     assert "x:" not in payload["text"]  # empty fields add no rows
     assert "y:" not in payload["text"]
+
+
+def test_critical_pings_and_routes(monkeypatch, capture_slack):
+    """Critical posts to the critical webhook and @here-pings the channel."""
+    monkeypatch.setenv(
+        "SLACK_WEBHOOK_CRITICAL_URL", "https://hooks.slack.test/critical"
+    )
+    ok = n.notify_critical("bid-api", {"TAT p99 (s)": 1.83}, error="p99 over target")
+    assert ok is True
+    assert capture_slack["url"] == "https://hooks.slack.test/critical"
+    body = capture_slack["payload"]["blocks"][0]["text"]["text"]
+    assert ":red_circle:" in body and "<!here>" in body
+
+
+def test_category_routing_selects_webhook(monkeypatch, capture_slack):
+    """Each severity posts to its own category webhook when configured."""
+    monkeypatch.setenv("SLACK_WEBHOOK_UPDATES_URL", "https://hooks.slack.test/updates")
+    monkeypatch.setenv(
+        "SLACK_WEBHOOK_FAILURES_URL", "https://hooks.slack.test/failures"
+    )
+    n.notify_success("data-pull", {"Rows": 5})
+    assert capture_slack["url"] == "https://hooks.slack.test/updates"
+    n.notify_failure("data-pull", {"Rows": 0}, error="boom")
+    assert capture_slack["url"] == "https://hooks.slack.test/failures"
+
+
+def test_category_falls_back_to_single_webhook(capture_slack):
+    """With no per-category URL set, posting falls back to SLACK_WEBHOOK_URL."""
+    n.notify_success("data-pull", {"Rows": 5})
+    assert capture_slack["url"] == "https://hooks.slack.test/T/B/xxx"
+
+
+def test_env_tag_in_title(monkeypatch, capture_slack):
+    """SLACK_ENV_LABEL shows (uppercased) in the title when set."""
+    monkeypatch.setenv("SLACK_ENV_LABEL", "prod")
+    n.notify_success("data-pull", {"Rows": 5})
+    body = capture_slack["payload"]["blocks"][0]["text"]["text"]
+    assert "SmartHub PROD · data-pull" in body
+
+
+def test_slack_enabled_with_only_category_webhook(monkeypatch):
+    """slack_enabled is True when only a per-category webhook is set."""
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    for env in (
+        "SLACK_WEBHOOK_UPDATES_URL",
+        "SLACK_WEBHOOK_WARNINGS_URL",
+        "SLACK_WEBHOOK_CRITICAL_URL",
+        "SLACK_WEBHOOK_FAILURES_URL",
+    ):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setenv(
+        "SLACK_WEBHOOK_CRITICAL_URL", "https://hooks.slack.test/critical"
+    )
+    assert n.slack_enabled() is True

@@ -1,11 +1,23 @@
-"""Slack notifications for the SmartHub pipelines (success and failure).
+"""Slack notifications for the SmartHub pipelines and services.
 
-Posts to a Slack Incoming Webhook whose URL lives in ``SLACK_WEBHOOK_URL``.
-Sends are best-effort (any failure is logged and swallowed so a notification
-problem never breaks a pipeline) and cleanly disabled (no-ops) when no webhook
-is configured. Uses only the standard library so it works everywhere the
-package runs. ``SLACK_ENV_LABEL`` sets the message label (defaults to the
-hostname) and ``SLACK_MENTION_ON_FAILURE`` an optional @-mention on failures.
+Severity-routed to four production channels, each with its own Slack Incoming
+Webhook:
+
+    success  -> updates   (SLACK_WEBHOOK_UPDATES_URL)
+    warning  -> warnings  (SLACK_WEBHOOK_WARNINGS_URL)
+    critical -> critical  (SLACK_WEBHOOK_CRITICAL_URL)   [@here]
+    failure  -> failures  (SLACK_WEBHOOK_FAILURES_URL)   [@here]
+
+If a category's webhook is not configured, the sender falls back to the single
+legacy ``SLACK_WEBHOOK_URL`` so nothing breaks during rollout. Sends are
+best-effort (any failure is logged and swallowed so a notification problem never
+breaks a pipeline) and cleanly disabled (no-ops) when no webhook is configured.
+Standard library only, so it works everywhere the package runs.
+
+``SLACK_ENV_LABEL`` sets the environment label shown in the title (e.g. ``PROD``)
+and the footer (defaults to the hostname in the footer only).
+``SLACK_MENTION_ON_FAILURE`` overrides the default ``@here`` ping used on
+critical/failure alerts (e.g. a specific ``<!subteam^ID>`` or ``<@USER>``).
 """
 
 from __future__ import annotations
@@ -20,34 +32,97 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+# Legacy single webhook — used as the fallback for every category.
 WEBHOOK_ENV = "SLACK_WEBHOOK_URL"
 ENV_LABEL_ENV = "SLACK_ENV_LABEL"
 MENTION_ENV = "SLACK_MENTION_ON_FAILURE"
 
+# Severities (internal status values) and the channel category each maps to.
 _SUCCESS = "success"
 _WARNING = "warning"
 _FAILURE = "failure"
+_CRITICAL = "critical"
+
+# severity -> category (channel) -> per-category webhook env var.
+_SEVERITY_CATEGORY = {
+    _SUCCESS: "updates",
+    _WARNING: "warnings",
+    _CRITICAL: "critical",
+    _FAILURE: "failures",
+}
+_CATEGORY_ENV = {
+    "updates": "SLACK_WEBHOOK_UPDATES_URL",
+    "warnings": "SLACK_WEBHOOK_WARNINGS_URL",
+    "critical": "SLACK_WEBHOOK_CRITICAL_URL",
+    "failures": "SLACK_WEBHOOK_FAILURES_URL",
+}
+# Severities that @here the channel so they are not missed.
+_PING_SEVERITIES = {_CRITICAL, _FAILURE}
+
 _EMOJI = {
     _SUCCESS: ":white_check_mark:",
     _WARNING: ":warning:",
-    _FAILURE: ":red_circle:",
+    _CRITICAL: ":red_circle:",
+    _FAILURE: ":x:",
+}
+_VERB = {
+    _SUCCESS: "completed",
+    _WARNING: "WARNING",
+    _CRITICAL: "CRITICAL",
+    _FAILURE: "FAILED",
 }
 _TIMEOUT_SECONDS = 10
 
 
-def slack_enabled() -> bool:
-    """True when a webhook URL is configured (otherwise sends are no-ops)."""
-    return bool(_webhook_url())
-
-
-def _webhook_url() -> str:
-    """Return the configured Slack webhook URL (stripped, may be empty)."""
+def _single_webhook_url() -> str:
+    """Return the legacy single webhook URL (stripped, may be empty)."""
     return os.environ.get(WEBHOOK_ENV, "").strip()
 
 
+def _category_webhook_url(category: str | None) -> str:
+    """Resolve the webhook for a channel category, falling back to the single one.
+
+    Inputs
+    ------
+    category : str | None
+        One of ``updates``/``warnings``/``critical``/``failures``; ``None`` or an
+        unknown value uses the legacy single webhook.
+
+    Returns
+    -------
+    str
+        The webhook URL to post to (empty when nothing is configured).
+    """
+    env = _CATEGORY_ENV.get(category or "")
+    if env:
+        url = os.environ.get(env, "").strip()
+        if url:
+            return url
+    return _single_webhook_url()
+
+
+def slack_enabled() -> bool:
+    """True when any webhook (single or per-category) is configured."""
+    if _single_webhook_url():
+        return True
+    return any(os.environ.get(env, "").strip() for env in _CATEGORY_ENV.values())
+
+
 def _env_label() -> str:
-    """Return the environment label, defaulting to the hostname."""
+    """Environment label for the footer, defaulting to the hostname."""
     return os.environ.get(ENV_LABEL_ENV, "").strip() or socket.gethostname()
+
+
+def _env_tag() -> str:
+    """Uppercased env tag for the title, only when explicitly set (else blank)."""
+    return os.environ.get(ENV_LABEL_ENV, "").strip().upper()
+
+
+def _mention(severity: str) -> str:
+    """The @-mention prefix for a severity (``@here`` on critical/failure)."""
+    if severity not in _PING_SEVERITIES:
+        return ""
+    return os.environ.get(MENTION_ENV, "").strip() or "<!here>"
 
 
 def _utc_now_str() -> str:
@@ -55,22 +130,24 @@ def _utc_now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def _post(payload: dict) -> bool:
-    """POST a Slack payload to the configured webhook.
+def _post(payload: dict, category: str | None = None) -> bool:
+    """POST a Slack payload to the webhook for ``category`` (best-effort).
 
-    Best-effort: logs and swallows any error, never raising.
+    Logs and swallows any error, never raising.
 
     Inputs
     ------
     payload : dict
         The Slack message payload to send as JSON.
+    category : str | None
+        Channel category used to pick the webhook; falls back to the single one.
 
     Returns
     -------
     bool
         True when delivered; False when disabled or the send failed.
     """
-    url = _webhook_url()
+    url = _category_webhook_url(category)
     if not url:
         logger.info("Slack webhook not configured; skipping notification.")
         return False
@@ -87,9 +164,6 @@ def _post(payload: dict) -> bool:
     except Exception as exc:  # noqa: BLE001 - notifications must never break flows
         logger.warning("Slack notification failed: %s", exc)
     return False
-
-
-_VERB = {_SUCCESS: "completed", _WARNING: "WARNING", _FAILURE: "FAILED"}
 
 
 def _rows(fields: dict) -> list[tuple[str, str]]:
@@ -112,6 +186,17 @@ def _table(rows: list[tuple[str, str]]) -> str:
         return ""
     width = max(len(k) for k, _ in rows)
     return "\n".join(f"{k.ljust(width)}   {v}" for k, v in rows)
+
+
+def _title(severity: str, pipeline: str, subject: str | None) -> str:
+    """Build the bold title line (optional @mention + emoji + env + area + verb)."""
+    emoji = _EMOJI.get(severity, "")
+    verb = _VERB.get(severity, severity.upper())
+    env = f" {_env_tag()}" if _env_tag() else ""
+    subj = f" · {subject}" if subject else ""
+    mention = _mention(severity)
+    prefix = f"{mention} " if mention else ""
+    return f"{prefix}{emoji} *SmartHub{env} · {pipeline} · {verb}{subj}*"
 
 
 def _assemble(head: list[str], rows: list[tuple[str, str]], footer_extra) -> dict:
@@ -137,15 +222,18 @@ def _assemble(head: list[str], rows: list[tuple[str, str]], footer_extra) -> dic
     return {"text": "\n".join(lines), "blocks": blocks}
 
 
-def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) -> dict:
+def _build_payload(
+    severity: str, pipeline: str, fields: dict, error: str | None
+) -> dict:
     """Build a code-block Slack message (title outside, key/values in a box).
 
     Inputs
     ------
-    status : str
-        ``success``, ``warning`` or ``failure``; selects the emoji and verb.
+    severity : str
+        ``success``/``warning``/``critical``/``failure``; selects emoji, verb,
+        channel, and whether to @here.
     pipeline : str
-        Pipeline name shown in the title.
+        Pipeline/area name shown in the title.
     fields : dict
         Label/value pairs rendered as a monospace table (empty values skipped).
     error : str | None
@@ -156,16 +244,7 @@ def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) 
     dict
         A payload with ``text`` and ``blocks`` keys.
     """
-    emoji = _EMOJI.get(status, "")
-    verb = _VERB.get(status, status.upper())
-    head = [f"{emoji} *SmartHub · {pipeline} · {verb}*"]
-
-    # Optional @-mention on failure (rendered above the box).
-    if status == _FAILURE:
-        mention = os.environ.get(MENTION_ENV, "").strip()
-        if mention:
-            head.append(f"{mention} attention needed")
-
+    head = [_title(severity, pipeline, None)]
     rows = _rows(fields)
     if error:
         text = str(error).strip()
@@ -175,107 +254,8 @@ def _build_payload(status: str, pipeline: str, fields: dict, error: str | None) 
     return _assemble(head, rows, footer_extra=None)
 
 
-def notify_raw(payload: dict) -> bool:
-    """Send a fully custom Slack Block Kit payload (best-effort).
-
-    Escape hatch for callers that need a layout the structured helpers below
-    (``notify``, ``notify_success_grouped``, ...) don't produce -- still
-    goes through the same webhook config check, timeout, and
-    best-effort/swallow-errors behavior as everything else in this module.
-
-    Inputs
-    ------
-    payload : dict
-        A Slack message payload, e.g. ``{"text": ..., "blocks": [...]}``.
-
-    Returns
-    -------
-    bool
-        True when delivered.
-    """
-    return _post(payload)
-
-
-def notify(status: str, pipeline: str, fields: dict, error: str | None = None) -> bool:
-    """Send a Slack notification (best-effort).
-
-    Inputs
-    ------
-    status : str
-        ``success`` or ``failure``.
-    pipeline : str
-        Pipeline name shown in the header.
-    fields : dict
-        Label/value pairs to display.
-    error : str | None
-        Optional error text to include.
-
-    Returns
-    -------
-    bool
-        True when delivered.
-    """
-    return _post(_build_payload(status, pipeline, fields, error))
-
-
-def notify_success(pipeline: str, fields: dict) -> bool:
-    """Notify that a pipeline run completed successfully.
-
-    Inputs
-    ------
-    pipeline : str
-        Pipeline name shown in the header.
-    fields : dict
-        Label/value pairs to display.
-
-    Returns
-    -------
-    bool
-        True when delivered.
-    """
-    return notify(_SUCCESS, pipeline, fields)
-
-
-def notify_warning(pipeline: str, fields: dict) -> bool:
-    """Notify about a non-fatal pipeline warning.
-
-    Inputs
-    ------
-    pipeline : str
-        Pipeline name shown in the header.
-    fields : dict
-        Label/value pairs to display.
-
-    Returns
-    -------
-    bool
-        True when delivered.
-    """
-    return notify(_WARNING, pipeline, fields)
-
-
-def notify_failure(pipeline: str, fields: dict, error: str | None = None) -> bool:
-    """Notify that a pipeline run failed.
-
-    Inputs
-    ------
-    pipeline : str
-        Pipeline name shown in the header.
-    fields : dict
-        Label/value pairs to display.
-    error : str | None
-        Optional error text to include.
-
-    Returns
-    -------
-    bool
-        True when delivered.
-    """
-    return notify(_FAILURE, pipeline, fields, error=error)
-
-
 def _build_grouped_payload(
-    status: str,
+    severity: str,
     pipeline: str,
     subject: str | None,
     headline: str | None,
@@ -284,44 +264,79 @@ def _build_grouped_payload(
 ) -> dict:
     """Build a code-block Slack message from grouped fields.
 
-    Title (emoji + pipeline + verb + subject) and the headline render as normal
-    mrkdwn above the box; the groups are flattened into one column-aligned
-    key/value table inside a ``` code block ``` (group titles are dropped — the
-    trimmed field keys are self-describing). Empty values/groups are skipped.
-
-    Inputs
-    ------
-    status : str
-        ``success``, ``warning`` or ``failure``.
-    pipeline : str
-        Pipeline name shown in the title.
-    subject : str | None
-        Optional subject appended to the title.
-    headline : str | None
-        Prominent mrkdwn line under the title (e.g. the decision) — rendered
-        outside the box so its bold/links/emoji display.
-    groups : list
-        Ordered ``(title, fields_dict)`` pairs; titles are dropped, fields are
-        flattened into the table in order.
-    footer_extra : str | None
-        Extra mrkdwn appended to the context footer (e.g. a link).
-
-    Returns
-    -------
-    dict
-        A payload with ``text`` and ``blocks`` keys.
+    Title (mention + emoji + pipeline + verb + subject) and the headline render
+    as normal mrkdwn above the box; the groups are flattened into one
+    column-aligned key/value table inside a ``` code block ``` (group titles are
+    dropped — the trimmed field keys are self-describing). Empty values/groups
+    are skipped.
     """
-    emoji = _EMOJI.get(status, "")
-    verb = _VERB.get(status, status.upper())
-    subj = f" · {subject}" if subject else ""
-    head = [f"{emoji} *SmartHub · {pipeline} · {verb}{subj}*"]
+    head = [_title(severity, pipeline, subject)]
     if headline:
         head.append(headline)
-
     rows: list[tuple[str, str]] = []
-    for _title, fields in groups or []:
+    for _group_title, fields in groups or []:
         rows.extend(_rows(fields))
     return _assemble(head, rows, footer_extra)
+
+
+def _category(severity: str) -> str:
+    """Channel category for a severity (defaults to ``failures`` if unknown)."""
+    return _SEVERITY_CATEGORY.get(severity, "failures")
+
+
+def notify_raw(payload: dict, category: str | None = None) -> bool:
+    """Send a fully custom Slack Block Kit payload (best-effort).
+
+    Escape hatch for callers that need a layout the structured helpers don't
+    produce. Routes to ``category``'s webhook (or the single fallback) and goes
+    through the same config check, timeout, and swallow-errors behavior.
+    """
+    return _post(payload, category)
+
+
+def notify(
+    severity: str, pipeline: str, fields: dict, error: str | None = None
+) -> bool:
+    """Send a severity-routed Slack notification (best-effort)."""
+    return _post(_build_payload(severity, pipeline, fields, error), _category(severity))
+
+
+def notify_grouped(
+    severity: str,
+    pipeline: str,
+    *,
+    subject: str | None = None,
+    headline: str | None = None,
+    groups: list | None = None,
+    footer_extra: str | None = None,
+) -> bool:
+    """Send a severity-routed grouped notification (best-effort)."""
+    return _post(
+        _build_grouped_payload(
+            severity, pipeline, subject, headline, groups or [], footer_extra
+        ),
+        _category(severity),
+    )
+
+
+def notify_success(pipeline: str, fields: dict) -> bool:
+    """Notify a successful operation -> #updates."""
+    return notify(_SUCCESS, pipeline, fields)
+
+
+def notify_warning(pipeline: str, fields: dict) -> bool:
+    """Notify a non-fatal warning -> #warnings."""
+    return notify(_WARNING, pipeline, fields)
+
+
+def notify_failure(pipeline: str, fields: dict, error: str | None = None) -> bool:
+    """Notify a failed operation/workflow -> #failures (@here)."""
+    return notify(_FAILURE, pipeline, fields, error=error)
+
+
+def notify_critical(pipeline: str, fields: dict, error: str | None = None) -> bool:
+    """Notify a serious API-health/model condition -> #critical (@here)."""
+    return notify(_CRITICAL, pipeline, fields, error=error)
 
 
 def notify_success_grouped(
@@ -332,30 +347,14 @@ def notify_success_grouped(
     groups: list | None = None,
     footer_extra: str | None = None,
 ) -> bool:
-    """Notify success with a grouped, sectioned layout (best-effort).
-
-    Inputs
-    ------
-    pipeline : str
-        Pipeline name shown in the header.
-    subject : str | None
-        Optional subject appended to the header.
-    headline : str | None
-        Prominent mrkdwn line under the header.
-    groups : list | None
-        Ordered ``(title, fields_dict)`` pairs to render.
-    footer_extra : str | None
-        Extra text appended to the context footer.
-
-    Returns
-    -------
-    bool
-        True when delivered.
-    """
-    return _post(
-        _build_grouped_payload(
-            _SUCCESS, pipeline, subject, headline, groups or [], footer_extra
-        )
+    """Notify success with a grouped, sectioned layout -> #updates."""
+    return notify_grouped(
+        _SUCCESS,
+        pipeline,
+        subject=subject,
+        headline=headline,
+        groups=groups,
+        footer_extra=footer_extra,
     )
 
 
@@ -376,20 +375,10 @@ def _run_url(flow_run) -> str:
 
 
 def flow_failure_hook(flow, flow_run, state) -> None:
-    """Prefect ``on_failure`` hook that notifies Slack when a flow fails.
+    """Prefect ``on_failure`` hook that notifies #failures when a flow fails.
 
-    Attach with ``@flow(..., on_failure=[flow_failure_hook])``. Pulls the
-    lead type from the run's parameters so alerts are self-identifying.
-    Never raises.
-
-    Inputs
-    ------
-    flow : Flow
-        The Prefect flow whose name is used as the pipeline label.
-    flow_run : FlowRun
-        The failed run; supplies parameters, name and deployment id.
-    state : State
-        The terminal state; its message is used as the error text.
+    Attach with ``@flow(..., on_failure=[flow_failure_hook])``. Pulls the lead
+    type from the run's parameters so alerts are self-identifying. Never raises.
     """
     try:
         params = dict(getattr(flow_run, "parameters", {}) or {})

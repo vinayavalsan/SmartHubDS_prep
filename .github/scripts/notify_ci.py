@@ -86,14 +86,17 @@ def _header(text: str) -> dict:
 
 
 def _send(
-    header_text: str, blocks_middle: list[dict], fallback_lines: list[str]
+    header_text: str,
+    blocks_middle: list[dict],
+    fallback_lines: list[str],
+    category: str | None = None,
 ) -> None:
     run_url = _env("RUN_URL")
     blocks = [_header(header_text)]
     blocks.extend(blocks_middle)
     blocks.append(_section(f":link: *Workflow:*\n{run_url}"))
     fallback_lines = fallback_lines + [f"Workflow: {run_url}"]
-    notify_raw({"text": "\n".join(fallback_lines), "blocks": blocks})
+    notify_raw({"text": "\n".join(fallback_lines), "blocks": blocks}, category)
 
 
 def _notify_success() -> None:
@@ -123,6 +126,7 @@ def _notify_success() -> None:
             "Pull the latest images:",
             pulls,
         ],
+        category="updates",
     )
 
 
@@ -156,6 +160,7 @@ def _notify_failure(failed: list[str], not_run: list[str], messages: dict) -> No
             metadata,
             f"Error:\n{error_text}",
         ],
+        category="failures",
     )
 
 

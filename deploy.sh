@@ -39,7 +39,13 @@ export IMAGE_REPO
 # ---- Slack helper: slack <good|danger> <title> <detail> -------------------
 slack() {
   local level="$1" title="$2" detail="$3" hook color when
-  hook="$(envval SLACK_WEBHOOK_URL)"
+  # Route by severity: success -> updates channel, failure -> failures channel.
+  # Fall back to the single legacy webhook when a per-category one is unset.
+  case "$level" in
+    danger) hook="$(envval SLACK_WEBHOOK_FAILURES_URL)" ;;
+    *) hook="$(envval SLACK_WEBHOOK_UPDATES_URL)" ;;
+  esac
+  [ -z "${hook:-}" ] && hook="$(envval SLACK_WEBHOOK_URL)"
   [ -z "${hook:-}" ] && return 0
   command -v curl >/dev/null 2>&1 || return 0
   case "$level" in danger) color="#e01e5a" ;; *) color="#2eb67d" ;; esac

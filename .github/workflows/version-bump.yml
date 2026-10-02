@@ -134,7 +134,7 @@ jobs:
       - name: Notify Slack (released)
         if: success()
         env:
-          HOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          HOOK: ${{ secrets.SLACK_WEBHOOK_UPDATES_URL || secrets.SLACK_WEBHOOK_URL }}
           NEW: ${{ steps.ver.outputs.new }}
           REPO_NS: ${{ secrets.DOCKERHUB_USERNAME }}/smarthub
           ACTOR: ${{ github.actor }}
@@ -164,7 +164,7 @@ jobs:
       - name: Notify Slack (failed)
         if: failure()
         env:
-          HOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          HOOK: ${{ secrets.SLACK_WEBHOOK_FAILURES_URL || secrets.SLACK_WEBHOOK_URL }}
           NEW: ${{ steps.ver.outputs.new }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

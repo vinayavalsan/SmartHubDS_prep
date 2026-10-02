@@ -31,6 +31,8 @@ def thresholds() -> dict[str, float]:
         "no_requests_minutes": task_config.get_float(
             "slo", "no_requests_minutes", 10.0
         ),
+        # Predictions slower than the 1s TAT in the window; 0 => alert on even one.
+        "predictions_over_1s": task_config.get_int("slo", "predictions_over_1s", 0),
     }
 
 
@@ -55,6 +57,22 @@ def compute_slis(store, window_minutes: int = 15) -> dict[str, Any]:
     )
     errors = sum(1 for r in rows if r.get("status") == "error")
     within_1s = sum(1 for t in tats if t <= 1.0)
+
+    # Individual predictions slower than the 1s TAT, slowest first, with the
+    # prediction_id + time so an alert can point straight at them in the log.
+    slow = sorted(
+        (
+            (
+                r.get("prediction_id"),
+                float(r["tat_seconds"]),
+                r.get("created_at"),
+            )
+            for r in rows
+            if r.get("tat_seconds") is not None and float(r["tat_seconds"]) > 1.0
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
 
     # Freshness: seconds since the most recent successful request.
     last_ok_age = None
@@ -88,6 +106,8 @@ def compute_slis(store, window_minutes: int = 15) -> dict[str, Any]:
         "shap_backlog": store.pending_shap_count(),
         "last_ok_age_seconds": last_ok_age,
         "decision_paths": paths,
+        "over_1s_count": len(slow),
+        "over_1s_examples": slow[:5],
     }
 
 
@@ -107,6 +127,7 @@ def evaluate_alerts(slis: dict, thr: dict | None = None) -> list[dict]:
         breaches.append(
             {
                 "metric": "tat_p99_seconds",
+                "severity": "critical",
                 "value": round(p99, 3),
                 "threshold": thr["tat_p99_seconds"],
                 "message": f"TAT p99 {p99:.3f}s > {thr['tat_p99_seconds']}s "
@@ -119,6 +140,7 @@ def evaluate_alerts(slis: dict, thr: dict | None = None) -> list[dict]:
         breaches.append(
             {
                 "metric": "error_rate_pct",
+                "severity": "critical",
                 "value": err,
                 "threshold": thr["error_rate_pct"],
                 "message": f"Error rate {err:.2f}% > {thr['error_rate_pct']}%.",
@@ -130,6 +152,7 @@ def evaluate_alerts(slis: dict, thr: dict | None = None) -> list[dict]:
         breaches.append(
             {
                 "metric": "shap_backlog",
+                "severity": "warning",
                 "value": backlog,
                 "threshold": thr["shap_backlog"],
                 "message": f"SHAP backlog {backlog} rows > {thr['shap_backlog']} "
@@ -142,10 +165,27 @@ def evaluate_alerts(slis: dict, thr: dict | None = None) -> list[dict]:
         breaches.append(
             {
                 "metric": "no_requests_minutes",
+                "severity": "critical",
                 "value": round(age / 60, 1),
                 "threshold": thr["no_requests_minutes"],
                 "message": f"No successful request for {age/60:.1f} min "
                 f"> {thr['no_requests_minutes']} min (possible outage).",
+            }
+        )
+
+    over = slis.get("over_1s_count") or 0
+    if over > thr["predictions_over_1s"]:
+        breaches.append(
+            {
+                "metric": "predictions_over_1s",
+                "severity": "failure",
+                "value": over,
+                "threshold": thr["predictions_over_1s"],
+                "message": (
+                    f"{over} prediction(s) exceeded the 1.0s TAT in the window."
+                ),
+                "examples": slis.get("over_1s_examples") or [],
+                "requests": slis.get("requests"),
             }
         )
 
