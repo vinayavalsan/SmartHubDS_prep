@@ -1,5 +1,6 @@
 """MLflow integration for SmartHub model training and promotion."""
 
+import json
 import logging
 import math
 import os
@@ -149,6 +150,7 @@ def log_training_run(
     extra_params=None,
     extra_tags=None,
     optimizer_metrics=None,
+    resolved_training_config=None,
 ):
     """Log a complete SmartHub training run to MLflow.
 
@@ -221,6 +223,10 @@ def log_training_run(
             str(training_config_path),
             artifact_path="config",
         )
+        if resolved_training_config is not None:
+            mlflow.log_dict(
+                resolved_training_config, "config/resolved_training_config.json"
+            )
         mlflow.log_params(dict(model_params))
         mlflow.sklearn.log_model(
             sk_model=model,
@@ -240,6 +246,59 @@ def log_training_run(
             "mlflow_tracking_uri": tracking_uri,
             "mlflow_model_uri": f"runs:/{run.info.run_id}/model",
         }
+
+
+def log_hpo_run(run_output_dir, settings, lead_type_name):
+    """Record a completed HPO search and its immutable parameter artifact."""
+    import yaml
+
+    folder = Path(run_output_dir)
+    summary = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
+    parameter_path = folder / "best_parameters.yaml"
+    artifact = yaml.safe_load(parameter_path.read_text(encoding="utf-8"))
+    tracking_uri, experiment_id = _configure_tracking(
+        settings["tracking_db_path"],
+        settings["artifact_root"],
+        f"{settings['experiment_name']}_{lead_type_name}",
+    )
+    with mlflow.start_run(
+        experiment_id=experiment_id, run_name=artifact["hpo_run_id"]
+    ) as run:
+        metadata = {
+            "hpo_mlflow_run_id": run.info.run_id,
+            "hpo_mlflow_tracking_uri": tracking_uri,
+        }
+        artifact.update(metadata)
+        parameter_path.write_text(
+            yaml.safe_dump(artifact, sort_keys=False), encoding="utf-8"
+        )
+        summary.update(metadata)
+        (folder / "summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        for key in (
+            "lead_type_id",
+            "model_type",
+            "training_table_version",
+            "parameter_version",
+            "hpo_run_id",
+            "code_version",
+        ):
+            if summary.get(key) is not None:
+                mlflow.log_param(key, summary[key])
+        mlflow.log_params(artifact["model_settings"]["model_parameters"])
+        for key, value in artifact["model_settings"]["calibration"].items():
+            mlflow.log_param(f"calibration_{key}", value)
+        for group in (
+            "selected_holdout_probability_metrics",
+            "selected_optimizer_metrics",
+        ):
+            for key, value in (summary.get(group) or {}).items():
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    mlflow.log_metric(f"{group}_{key}", value)
+        mlflow.log_artifacts(str(folder), artifact_path="hpo")
+        mlflow.set_tag("run_type", "hpo")
+        return metadata
 
 
 def _find_training_run(client, experiment_id, training_run_id):

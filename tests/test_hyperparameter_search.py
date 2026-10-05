@@ -16,7 +16,19 @@ import pandas as pd
 import pytest
 from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit
 
+from smarthub.core import notifications
 from smarthub.train_and_predict import hyperparameter_search as hpo
+
+
+@pytest.fixture(autouse=True)
+def disable_slack_delivery(monkeypatch):
+    payloads = []
+    monkeypatch.setattr(
+        notifications,
+        "_post",
+        lambda payload, category=None: payloads.append(payload) or True,
+    )
+    return payloads
 
 
 def _frame(n: int = 20) -> pd.DataFrame:
@@ -640,6 +652,7 @@ def _small_hpo_frame():
 
 @pytest.mark.parametrize("early_stopping", [False, True])
 def test_parallel_cv_matches_sequential_lightgbm(early_stopping):
+    pytest.importorskip("lightgbm")
     frame = _small_hpo_frame()
     estimator = hpo._build_estimator(
         "lightgbm",
@@ -695,6 +708,7 @@ def test_parallel_cv_reports_single_class_fold():
 
 
 def test_parallel_probability_finalists_match_sequential():
+    pytest.importorskip("lightgbm")
     frame = _small_hpo_frame()
     trial = optuna.trial.create_trial(
         params={},
@@ -782,8 +796,12 @@ def test_optimizer_parallel_results_update_original_candidates(monkeypatch):
     assert shortlist[1]["monotonicity"]["passed"] is False
 
 
-def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(tmp_path, monkeypatch):
+def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
+    tmp_path, monkeypatch, disable_slack_delivery
+):
     """Exercise the full search with real fits and optimizer workers."""
+    pytest.importorskip("lightgbm")
+    pytest.importorskip("mlflow")
     import json
     from pathlib import Path
 
@@ -799,6 +817,8 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(tmp_path, monke
     defaults["parallelism"]["optimizer_jobs"] = 2
     defaults["calibration"]["methods"] = ["none", "sigmoid"]
     defaults["output"]["root"] = str(tmp_path / "outputs")
+    defaults["mlflow"]["tracking_db_path"] = str(tmp_path / "mlflow.db")
+    defaults["mlflow"]["artifact_root"] = str(tmp_path / "mlruns")
     path = tmp_path / "hpo.yaml"
     path.write_text(yaml.safe_dump(payload))
     frame = _small_hpo_frame()
@@ -818,6 +838,9 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(tmp_path, monke
     )
     monkeypatch.setattr(hpo, "_write_optuna_plots", lambda **kwargs: {})
     result = hpo.run_hyperparameter_search(6, "snapshot-test", path)
+    assert "HPO started" in disable_slack_delivery[0]["text"]
+    assert "HPO completed; parameters saved" in disable_slack_delivery[-1]["text"]
+    assert result["hpo_run_id"] in disable_slack_delivery[-1]["text"]
     saved = json.loads(Path(result["summary_path"]).read_text())
     assert saved["training_table_version"] == "snapshot-test"
     assert saved["parallelism"] == {
@@ -829,3 +852,155 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(tmp_path, monke
     assert all(value >= 0 for value in saved["timings"].values())
     assert result["optimizer_metrics"]["evaluated_rows"] > 0
     assert result["monotonicity"]["passed"] is True
+
+    # The real HPO result is consumed directly by training, including calibration
+    # and the reserved rows, without copying model values into training.yaml.
+    from smarthub.train_and_predict import model_parameters, train
+
+    artifact = model_parameters.load_artifact(result["parameters_path"], 6)
+    assert artifact["parameter_version"] == result["parameter_version"]
+    assert artifact["hpo_run_id"] == result["hpo_run_id"]
+    assert artifact["hpo_mlflow_run_id"] == result["hpo_mlflow_run_id"]
+    assert artifact["hpo_mlflow_run_id"]
+    training_payload = yaml.safe_load(
+        hpo.config.paths.resolve("config/training.yaml").read_text()
+    )
+    training_payload["training"]["lead_types"][6]["parameters"]["current_file"] = str(
+        tmp_path / "current.yaml"
+    )
+    training_payload["training"]["defaults"]["early_stopping"].update(
+        max_estimators=8, stopping_rounds=2
+    )
+    training_path = tmp_path / "training.yaml"
+    training_path.write_text(yaml.safe_dump(training_payload))
+    original_load = hpo.config.load_training_config
+    monkeypatch.setattr(
+        hpo.config,
+        "load_training_config",
+        lambda lead_type_id, config_path=None, model_settings=None: original_load(
+            lead_type_id,
+            config_path=config_path or training_path,
+            model_settings=model_settings,
+        ),
+    )
+    summary.update(dropped_rows=0, win_rate=0.5, missing_feature_columns=[])
+    ctx = train.TrainingContext(
+        lead_type_id=6, parameter_file=result["parameters_path"]
+    )
+    train.stage_prepare_data(ctx)
+    train.stage_split_and_diagnostics(ctx)
+    train.stage_fit_model(ctx)
+    assert ctx.version == "snapshot-test"
+    assert (
+        model_parameters.settings_from_config(ctx.training_config)
+        == artifact["model_settings"]
+    )
+    assert ctx.test_df.index.tolist() == artifact["data"]["test_positions"]
+    assert ctx.train_df.index.tolist() == artifact["data"]["training_positions"]
+    assert not (tmp_path / "current.yaml").exists()
+
+    model_parameters.write_current_parameters(
+        ctx.training_config,
+        6,
+        {
+            "model_settings": artifact["model_settings"],
+            "parameter_version": artifact["parameter_version"],
+            "training_run_id": "approved_candidate",
+            "hpo_run_id": artifact["hpo_run_id"],
+            "hpo_mlflow_run_id": artifact["hpo_mlflow_run_id"],
+        },
+    )
+    current_path = tmp_path / "current.yaml"
+    current_yaml = yaml.safe_load(current_path.read_text())
+    hpo_yaml = yaml.safe_load(Path(result["parameters_path"]).read_text())
+    assert current_yaml.keys() == hpo_yaml.keys()
+    assert current_yaml["model_settings"] == hpo_yaml["model_settings"]
+    assert "models" not in hpo_yaml and "calibration" not in hpo_yaml
+    # The approved current artifact is also accepted explicitly, using fresh
+    # data rather than treating inherited HPO provenance as a pending candidate.
+    versions = []
+
+    def prepare_latest(*args):
+        versions.append(args[-1])
+        return frame, ["bid"], ["state"], summary
+
+    monkeypatch.setattr(hpo.preprocessing, "prepare_training_data", prepare_latest)
+    daily = train.TrainingContext(lead_type_id=6, parameter_file=str(current_path))
+    train.stage_prepare_data(daily)
+    train.stage_split_and_diagnostics(daily)
+    assert versions == [None]
+    assert daily.parameter_info["approved_training_run_id"] == "approved_candidate"
+
+
+def test_search_reports_started_and_completed_without_claiming_promotion(
+    disable_slack_delivery,
+):
+    result = {
+        "hpo_run_id": "hpo_selected",
+        "parameter_version": "params_selected",
+        "hpo_mlflow_run_id": "mlflow_selected",
+        "model_type": "lightgbm",
+        "selected_trial": 0,
+        "selected_calibration_method": "none",
+        "holdout_probability_metrics": {"log_loss": 0.4},
+        "parameters_path": "/data/hpo/best_parameters.yaml",
+    }
+
+    @hpo._report_search
+    def search(lead_type_id, version, config_path):
+        assert lead_type_id == 6 and version == "dataset_v1" and config_path is None
+        return result
+
+    assert search(6, version="dataset_v1") is result
+    assert len(disable_slack_delivery) == 2
+    assert "STARTED" in disable_slack_delivery[0]["text"]
+    assert "auto (6)" in disable_slack_delivery[0]["text"]
+    text = disable_slack_delivery[1]["text"]
+    assert "HPO completed; parameters saved" in text
+    assert "hpo_selected" in text and "mlflow_selected" in text
+    assert "params_selected" in text and "0.4" in text
+    assert "promoted" not in text.lower()
+
+
+def test_search_failure_alert_preserves_original_exception(disable_slack_delivery):
+    error = ValueError("insufficient data")
+
+    @hpo._report_search
+    def search(*args):
+        raise error
+
+    with pytest.raises(ValueError) as caught:
+        search(1)
+    assert caught.value is error
+    assert len(disable_slack_delivery) == 2
+    text = disable_slack_delivery[-1]["text"]
+    assert "FAILED" in text and "HPO failed" in text
+    assert "home (1)" in text and "ValueError: insufficient data" in text
+
+
+def test_slack_delivery_error_never_changes_search_result(monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError("Slack unavailable")
+
+    monkeypatch.setattr(notifications, "_post", broken)
+    result = {"hpo_run_id": "completed"}
+
+    @hpo._report_search
+    def search(*args):
+        return result
+
+    assert search(6) is result
+
+
+def test_slack_delivery_error_never_masks_search_exception(monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError("Slack unavailable")
+
+    monkeypatch.setattr(notifications, "_post", broken)
+
+    @hpo._report_search
+    def search(*args):
+        raise ValueError("search failed")
+
+    with pytest.raises(ValueError, match="search failed"):
+        search(6)

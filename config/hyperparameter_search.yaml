@@ -49,6 +49,12 @@ hyperparameter_search:
       stopping_rounds: 50
       max_estimators: 2000
       metric: binary_logloss
+    mlflow:
+      enabled: true
+      required: true
+      tracking_db_path: data/mlflow.db
+      artifact_root: data/mlruns
+      experiment_name: anton_hpo
   lead_types:
     6:
       name: auto

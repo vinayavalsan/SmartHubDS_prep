@@ -456,6 +456,7 @@ def _resolve_mlflow_production(cfg: Any) -> dict[str, str]:
 def load_training_config(
     lead_type_id: int,
     config_path: str | Path | None = None,
+    model_settings: dict | None = None,
 ) -> TrainingConfig:
     """Load and validate the complete training configuration.
 
@@ -504,6 +505,27 @@ def load_training_config(
         lead_type_root,
         f"training.lead_types.{lead_type_id}",
     )
+    if model_settings is None:
+        parameter_policy = training_root.get("parameters") or {}
+        current_file = parameter_policy.get("current_file")
+        if current_file and paths.resolve(current_file).exists():
+            from .model_parameters import load_artifact
+
+            model_settings = load_artifact(current_file, lead_type_id)["model_settings"]
+        bootstrap_file = parameter_policy.get("bootstrap_file")
+        if model_settings is None and bootstrap_file:
+            from .model_parameters import load_artifact
+
+            model_settings = load_artifact(bootstrap_file, lead_type_id)[
+                "model_settings"
+            ]
+    if model_settings is not None:
+        from .model_parameters import normalize_settings
+
+        selected = normalize_settings(model_settings)
+        training_root["model_type"] = selected["model_type"]
+        training_root["models"] = {selected["model_type"]: selected["model_parameters"]}
+        training_root["calibration"] = selected["calibration"]
     calibration_root = _mapping(
         training_root.get("calibration"),
         "training.calibration",

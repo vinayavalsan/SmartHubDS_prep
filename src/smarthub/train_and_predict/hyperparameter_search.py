@@ -11,8 +11,10 @@ import argparse
 import json
 import time
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable
+from uuid import uuid4
 
 import numpy as np
 import optuna
@@ -23,14 +25,137 @@ from sklearn.base import clone
 from sklearn.metrics import brier_score_loss, get_scorer, log_loss
 from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, train_test_split
 
+from smarthub.core import notifications
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.core.logging_utils import get_logger
 
-from . import config, feature_diagnostics, models, optimizer_evaluation, preprocessing
+from . import (
+    config,
+    feature_diagnostics,
+    model_parameters,
+    models,
+    optimizer_evaluation,
+    preprocessing,
+)
 
 logger = get_logger(__name__)
 
 _PROBABILITY_SCORERS = {"neg_log_loss", "neg_brier_score"}
+
+
+def _notification_fields(lead_type_id):
+    try:
+        label = f"{resolve_lead_type_name(lead_type_id)} ({lead_type_id})"
+    except (ValueError, KeyError, TypeError):
+        label = str(lead_type_id)
+    return {"Lead type": label}
+
+
+def _send_notification(status, fields, error=None):
+    try:
+        delivered = notifications.notify(status, "hpo", fields, error=error)
+        if not delivered:
+            logger.info("HPO Slack alert was not delivered or Slack is disabled.")
+    except Exception:
+        logger.warning("HPO Slack notification failed; run continues.", exc_info=True)
+
+
+def _report_search(function):
+    """Report the public search entrypoint, including CLI and Prefect calls."""
+
+    @wraps(function)
+    def wrapped(lead_type_id, version=None, config_path=None):
+        started = time.perf_counter()
+        fields = {
+            **_notification_fields(lead_type_id),
+            "Status": "HPO started",
+            "Requested dataset": version or "latest",
+        }
+        _send_notification("started", fields)
+        try:
+            result = function(lead_type_id, version, config_path)
+        except Exception as exc:
+            _send_notification(
+                "failure",
+                {
+                    **fields,
+                    "Status": "HPO failed",
+                    "Duration (seconds)": round(time.perf_counter() - started, 1),
+                },
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        _send_notification(
+            "success",
+            {
+                **fields,
+                "Status": "HPO completed; parameters saved",
+                "HPO run": result.get("hpo_run_id"),
+                "Parameter version": result.get("parameter_version"),
+                "HPO MLflow run": result.get("hpo_mlflow_run_id"),
+                "Model": result.get("model_type"),
+                "Selected trial": result.get("selected_trial"),
+                "Calibration": result.get("selected_calibration_method"),
+                "Holdout log loss": (
+                    result.get("holdout_probability_metrics") or {}
+                ).get("log_loss"),
+                "Parameter file": result.get("parameters_path"),
+                "Duration (seconds)": round(time.perf_counter() - started, 1),
+            },
+        )
+        return result
+
+    return wrapped
+
+
+def notify_candidate_result(lead_type_id, hpo_result, training_result, state=None):
+    """Keep successful search separate from acceptance of its trained candidate."""
+    promoted = training_result.get("promoted") is True
+    state = state or {}
+    _send_notification(
+        "success" if promoted else "warning",
+        {
+            **_notification_fields(lead_type_id),
+            "Status": (
+                "HPO candidate promoted" if promoted else "HPO candidate not promoted"
+            ),
+            "HPO run": hpo_result.get("hpo_run_id"),
+            "Parameter version": hpo_result.get("parameter_version"),
+            "Training run": training_result.get("training_run_id"),
+            "Promotion status": training_result.get("promotion_status"),
+            "Reason": training_result.get("promotion_reason"),
+            "Current parameters": "Updated" if promoted else "Unchanged",
+            "Next HPO retry": state.get("retry_date") if not promoted else None,
+            "Next scheduled HPO": state.get("next_scheduled_date"),
+            "Timezone": (state.get("schedule") or {}).get("timezone"),
+        },
+    )
+
+
+def notify_candidate_error(lead_type_id, hpo_result, state, error):
+    """Report execution errors and the persistent next-day retry decision."""
+    phase = state["status"]
+    _send_notification(
+        "failure" if phase == "training_failed" else "warning",
+        {
+            **_notification_fields(lead_type_id),
+            "Status": (
+                "HPO candidate training failed"
+                if phase == "training_failed"
+                else "HPO failed; retry scheduled"
+            ),
+            "HPO run": (hpo_result or {}).get("hpo_run_id"),
+            "Promotion": (
+                "Outcome not confirmed"
+                if phase == "training_failed"
+                else "Candidate training not reached"
+            ),
+            "Next HPO retry": state.get("retry_date"),
+            "Next scheduled HPO": state.get("next_scheduled_date"),
+            "Timezone": (state.get("schedule") or {}).get("timezone"),
+        },
+        error=f"{type(error).__name__}: {error}",
+    )
 
 
 def _suggest_parameter(
@@ -184,6 +309,7 @@ def _hpo_settings(
             search_config.optimizer.as_dict() if search_config.optimizer else None
         ),
         "monotonicity": search_config.monotonicity.as_dict(),
+        "mlflow": search_config.raw.get("mlflow") or {"enabled": False},
     }
 
 
@@ -223,7 +349,7 @@ def _reserve_final_test(
             raise ValueError(
                 "Time-based final test reservation requires a 'created_at' column."
             )
-        ordered = frame.sort_values("created_at").reset_index(drop=True)
+        ordered = frame.sort_values("created_at", kind="stable")
         n_test = max(1, int(round(len(ordered) * test_size)))
         split_index = len(ordered) - n_test
         hpo_pool = ordered.iloc[:split_index].copy()
@@ -249,7 +375,13 @@ def _reserve_final_test(
             "HPO split produced an empty HPO pool or final test partition."
         )
 
-    return hpo_pool.reset_index(drop=True), final_test.reset_index(drop=True)
+    fit_positions = frame.index.get_indexer(hpo_pool.index).tolist()
+    test_positions = frame.index.get_indexer(final_test.index).tolist()
+    hpo_pool = hpo_pool.reset_index(drop=True)
+    final_test = final_test.reset_index(drop=True)
+    hpo_pool.attrs["row_positions"] = fit_positions
+    final_test.attrs["row_positions"] = test_positions
+    return hpo_pool, final_test
 
 
 def _split_development_and_holdout(
@@ -989,7 +1121,9 @@ def _write_outputs(
     settings: dict[str, Any],
 ) -> tuple[Path, Path, Path, dict[str, Path]]:
     """Write tuning summary, finalist details, YAML, and Optuna plots."""
-    run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_timestamp = (
+        datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
+    )
     run_output_dir = output_dir / run_timestamp
     run_output_dir.mkdir(parents=True, exist_ok=False)
 
@@ -1048,26 +1182,32 @@ def _write_outputs(
     )
 
     calibration_method = selected["calibration_method"]
-    yaml_payload = {
-        "calibration": {
-            "enabled": calibration_method != "none",
-        },
-        "models": {
-            # random_state is derived from the active workflow seed by config.py.
-            # Do not write a second seed option into the generated YAML.
-            model_type: {
-                key: value
-                for key, value in selected["parameters"].items()
-                if key not in {"random_state", "n_estimators"}
-            },
-        },
-        "hpo_diagnostics": {
-            "selected_cv_median_best_iteration": selected.get("best_iteration"),
-        },
+    selected_model_parameters = {
+        key: value
+        for key, value in selected["parameters"].items()
+        if key != "random_state"
+        and (key != "n_estimators" or not settings["early_stopping"]["enabled"])
     }
+    calibration = {"enabled": calibration_method != "none"}
     if calibration_method != "none":
-        yaml_payload["calibration"]["method"] = calibration_method
-        yaml_payload["calibration"]["cv"] = selected["calibration_cv"]
+        calibration.update(method=calibration_method, cv=selected["calibration_cv"])
+    model_settings = model_parameters.normalize_settings(
+        {
+            "model_type": model_type,
+            "model_parameters": selected_model_parameters,
+            "calibration": calibration,
+        }
+    )
+    hpo_run_id = f"hpo_{lead_type_name}_{run_timestamp}"
+    yaml_payload = model_parameters.make_artifact(
+        model_settings,
+        lead_type_id,
+        hpo_run_id=hpo_run_id,
+        created_at=summary["created_at"],
+        code_version=model_parameters.code_version(),
+        data=settings.get("candidate_data"),
+    )
+    summary["selected_cv_median_best_iteration"] = selected.get("best_iteration")
 
     parameters_path = run_output_dir / "best_parameters.yaml"
     parameters_path.write_text(
@@ -1078,6 +1218,17 @@ def _write_outputs(
     source_config_path = Path(search_config.raw["resolved"]["config_path"])
     config_copy_path = run_output_dir / "hyperparameter_search.yaml"
     config_copy_path.write_bytes(source_config_path.read_bytes())
+    summary.update(
+        {
+            "hpo_run_id": hpo_run_id,
+            "parameter_version": yaml_payload["parameter_version"],
+            "code_version": yaml_payload["code_version"],
+            "data": yaml_payload["data"],
+        }
+    )
+    summary_path.write_text(
+        json.dumps(summary, indent=2, default=str), encoding="utf-8"
+    )
 
     plot_paths = _write_optuna_plots(
         run_output_dir=run_output_dir,
@@ -1088,6 +1239,7 @@ def _write_outputs(
     return summary_path, parameters_path, finalist_path, plot_paths
 
 
+@_report_search
 def run_hyperparameter_search(
     lead_type_id: int,
     version: str | None = None,
@@ -1149,6 +1301,16 @@ def run_hyperparameter_search(
         split_settings=search_config.split,
         random_seed=search_config.random_seed,
     )
+    settings["candidate_data"] = {
+        "training_table_version": prep_summary["training_table_version"],
+        "frame_fingerprint": model_parameters.dataset_fingerprint(frame),
+        "training_positions": hpo_pool.attrs["row_positions"],
+        "test_positions": final_training_test.attrs["row_positions"],
+        "split_strategy": search_config.split["strategy"],
+        "stratify": search_config.split.get("stratify", False),
+        "data_min_created_at": prep_summary.get("data_min_created_at"),
+        "data_max_created_at": prep_summary.get("data_max_created_at"),
+    }
     preprocessing.assert_trainable(hpo_pool, lead_type_name)
 
     development, holdout = _split_development_and_holdout(
@@ -1398,6 +1560,25 @@ def run_hyperparameter_search(
         key: settings[key] for key in ("cv_jobs", "probability_jobs", "optimizer_jobs")
     }
     summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+    mlflow_settings = settings["mlflow"]
+    if mlflow_settings.get("enabled"):
+        try:
+            from . import mlflow_utils
+
+            mlflow_metadata = mlflow_utils.log_hpo_run(
+                run_output_dir=summary_path.parent,
+                settings=mlflow_settings,
+                lead_type_name=lead_type_name,
+            )
+        except Exception:
+            logger.exception("HPO MLflow logging failed; parameter artifact retained.")
+            if mlflow_settings.get("required", True):
+                raise
+        else:
+            summary_payload.update(mlflow_metadata)
+            summary_path.write_text(
+                json.dumps(summary_payload, indent=2), encoding="utf-8"
+            )
     logger.info("HPO stage timings (seconds): %s", timings)
     yaml_text = parameters_path.read_text(encoding="utf-8").rstrip()
     logger.info("Optuna best score: %.6f", study.best_value)
@@ -1418,10 +1599,19 @@ def run_hyperparameter_search(
     logger.info("Saved summary: %s", summary_path)
     logger.info("Saved finalist results: %s", finalist_path)
     logger.info("Saved parameters: %s", parameters_path)
+    logger.info(
+        "Candidate training command: smarthub-train --lead-type-id %s "
+        "--parameter-file %s",
+        lead_type_id,
+        parameters_path,
+    )
     for plot_name, plot_path in plot_paths.items():
         logger.info("Saved %s plot: %s", plot_name, plot_path)
 
     return {
+        "hpo_run_id": summary_payload["hpo_run_id"],
+        "parameter_version": summary_payload["parameter_version"],
+        "hpo_mlflow_run_id": summary_payload.get("hpo_mlflow_run_id"),
         "lead_type_id": lead_type_id,
         "lead_type_name": lead_type_name,
         "model_type": normalized_model_type,

@@ -1,0 +1,30 @@
+schema_version: 1
+lead_type_id: 1
+parameter_version: params_c469a249d600a58f9b891821
+model_settings:
+  model_type: lightgbm
+  model_parameters:
+    verbosity: -1
+    n_jobs: 1
+    subsample_freq: 1
+    num_leaves: 85
+    max_depth: 8
+    learning_rate: 0.007995122776833112
+    min_child_samples: 19
+    subsample: 0.9214235974277101
+    colsample_bytree: 0.8384631038813102
+    reg_alpha: 7.1813813673666054e-06
+    reg_lambda: 0.0013513952834439506
+  calibration:
+    enabled: true
+    method: isotonic
+    cv: 3
+created_at: null
+code_version: null
+hpo_run_id: null
+hpo_mlflow_run_id: null
+hpo_mlflow_tracking_uri: null
+data: null
+approved_training_run_id: null
+production_model_version: null
+initialized_from_bootstrap: false

@@ -30,6 +30,7 @@ from . import (
     config,
     feature_diagnostics,
     metrics,
+    model_parameters,
     models,
     optimizer_evaluation,
     preprocessing,
@@ -193,6 +194,8 @@ class TrainingContext:
     lead_type_id: int
     version: str | None = None
     register_mlflow: bool = True
+    parameter_file: str | None = None
+    parameter_info: Any = None
 
     # --- resolved config ---
     training_config: Any = None
@@ -280,7 +283,36 @@ def stage_prepare_data(ctx: TrainingContext) -> TrainingContext:
     ValueError
         If there are too few training rows to proceed.
     """
-    ctx.training_config = config.load_training_config(ctx.lead_type_id)
+    base_config = config.load_training_config(ctx.lead_type_id)
+    ctx.parameter_info = model_parameters.resolve_training_parameters(
+        base_config, ctx.lead_type_id, ctx.parameter_file
+    )
+    ctx.training_config = config.load_training_config(
+        ctx.lead_type_id,
+        config_path=base_config.raw["resolved"]["config_path"],
+        model_settings=ctx.parameter_info["model_settings"],
+    )
+    artifact_data = ctx.parameter_info.get("data")
+    if (
+        ctx.parameter_file
+        and ctx.parameter_info.get("hpo_run_id")
+        and not ctx.parameter_info.get("approved_training_run_id")
+    ):
+        if not isinstance(artifact_data, dict) or not artifact_data.get(
+            "training_table_version"
+        ):
+            raise ValueError("HPO artifact has no pinned dataset version.")
+        pinned_version = artifact_data["training_table_version"]
+        if ctx.version is not None and ctx.version != pinned_version:
+            raise ValueError("Requested dataset version differs from the HPO dataset.")
+        ctx.version = pinned_version
+    logger.info(
+        "Training parameter handoff: source=%s parameter_version=%s hpo_run_id=%s",
+        ctx.parameter_info["parameter_source"],
+        ctx.parameter_info["parameter_version"],
+        ctx.parameter_info.get("hpo_run_id"),
+    )
+    logger.info("Resolved model settings: %s", ctx.parameter_info["model_settings"])
     ctx.lead_type_name = resolve_lead_type_name(ctx.lead_type_id)
     np.random.seed(ctx.training_config.random_seed)
 
@@ -384,12 +416,28 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
     )
 
     split_settings = training_config.split
-    train_df, test_df = split_training_data(
-        frame=frame,
-        target_column=config.TARGET_COL,
-        split_settings=split_settings,
-        random_seed=training_config.random_seed,
-    )
+    if (
+        ctx.parameter_file
+        and ctx.parameter_info.get("hpo_run_id")
+        and not ctx.parameter_info.get("approved_training_run_id")
+    ):
+        data = ctx.parameter_info["data"]
+        train_df, test_df = model_parameters.candidate_partitions(frame, data)
+        split_settings = {
+            "strategy": data["split_strategy"],
+            "test_size": len(test_df) / len(frame),
+            "stratify": data.get("stratify", False),
+        }
+        logger.info(
+            "Using exact HPO-reserved final test rows for candidate evaluation."
+        )
+    else:
+        train_df, test_df = split_training_data(
+            frame=frame,
+            target_column=config.TARGET_COL,
+            split_settings=split_settings,
+            random_seed=training_config.random_seed,
+        )
     preprocessing.assert_partition_has_both_classes(
         train_df,
         lead_type_name,
@@ -808,6 +856,17 @@ def stage_save_reports(ctx: TrainingContext) -> TrainingContext:
     )
 
     lineage = {
+        **{
+            key: ctx.parameter_info.get(key)
+            for key in (
+                "parameter_version",
+                "parameter_source",
+                "hpo_run_id",
+                "hpo_mlflow_run_id",
+                "parameter_parent_training_run_id",
+            )
+        },
+        "calibration_method": training_config.calibration_method,
         "model_type": ctx.model_type,
         "calibrated": bool(ctx.calibration_enabled),
         "split_strategy": split_settings["strategy"],
@@ -1095,7 +1154,20 @@ def stage_save_and_promote(ctx: TrainingContext) -> TrainingContext:
         optimizer_summary=optimizer_summary_dict,
         lineage=lineage,
         model_params=model_params,
-        training_config=training_config.as_dict(),
+        training_config={
+            **training_config.as_dict(),
+            "model_settings": ctx.parameter_info["model_settings"],
+            "parameter_provenance": {
+                key: ctx.parameter_info.get(key)
+                for key in (
+                    "parameter_version",
+                    "parameter_source",
+                    "hpo_run_id",
+                    "hpo_mlflow_run_id",
+                    "parameter_parent_training_run_id",
+                )
+            },
+        },
         promotion_mode=promotion_mode,
         eligibility_status=ctx.eligibility_status,
         promotion_status=ctx.promotion_status,
@@ -1211,6 +1283,9 @@ def stage_save_and_promote(ctx: TrainingContext) -> TrainingContext:
         promoted = True
         manifest = registry.load_manifest(lead_type_name, manifest["training_run_id"])
         ctx.promotion_status = "promoted"
+        model_parameters.write_current_parameters(
+            training_config, lead_type_id, manifest
+        )
         logger.info(
             "Automatically promoted %s to currently-serving for '%s'.",
             manifest["production_model_version"],
@@ -1280,6 +1355,20 @@ def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
             experiment_name=experiment_name,
             run_name=manifest["training_run_id"],
             training_config_path=Path(training_config.raw["resolved"]["config_path"]),
+            resolved_training_config={
+                **training_config.as_dict(),
+                "model_settings": ctx.parameter_info["model_settings"],
+                "parameter_provenance": {
+                    key: ctx.parameter_info.get(key)
+                    for key in (
+                        "parameter_version",
+                        "parameter_source",
+                        "hpo_run_id",
+                        "hpo_mlflow_run_id",
+                        "parameter_parent_training_run_id",
+                    )
+                },
+            },
             extra_params={
                 "lead_type_name": lead_type_name,
                 "training_run_id": manifest["training_run_id"],
@@ -1347,6 +1436,9 @@ def build_result(ctx: TrainingContext) -> dict[str, Any]:
     manifest = ctx.manifest
     eligibility_status = ctx.eligibility_status
     return {
+        "parameter_version": ctx.parameter_info.get("parameter_version"),
+        "hpo_run_id": ctx.parameter_info.get("hpo_run_id"),
+        "parameter_source": ctx.parameter_info.get("parameter_source"),
         "lead_type_id": ctx.lead_type_id,
         "lead_type_name": ctx.lead_type_name,
         "model_path": ctx.model_path,
@@ -1395,6 +1487,7 @@ def run_training(
     lead_type_id: int,
     version: str | None = None,
     register_mlflow: bool = True,
+    parameter_file: str | None = None,
 ) -> dict[str, Any]:
     """Train, evaluate, version, and optionally register one model.
 
@@ -1424,6 +1517,7 @@ def run_training(
         lead_type_id=lead_type_id,
         version=version,
         register_mlflow=register_mlflow,
+        parameter_file=parameter_file,
     )
     for stage in TRAINING_STAGES:
         stage(ctx)
@@ -1590,12 +1684,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip MLflow logging and registration",
     )
+    parser.add_argument(
+        "--parameter-file",
+        default=None,
+        help="Explicit HPO/manual parameter artifact for candidate training.",
+    )
     args = parser.parse_args(argv)
 
     run_training(
         lead_type_id=args.lead_type_id,
         version=args.version,
         register_mlflow=not args.no_mlflow,
+        parameter_file=args.parameter_file,
     )
     logger.info("Done.")
     return 0

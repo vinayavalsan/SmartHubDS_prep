@@ -68,12 +68,14 @@ deployments:
 
   # STEP 3 — RUN AFTER build-features.
   - name: train-model
-    entrypoint: src/smarthub/train_and_predict/flow.py:train_flow
+    concurrency_limit:
+      limit: 1
+      collision_strategy: ENQUEUE
+    entrypoint: src/smarthub/train_and_predict/hpo_flow.py:daily_model_cycle
     description: >-
-      STEP 3 of 3 - RUN AFTER build-features. Trains + evaluates the Anton
-      win-probability model from the training table and runs the offline bid
-      optimizer. Fails asking you to run build-features (STEP 2) first if no
-      training table exists.
+      STEP 3 of 3 - RUN AFTER build-features. Runs the daily model cycle:
+      fixed-cadence HPO and candidate training when due, next-day HPO retries
+      until promotion, otherwise training with current approved parameters.
     tags: ["step-3-run-after-build-features", "pipeline-smarthub"]
     work_pool:
       name: smarthub-pool

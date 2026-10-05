@@ -56,41 +56,23 @@ training:
   lead_types:
     6:
       name: auto
-      model_type: lightgbm
-      calibration:
-        enabled: false
-        method: isotonic
-        cv: 3
-      models:
-        lightgbm:
-          verbosity: -1
-          n_jobs: 1
-          subsample_freq: 1
-          num_leaves: 111
-          max_depth: 11
-          learning_rate: 0.017302242135306158
-          min_child_samples: 10
-          subsample: 0.9720940289066522
-          colsample_bytree: 0.8910950214684843
-          reg_alpha: 7.679169247944639e-05
-          reg_lambda: 7.690500467907368e-06
+      parameters:
+        bootstrap_file: config/model_parameters_auto.yaml
+        current_file: data/model_parameters/auto/current_params.yaml
+      hpo_schedule:
+        state_file: data/model_parameters/auto/hpo_state.yaml
+        interval_days: 14
+        retry_days: 1
+        anchor_date: '2026-10-05'
+        timezone: UTC
     1:
       name: home
-      model_type: lightgbm
-      calibration:
-        enabled: false
-        method: isotonic
-        cv: 3
-      models:
-        lightgbm:
-          verbosity: -1
-          n_jobs: 1
-          subsample_freq: 1
-          num_leaves: 98
-          max_depth: 6
-          learning_rate: 0.04502215590015161
-          min_child_samples: 77
-          subsample: 0.9045809768629978
-          colsample_bytree: 0.6034166825746311
-          reg_alpha: 0.000823948019049902
-          reg_lambda: 0.00029305965020131757
+      parameters:
+        bootstrap_file: config/model_parameters_home.yaml
+        current_file: data/model_parameters/home/current_params.yaml
+      hpo_schedule:
+        state_file: data/model_parameters/home/hpo_state.yaml
+        interval_days: 14
+        retry_days: 1
+        anchor_date: '2026-10-05'
+        timezone: UTC

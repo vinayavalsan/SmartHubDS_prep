@@ -636,3 +636,27 @@ def test_hpo_rejects_nested_model_parallelism(tmp_path):
     _write_yaml(path, payload)
     with pytest.raises(ValueError, match="fixed_parameters.n_jobs=1"):
         config.load_hyperparameter_search_config(6, path)
+
+
+@pytest.mark.parametrize("lead_type_id,lead_name", [(6, "auto"), (1, "home")])
+def test_per_lead_bootstrap_uses_shared_parameter_schema(lead_type_id, lead_name):
+    import yaml
+
+    from smarthub.core import paths
+    from smarthub.train_and_predict.config import load_training_config
+    from smarthub.train_and_predict.model_parameters import (
+        load_artifact,
+        make_artifact,
+        settings_from_config,
+    )
+
+    cfg = load_training_config(lead_type_id)
+    expected_path = f"config/model_parameters_{lead_name}.yaml"
+    assert cfg.raw["parameters"]["bootstrap_file"] == expected_path
+    persisted = yaml.safe_load(paths.resolve(expected_path).read_text())
+    artifact = load_artifact(expected_path, lead_type_id)
+    assert persisted == make_artifact(artifact["model_settings"], lead_type_id)
+    assert settings_from_config(cfg) == artifact["model_settings"]
+    assert artifact["hpo_run_id"] is None
+    with pytest.raises(ValueError, match="lead_type_id"):
+        load_artifact(expected_path, 1 if lead_type_id == 6 else 6)
