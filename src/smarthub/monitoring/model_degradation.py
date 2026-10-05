@@ -730,9 +730,7 @@ def _build_slack_payload(
     completed_hour = _utc_label(as_of.floor("h") - pd.Timedelta(hours=1))
     footer = (
         f"env: `{env or socket.gethostname()}` · {_utc_label(now)} · "
-        f"latest completed hour: {completed_hour} · "
-        f"persistence: {cfg['required_bad_windows']}/"
-        f"{cfg['persistence_windows']} windows"
+        f"latest completed hour: {completed_hour}"
     )
     diagnostics = os.getenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", "").strip()
     if diagnostics:

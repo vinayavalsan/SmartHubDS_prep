@@ -1,32 +1,47 @@
-"""Tests for the Slack notifier — payload shape and best-effort safety."""
+"""Offline Slack payload, routing, and training-title tests; never send alerts."""
 
 import json
-from contextlib import contextmanager
 
 import pytest
 
 from smarthub.core import notifications as n
 
 
+@pytest.fixture(autouse=True)
+def disable_slack_delivery(monkeypatch):
+    """Disable delivery and fail any accidental HTTP request in this module."""
+    for env in (
+        "SLACK_WEBHOOK_URL",
+        "SLACK_WEBHOOK_UPDATES_URL",
+        "SLACK_WEBHOOK_WARNINGS_URL",
+        "SLACK_WEBHOOK_CRITICAL_URL",
+        "SLACK_WEBHOOK_FAILURES_URL",
+        "SLACK_MENTION_ON_FAILURE",
+        "SLACK_ENV_LABEL",
+    ):
+        monkeypatch.delenv(env, raising=False)
+
+    def forbid_http(*args, **kwargs):
+        pytest.fail("Notification tests must not make HTTP requests.")
+
+    monkeypatch.setattr(n.urllib.request, "urlopen", forbid_http)
+    monkeypatch.setattr(n, "_post", lambda payload, category=None: False)
+
+
 @pytest.fixture
 def capture_slack(monkeypatch):
-    """Capture the JSON payload sent to Slack instead of hitting the network."""
-    sent = {}
+    """Capture payload and intended route before the HTTP sender is called."""
+    captured = {}
 
-    @contextmanager
-    def fake_urlopen(req, timeout=None):
-        sent["url"] = req.full_url
-        sent["payload"] = json.loads(req.data.decode("utf-8"))
-
-        class _Resp:
-            def read(self):
-                return b"ok"
-
-        yield _Resp()
+    def capture(payload, category=None):
+        captured["payload"] = payload
+        captured["category"] = category
+        captured["url"] = n._category_webhook_url(category)
+        return True  # Simulate delivery without executing the sender.
 
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.test/T/B/xxx")
-    monkeypatch.setattr(n.urllib.request, "urlopen", fake_urlopen)
-    return sent
+    monkeypatch.setattr(n, "_post", capture)
+    return captured
 
 
 def test_disabled_without_webhook(monkeypatch):
@@ -80,16 +95,13 @@ def test_empty_fields_are_skipped(capture_slack):
     assert "Blank" not in payload["text"]
 
 
-def test_never_raises_on_network_error(monkeypatch):
-    """Network errors are swallowed; notify returns False without raising."""
-    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.test/x")
-
-    def boom(*a, **k):
-        raise OSError("network down")
-
-    monkeypatch.setattr(n.urllib.request, "urlopen", boom)
-    # Swallowed -> returns False, no exception.
-    assert n.notify_failure("data-pull", {"Rows": 1}, error="x") is False
+def test_long_error_text_is_truncated(capture_slack):
+    """Long error details are trimmed when the payload is formatted."""
+    n.notify_failure("data-pull", {}, error="x" * 2000)
+    payload = capture_slack["payload"]
+    assert "x" * 1500 in payload["text"]
+    assert "x" * 1501 not in payload["text"]
+    assert "(truncated)" in payload["text"]
 
 
 def test_flow_failure_hook_builds_fields(capture_slack):
@@ -107,7 +119,7 @@ def test_flow_failure_hook_builds_fields(capture_slack):
     class FakeState:
         message = "Task 'fetch' failed: Redshift timeout"
 
-    # Must not raise, and should send a failure payload.
+    # Must not raise; the failure payload is captured locally.
     n.flow_failure_hook(FakeFlow(), FakeFlowRun(), FakeState())
     payload = capture_slack["payload"]
     assert "auto (6)" in payload["text"]
@@ -166,7 +178,7 @@ def test_grouped_payload_skips_empty_values(capture_slack):
 
 
 def test_critical_pings_and_routes(monkeypatch, capture_slack):
-    """Critical posts to the critical webhook and @here-pings the channel."""
+    """Critical payload selects the critical route and includes @here."""
     monkeypatch.setenv(
         "SLACK_WEBHOOK_CRITICAL_URL", "https://hooks.slack.test/critical"
     )
@@ -178,7 +190,7 @@ def test_critical_pings_and_routes(monkeypatch, capture_slack):
 
 
 def test_category_routing_selects_webhook(monkeypatch, capture_slack):
-    """Each severity posts to its own category webhook when configured."""
+    """Each severity selects its intended webhook without posting."""
     monkeypatch.setenv("SLACK_WEBHOOK_UPDATES_URL", "https://hooks.slack.test/updates")
     monkeypatch.setenv(
         "SLACK_WEBHOOK_FAILURES_URL", "https://hooks.slack.test/failures"
@@ -190,7 +202,7 @@ def test_category_routing_selects_webhook(monkeypatch, capture_slack):
 
 
 def test_category_falls_back_to_single_webhook(capture_slack):
-    """With no per-category URL set, posting falls back to SLACK_WEBHOOK_URL."""
+    """With no per-category URL set, routing selects the legacy webhook."""
     n.notify_success("data-pull", {"Rows": 5})
     assert capture_slack["url"] == "https://hooks.slack.test/T/B/xxx"
 
@@ -217,3 +229,102 @@ def test_slack_enabled_with_only_category_webhook(monkeypatch):
         "SLACK_WEBHOOK_CRITICAL_URL", "https://hooks.slack.test/critical"
     )
     assert n.slack_enabled() is True
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "promoted",
+        "awaiting manual promotion",
+        "completed (not promoted)",
+        "completed (promotion disabled)",
+    ],
+)
+def test_success_display_status_preserves_updates_routing(
+    capture_slack, monkeypatch, status
+):
+    monkeypatch.setenv("SLACK_WEBHOOK_UPDATES_URL", "https://hooks.slack.test/updates")
+    assert n.notify_success_grouped("train-model", subject="auto (6)", status=status)
+    payload = capture_slack["payload"]
+    assert f"· train-model · {status} · auto (6)" in payload["text"]
+    assert (
+        f"· train-model · {status} · auto (6)" in payload["blocks"][0]["text"]["text"]
+    )
+    assert capture_slack["url"] == "https://hooks.slack.test/updates"
+    assert ":white_check_mark:" in payload["text"]
+    assert "<!here>" not in payload["text"]
+
+
+def test_display_status_does_not_change_failure_routing(capture_slack, monkeypatch):
+    monkeypatch.setenv(
+        "SLACK_WEBHOOK_FAILURES_URL", "https://hooks.slack.test/failures"
+    )
+    n.notify_grouped("failure", "train-model", status="FAILED")
+    assert capture_slack["url"] == "https://hooks.slack.test/failures"
+    assert "<!here>" in capture_slack["payload"]["text"]
+
+
+@pytest.mark.parametrize(
+    "result_flags,status,headline",
+    [
+        ({"promoted": True}, "promoted", "Promoted to serving"),
+        (
+            {
+                "promotion_status": "awaiting_manual_promotion",
+                "eligibility_status": "eligible",
+            },
+            "awaiting manual promotion",
+            "Eligible — awaiting manual promotion",
+        ),
+        (
+            {"eligibility_status": "eligible", "promotion_status": "skipped"},
+            "completed (not promoted)",
+            "Eligible — promotion execution skipped",
+        ),
+        (
+            {"eligibility_status": "rejected"},
+            "completed (not promoted)",
+            "Not eligible — serving model unchanged",
+        ),
+        (
+            {"promotion_mode": "disabled"},
+            "completed (promotion disabled)",
+            "Promotion evaluation disabled",
+        ),
+    ],
+)
+def test_training_title_status(monkeypatch, result_flags, status, headline):
+    from smarthub.train_and_predict import flow
+
+    monkeypatch.setattr(
+        flow,
+        "_feature_breakdown",
+        lambda *args: {
+            "total": 2,
+            "n_registered_used": 2,
+            "n_registered": 2,
+        },
+    )
+    sent = []
+    monkeypatch.setattr(
+        flow.notifications,
+        "_post",
+        lambda payload, category=None: sent.append((payload, category)) or True,
+    )
+    result = {
+        "promoted": False,
+        "promotion_mode": "automatic",
+        "lineage": {},
+        "training_run_id": "run_test",
+        "model_path": "data/models/auto/model.pkl",
+        "promotion_reason": "test decision",
+        **result_flags,
+    }
+    flow._notify_success("auto", 6, result, {}, {})
+    assert len(sent) == 1
+    payload, category = sent[0]
+    assert category == "updates"
+    assert f"· train-model · {status} · auto (6)" in payload["text"]
+    assert headline in payload["text"]
+    assert "test decision" in payload["text"]
+    assert "<!here>" not in payload["text"]
