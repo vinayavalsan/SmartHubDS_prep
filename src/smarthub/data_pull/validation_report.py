@@ -14,12 +14,17 @@ def _pct(value) -> str:
     return f"{value:.1%}" if isinstance(value, (int, float)) else "—"
 
 
-def _status_line(report: ValidationReport) -> str:
-    n_issues = (
+def issue_count(report: ValidationReport) -> int:
+    """Number of distinct data-quality issue types flagged (0 = clean)."""
+    return (
         len(report.schema_issues)
         + len(report.rule_violations)
         + len(report.cross_field_hits)
     )
+
+
+def _status_line(report: ValidationReport) -> str:
+    n_issues = issue_count(report)
     if n_issues == 0:
         return ":white_check_mark: clean"
     return f":warning: {n_issues} issue type(s) flagged"

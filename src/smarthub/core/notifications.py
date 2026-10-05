@@ -223,7 +223,11 @@ def _assemble(head: list[str], rows: list[tuple[str, str]], footer_extra) -> dic
 
 
 def _build_payload(
-    severity: str, pipeline: str, fields: dict, error: str | None
+    severity: str,
+    pipeline: str,
+    fields: dict,
+    error: str | None,
+    subject: str | None = None,
 ) -> dict:
     """Build a code-block Slack message (title outside, key/values in a box).
 
@@ -238,13 +242,15 @@ def _build_payload(
         Label/value pairs rendered as a monospace table (empty values skipped).
     error : str | None
         Error text added as a final ``Error`` row (truncated if very long).
+    subject : str | None
+        Optional subject appended to the title (e.g. the lead type).
 
     Returns
     -------
     dict
         A payload with ``text`` and ``blocks`` keys.
     """
-    head = [_title(severity, pipeline, None)]
+    head = [_title(severity, pipeline, subject)]
     rows = _rows(fields)
     if error:
         text = str(error).strip()
@@ -295,10 +301,17 @@ def notify_raw(payload: dict, category: str | None = None) -> bool:
 
 
 def notify(
-    severity: str, pipeline: str, fields: dict, error: str | None = None
+    severity: str,
+    pipeline: str,
+    fields: dict,
+    error: str | None = None,
+    subject: str | None = None,
 ) -> bool:
     """Send a severity-routed Slack notification (best-effort)."""
-    return _post(_build_payload(severity, pipeline, fields, error), _category(severity))
+    return _post(
+        _build_payload(severity, pipeline, fields, error, subject),
+        _category(severity),
+    )
 
 
 def notify_grouped(
@@ -319,24 +332,28 @@ def notify_grouped(
     )
 
 
-def notify_success(pipeline: str, fields: dict) -> bool:
+def notify_success(pipeline: str, fields: dict, subject: str | None = None) -> bool:
     """Notify a successful operation -> #updates."""
-    return notify(_SUCCESS, pipeline, fields)
+    return notify(_SUCCESS, pipeline, fields, subject=subject)
 
 
-def notify_warning(pipeline: str, fields: dict) -> bool:
+def notify_warning(pipeline: str, fields: dict, subject: str | None = None) -> bool:
     """Notify a non-fatal warning -> #warnings."""
-    return notify(_WARNING, pipeline, fields)
+    return notify(_WARNING, pipeline, fields, subject=subject)
 
 
-def notify_failure(pipeline: str, fields: dict, error: str | None = None) -> bool:
+def notify_failure(
+    pipeline: str, fields: dict, error: str | None = None, subject: str | None = None
+) -> bool:
     """Notify a failed operation/workflow -> #failures (@here)."""
-    return notify(_FAILURE, pipeline, fields, error=error)
+    return notify(_FAILURE, pipeline, fields, error=error, subject=subject)
 
 
-def notify_critical(pipeline: str, fields: dict, error: str | None = None) -> bool:
+def notify_critical(
+    pipeline: str, fields: dict, error: str | None = None, subject: str | None = None
+) -> bool:
     """Notify a serious API-health/model condition -> #critical (@here)."""
-    return notify(_CRITICAL, pipeline, fields, error=error)
+    return notify(_CRITICAL, pipeline, fields, error=error, subject=subject)
 
 
 def notify_success_grouped(
@@ -385,13 +402,20 @@ def flow_failure_hook(flow, flow_run, state) -> None:
         pipeline = getattr(flow, "name", None) or getattr(
             flow_run, "flow_name", "smarthub-flow"
         )
+        # Normalise the area to match the success alerts (e.g. the flow
+        # "smarthub-data-pull" -> "data-pull"), so a pipeline reads the same
+        # whether it succeeded or failed.
+        if pipeline.startswith("smarthub-"):
+            pipeline = pipeline[len("smarthub-") :]
         fields = {
-            "Lead type": _lead_type_label(params),
             "Run": getattr(flow_run, "name", None),
             "Run URL": _run_url(flow_run) or None,
         }
         message = getattr(state, "message", None) or "Flow run entered a FAILED state."
-        notify_failure(pipeline, fields, error=message)
+        # Lead type goes in the title subject (like the success alerts).
+        notify_failure(
+            pipeline, fields, error=message, subject=_lead_type_label(params)
+        )
     except Exception as exc:  # noqa: BLE001 - a failing hook must not mask the error
         logger.warning("flow_failure_hook could not send Slack alert: %s", exc)
 
