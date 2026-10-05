@@ -5,7 +5,11 @@ strategies. ``bidding_strategy_id`` is always a cohort key; additional cohort
 features are configured as a YAML list. For each cohort it compares realized
 auction wins with the model's predicted win probabilities, computes relative
 win-rate deviation and a Bernoulli z-score, applies persistence rules, and sends
-Slack notifications only when a cohort enters or escalates degradation.
+Slack notifications on status changes, recovery, and configurable critical reminders.
+
+Set model_degradation.reminder_minutes in config/smarthub.yaml (minimum 60)
+to control reminders. Notification time uses the UTC clock, independently of
+the historical data window. State is stored separately for each lead type.
 
 Run once (Prefect / cron friendly):
     python -m smarthub.monitoring.model_degradation
@@ -19,6 +23,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +93,7 @@ def _config() -> dict[str, Any]:
             _required_config("critical_winrate_deviation")
         ),
         "critical_zscore": float(_required_config("critical_zscore")),
+        "reminder_minutes": _reminder_minutes(),
     }
 
     if cfg["window_hours"] != 1:
@@ -493,36 +500,66 @@ def _load_state(path: Path = _STATE_PATH) -> dict[str, dict[str, Any]]:
     return active if isinstance(active, dict) else {}
 
 
+def _state_path(lead_type_id: int) -> Path:
+    """Keep lead types independent, including concurrent Prefect runs."""
+    return _STATE_PATH.with_name(f"model_degradation_state_{lead_type_id}.json")
+
+
+def _reminder_minutes() -> float:
+    """Read the required hourly-or-longer reminder interval from task config."""
+    raw = _required_config("reminder_minutes")
+    try:
+        value = float(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Model-degradation reminder minutes must be numeric.") from exc
+    if not math.isfinite(value) or value < 60:
+        raise ValueError("Model-degradation reminder minutes must be at least 60.")
+    return value
+
+
 def _write_state(
     degraded: pd.DataFrame,
     *,
     as_of: pd.Timestamp,
     cohort_features: list[str],
     path: Path = _STATE_PATH,
+    previous: dict[str, dict[str, Any]] | None = None,
+    notified_keys: set[str] | None = None,
+    recovered_keys: set[str] | None = None,
+    now: pd.Timestamp | None = None,
 ) -> None:
-    """Persist the currently active cohort severities for alert deduplication."""
-    active: dict[str, dict[str, Any]] = {}
+    """Advance only delivered events; retain unsupported and failed cohorts."""
+    now = _as_utc(now if now is not None else pd.Timestamp.now(tz="UTC"))
+    previous = previous or {}
+    notified_keys = notified_keys or set()
+    active = {key: dict(value) for key, value in previous.items()}
+    for key in recovered_keys or set():
+        active.pop(key, None)
     for row in degraded.itertuples(index=False):
         key = _state_key(row, cohort_features)
+        old = previous.get(key, {})
+        if key not in notified_keys and old.get("severity") != row.severity:
+            continue  # Failed new/severity-change alert: retry next run.
         cohort = {"bidding_strategy_id": int(row.bidding_strategy_id)}
         cohort.update(
             {feature: _jsonable(getattr(row, feature)) for feature in cohort_features}
         )
-        active[key] = {
-            "severity": row.severity,
+        details = {
+            **old,
             **cohort,
+            "severity": row.severity,
             "last_seen": _utc_iso(as_of),
         }
+        if key in notified_keys:
+            details["last_notified"] = _utc_iso(now)
+            if old.get("severity") != row.severity or not old.get("since"):
+                details["since"] = _utc_iso(now)
+        active[key] = details
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "updated_at": _utc_iso(as_of),
-        "active": active,
-    }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def _severity_rank(value: str) -> int:
-    return {"warning": 1, "critical": 2}.get(value, 0)
+    payload = {"updated_at": _utc_iso(now), "active": active}
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _alert_changes(
@@ -531,35 +568,48 @@ def _alert_changes(
     *,
     cohort_features: list[str],
     recoverable_keys: set[str] | None = None,
+    now: pd.Timestamp | None = None,
+    reminder_minutes: float = 60,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
-    """Return degradation status changes and recovered prior cohorts."""
-    if degraded.empty:
-        current_map: dict[str, str] = {}
-    else:
-        current_map = {
-            _state_key(row, cohort_features): row.severity
-            for row in degraded.itertuples(index=False)
-        }
-
+    """Select new/severity-change events, due critical reminders, and recovery."""
+    now = _as_utc(now if now is not None else pd.Timestamp.now(tz="UTC"))
+    current_map = {
+        _state_key(row, cohort_features): row.severity
+        for row in degraded.itertuples(index=False)
+    }
     changed_rows = []
     for row in degraded.itertuples(index=False):
         key = _state_key(row, cohort_features)
-        old = previous.get(key, {}).get("severity")
-        if old != row.severity:
-            record = row._asdict()
-            record["previous_status"] = old.upper() if old else ""
-            changed_rows.append(record)
-
-    alert_columns = list(degraded.columns) + ["previous_status"]
-    recoverable_keys = recoverable_keys or set()
+        old = previous.get(key, {})
+        tag = "new"
+        if old.get("severity") == row.severity:
+            if row.severity != "critical":
+                continue
+            try:
+                last = _as_utc(old["last_notified"])
+                since = _as_utc(old.get("since", old["last_notified"]))
+                if pd.isna(last) or pd.isna(since):
+                    raise ValueError("Invalid notification timestamp")
+            except (KeyError, ValueError, TypeError):
+                last = since = now - pd.Timedelta(minutes=reminder_minutes)
+            if now - last < pd.Timedelta(minutes=reminder_minutes):
+                continue
+            hours = max(1, int((now - since).total_seconds() // 3600))
+            tag = f"reminder · {hours}h"
+        record = row._asdict()
+        record.update(
+            previous_status=old.get("severity", "").upper(),
+            alert_tag=tag,
+            state_key=key,
+        )
+        changed_rows.append(record)
+    columns = list(degraded.columns) + ["previous_status", "alert_tag", "state_key"]
     recovered = [
-        details
+        {**details, "state_key": key}
         for key, details in previous.items()
-        if key not in current_map
-        and key in recoverable_keys
-        and isinstance(details, dict)
+        if key not in current_map and key in (recoverable_keys or set())
     ]
-    return pd.DataFrame(changed_rows, columns=alert_columns), recovered
+    return pd.DataFrame(changed_rows, columns=columns), recovered
 
 
 def _display_value(value: Any) -> str:
@@ -634,78 +684,142 @@ def _build_slack_payload(
     as_of: pd.Timestamp,
     cfg: dict[str, Any],
     lead_type_id: int,
+    severity: str,
+    tag: str,
+    now: pd.Timestamp,
 ) -> dict[str, Any]:
-    """Build the custom Slack message for degradation/recovery state changes."""
-    lead_name = lead_type_name(lead_type_id).title()
-    header = f"SmartHub Model Degradation — {lead_name} ({lead_type_id})"
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": header[:150],
-                "emoji": True,
-            },
-        }
-    ]
-    fallback = [header]
-
-    if not alerts.empty:
-        table = _format_degradation_table(alerts, cfg)
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "```" + table + "```",
-                },
-            }
+    """Use the common alert layout, retaining the cohort diagnostics table."""
+    recovery = tag == "recovered"
+    emoji = (
+        ":white_check_mark:"
+        if recovery
+        else (":red_circle:" if severity == "critical" else ":warning:")
+    )
+    mention = ""
+    if severity == "critical" and not recovery:
+        mention = (os.getenv("SLACK_MENTION_ON_FAILURE", "").strip() or "<!here>") + " "
+    env = os.getenv("SLACK_ENV_LABEL", "").strip()
+    env_tag = f" {env.upper()}" if env else ""
+    status = "recovered" if recovery else severity.upper()
+    title = (
+        f"{mention}{emoji} *SmartHub{env_tag} · model-degradation · {status} · "
+        f"{lead_type_name(lead_type_id)} ({lead_type_id}) ({tag})*"
+    )
+    headline = (
+        "Previously degraded cohorts are back within the configured checks"
+        if recovery
+        else (
+            "Measured win rate remains below the expected band"
+            if tag.startswith("reminder")
+            else "Measured win rate is below the expected band"
         )
-        fallback.append(table)
-
-    if recovered:
-        lines = []
-        for item in recovered:
-            parts = [f"Strategy {item.get('bidding_strategy_id')}"]
-            parts.extend(
-                f"{feature} {item.get(feature)}" for feature in cfg["cohort_features"]
+    )
+    if recovery:
+        table = "\n".join(
+            " · ".join(
+                [f"Strategy {item['bidding_strategy_id']}"]
+                + [
+                    f"{feature}: {item.get(feature)}"
+                    for feature in cfg["cohort_features"]
+                ]
             )
-            lines.append(" · ".join(parts))
-        recovery_text = "\n".join(f"• {line}" for line in lines)
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Recovered cohorts*\n" + recovery_text,
-                },
-            }
+            for item in recovered
         )
-        fallback.append("Recovered cohorts")
-        fallback.extend(f"- {line}" for line in lines)
-
+    else:
+        table = _format_degradation_table(alerts, cfg)
+    completed_hour = _utc_label(as_of.floor("h") - pd.Timedelta(hours=1))
     footer = (
-        "latest completed hour: "
-        f"{_utc_label(as_of.floor('h') - pd.Timedelta(hours=1))} "
-        f"· persistence: {cfg['required_bad_windows']}/"
+        f"env: `{env or socket.gethostname()}` · {_utc_label(now)} · "
+        f"latest completed hour: {completed_hour} · "
+        f"persistence: {cfg['required_bad_windows']}/"
         f"{cfg['persistence_windows']} windows"
     )
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [
+    diagnostics = os.getenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", "").strip()
+    if diagnostics:
+        footer += f" · <{diagnostics}|diagnostics>"
+    # Split large tables at row boundaries to stay under Slack's block limit.
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": title + "\n" + headline}}
+    ]
+    chunk = []
+    for line in table.splitlines():
+        line = line.replace("```", "")
+        if len("\n".join(chunk + [line])) > 2800 and chunk:
+            blocks.append(
                 {
-                    "type": "mrkdwn",
-                    "text": footer.replace(
-                        _utc_label(as_of.floor("h") - pd.Timedelta(hours=1)),
-                        f"`{_utc_label(as_of.floor('h') - pd.Timedelta(hours=1))}`",
-                    ),
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "```\n" + "\n".join(chunk) + "\n```",
+                    },
                 }
-            ],
-        }
-    )
-    fallback.append(footer)
-    return {"text": "\n".join(fallback), "blocks": blocks}
+            )
+            chunk = []
+        chunk.append(line[:2800])
+    if chunk:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "```\n" + "\n".join(chunk) + "\n```",
+                },
+            }
+        )
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]})
+    return {
+        "text": title + "\n" + headline + "\n" + table + "\n" + footer,
+        "blocks": blocks,
+    }
+
+
+def _build_routed_slack_payloads(
+    alerts: pd.DataFrame,
+    recovered: list[dict[str, Any]],
+    *,
+    as_of: pd.Timestamp,
+    cfg: dict[str, Any],
+    lead_type_id: int,
+    now: pd.Timestamp,
+) -> list[tuple[str, dict[str, Any], set[str], bool]]:
+    """Batch by channel and state tag; retain keys for delivery acknowledgement."""
+    payloads = []
+    for severity, category in (("warning", "warnings"), ("critical", "critical")):
+        selected = alerts.loc[alerts["severity"].eq(severity)]
+        for tag, group in selected.groupby("alert_tag", sort=False):
+            # Limit cohort rows per message as well as block text length.
+            for offset in range(0, len(group), 20):
+                batch = group.iloc[offset : offset + 20]
+                payload = _build_slack_payload(
+                    batch,
+                    [],
+                    as_of=as_of,
+                    cfg=cfg,
+                    lead_type_id=lead_type_id,
+                    severity=severity,
+                    tag=tag,
+                    now=now,
+                )
+                payloads.append((category, payload, set(batch["state_key"]), False))
+        recovered_group = [
+            item for item in recovered if item.get("severity") == severity
+        ]
+        for offset in range(0, len(recovered_group), 20):
+            batch = recovered_group[offset : offset + 20]
+            payload = _build_slack_payload(
+                alerts.iloc[:0],
+                batch,
+                as_of=as_of,
+                cfg=cfg,
+                lead_type_id=lead_type_id,
+                severity=severity,
+                tag="recovered",
+                now=now,
+            )
+            payloads.append(
+                (category, payload, {item["state_key"] for item in batch}, True)
+            )
+    return payloads
 
 
 def check_once(
@@ -716,6 +830,7 @@ def check_once(
 ) -> pd.DataFrame:
     """Run one degradation check and return currently degraded cohorts."""
     cfg = _config()
+    reminder_minutes = cfg["reminder_minutes"]
     if not cfg["enabled"]:
         logger.info("Model degradation monitoring is disabled in task config.")
         return pd.DataFrame()
@@ -866,7 +981,9 @@ def check_once(
         critical_count,
     )
 
-    previous = _load_state()
+    state_path = _state_path(lead_type_id)
+    previous = _load_state(state_path)
+    now = pd.Timestamp.now(tz="UTC")
     recoverable_keys = _latest_supported_state_keys(
         hourly,
         as_of=as_of,
@@ -877,47 +994,50 @@ def check_once(
         previous,
         cohort_features=cfg["cohort_features"],
         recoverable_keys=recoverable_keys,
+        now=now,
+        reminder_minutes=reminder_minutes,
     )
 
-    state_changed = not alerts.empty or bool(recovered)
-    payload = None
-    if state_changed:
-        payload = _build_slack_payload(
-            alerts,
-            recovered,
-            as_of=as_of,
-            cfg=cfg,
-            lead_type_id=lead_type_id,
-        )
-
+    payloads = _build_routed_slack_payloads(
+        alerts,
+        recovered,
+        as_of=as_of,
+        cfg=cfg,
+        lead_type_id=lead_type_id,
+        now=now,
+    )
     if dry_run:
-        if payload is None:
-            logger.info(
-                "Dry run: no degradation status change; no Slack notification "
-                "would be sent."
-            )
-        else:
+        if not payloads:
+            logger.info("Dry run: no degradation notification is due.")
+        for category, payload, _keys, _recovery in payloads:
             logger.warning(
-                "Dry run: Slack notification suppressed. Notification preview:\n%s",
+                "Dry run: channel %s; notification preview:\n%s",
+                category,
                 payload["text"],
             )
         return degraded
 
-    delivered = True
-    if payload is not None:
-        delivered = notifications.notify_raw(payload)
-        if not delivered:
+    notified_keys: set[str] = set()
+    recovered_keys: set[str] = set()
+    for category, payload, keys, recovery in payloads:
+        if notifications.notify_raw(payload, category=category):
+            (recovered_keys if recovery else notified_keys).update(keys)
+        else:
             logger.warning(
-                "Degradation state changed but Slack was not delivered; "
-                "state will not advance so the next run retries."
+                "Degradation notification to %s was not delivered; "
+                "affected cohorts will retry next run.",
+                category,
             )
-
-    if delivered:
-        _write_state(
-            degraded,
-            as_of=as_of,
-            cohort_features=cfg["cohort_features"],
-        )
+    _write_state(
+        degraded,
+        as_of=as_of,
+        cohort_features=cfg["cohort_features"],
+        path=state_path,
+        previous=previous,
+        notified_keys=notified_keys,
+        recovered_keys=recovered_keys,
+        now=now,
+    )
     return degraded
 
 
