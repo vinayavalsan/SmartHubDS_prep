@@ -359,9 +359,10 @@ def _notify_success(
     parquet_paths = result.get("parquet_paths") or []
     parquet_txt = ", ".join(f"`{p}`" for p in parquet_paths) if parquet_paths else "—"
 
-    # Trimmed: row count + window live in the headline; keep only the new
-    # watermark and the data-quality group. (Full volume/watermark detail is in
-    # the Prefect markdown artifact this flow also publishes.)
+    # Success summary goes to #updates (row count + window + new watermark).
+    # Full volume/watermark detail is in the Prefect markdown artifact. Data
+    # quality is sent separately to #warnings (see below) so a pull with flagged
+    # issues shows up where issues belong, not buried in a success message.
     headline = f"*{rows:,} rows* · `{min_s}` → `{max_s}`"
     groups = [
         (
@@ -371,8 +372,6 @@ def _notify_success(
             },
         ),
     ]
-    if quality is not None:
-        groups.append(vreport.slack_group(quality))
     notifications.notify_success_grouped(
         "data-pull",
         subject=f"{lead_type_name} ({lead_type_id})",
@@ -380,6 +379,15 @@ def _notify_success(
         groups=groups,
         footer_extra=f"table {parquet_txt}",
     )
+
+    # Data-quality issues -> separate #warnings alert (only when something is
+    # flagged). A clean pull stays quiet; the full report is in the artifact.
+    if quality is not None and vreport.issue_count(quality) > 0:
+        _title, quality_fields = vreport.slack_group(quality)
+        notifications.notify_warning(
+            "data-pull",
+            {"Lead type": f"{lead_type_name} ({lead_type_id})", **quality_fields},
+        )
 
 
 def _report(lead_type_id, min_s, max_s, df, result, prev_wm, new_wm) -> None:

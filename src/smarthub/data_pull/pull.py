@@ -337,7 +337,7 @@ def _notify_cli_failure(args, exc: Exception) -> None:
         The exception that caused the failure.
     """
     notifications.notify_failure(
-        "data-pull (manual/CLI)",
+        "data-pull",
         {
             "Lead type(s)": ", ".join(str(x) for x in args.lead_type_ids),
             "Data window (created_at)": (
@@ -345,6 +345,7 @@ def _notify_cli_failure(args, exc: Exception) -> None:
             ),
         },
         error=f"{type(exc).__name__}: {exc}",
+        subject="manual/CLI",
     )
 
 
