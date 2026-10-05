@@ -485,6 +485,8 @@ jobs:
       - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_UPDATES_URL: ${{ secrets.SLACK_WEBHOOK_UPDATES_URL }}
+          SLACK_WEBHOOK_FAILURES_URL: ${{ secrets.SLACK_WEBHOOK_FAILURES_URL }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           RESULT_ISORT: ${{ needs.isort.result }}
           RESULT_BLACK: ${{ needs.black.result }}
