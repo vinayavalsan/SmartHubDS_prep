@@ -188,10 +188,12 @@ def _table(rows: list[tuple[str, str]]) -> str:
     return "\n".join(f"{k.ljust(width)}   {v}" for k, v in rows)
 
 
-def _title(severity: str, pipeline: str, subject: str | None) -> str:
+def _title(
+    severity: str, pipeline: str, subject: str | None, status: str | None = None
+) -> str:
     """Build the bold title line (optional @mention + emoji + env + area + verb)."""
     emoji = _EMOJI.get(severity, "")
-    verb = _VERB.get(severity, severity.upper())
+    verb = status or _VERB.get(severity, severity.upper())
     env = f" {_env_tag()}" if _env_tag() else ""
     subj = f" · {subject}" if subject else ""
     mention = _mention(severity)
@@ -267,6 +269,7 @@ def _build_grouped_payload(
     headline: str | None,
     groups: list,
     footer_extra: str | None,
+    status: str | None = None,
 ) -> dict:
     """Build a code-block Slack message from grouped fields.
 
@@ -276,7 +279,7 @@ def _build_grouped_payload(
     dropped — the trimmed field keys are self-describing). Empty values/groups
     are skipped.
     """
-    head = [_title(severity, pipeline, subject)]
+    head = [_title(severity, pipeline, subject, status)]
     if headline:
         head.append(headline)
     rows: list[tuple[str, str]] = []
@@ -322,11 +325,12 @@ def notify_grouped(
     headline: str | None = None,
     groups: list | None = None,
     footer_extra: str | None = None,
+    status: str | None = None,
 ) -> bool:
-    """Send a severity-routed grouped notification (best-effort)."""
+    """Send a grouped notification; display status does not change severity."""
     return _post(
         _build_grouped_payload(
-            severity, pipeline, subject, headline, groups or [], footer_extra
+            severity, pipeline, subject, headline, groups or [], footer_extra, status
         ),
         _category(severity),
     )
@@ -363,6 +367,7 @@ def notify_success_grouped(
     headline: str | None = None,
     groups: list | None = None,
     footer_extra: str | None = None,
+    status: str | None = None,
 ) -> bool:
     """Notify success with a grouped, sectioned layout -> #updates."""
     return notify_grouped(
@@ -372,6 +377,7 @@ def notify_success_grouped(
         headline=headline,
         groups=groups,
         footer_extra=footer_extra,
+        status=status,
     )
 
 

@@ -368,14 +368,19 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     promotion_mode = result.get("promotion_mode")
     if promotion_mode == "disabled":
         state = "Promotion evaluation disabled"
+        alert_status = "completed (promotion disabled)"
     elif promoted:
         state = "Promoted to serving"
+        alert_status = "promoted"
     elif promotion_status == "awaiting_manual_promotion":
         state = "Eligible — awaiting manual promotion"
+        alert_status = "awaiting manual promotion"
     elif eligibility_status == "eligible":
         state = "Eligible — promotion execution skipped"
+        alert_status = "completed (not promoted)"
     else:
         state = "Not eligible — serving model unchanged"
+        alert_status = "completed (not promoted)"
     # Profit lift goes in the headline (replaces the whole Bid-optimizer group).
     lift_pct = _f(opt.get("expected_profit_lift_pct"), "{:.1%}")
     lift_txt = f" · profit lift {lift_pct}" if lift_pct != "—" else ""
@@ -421,6 +426,7 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
     )
     notifications.notify_success_grouped(
         "train-model",
+        status=alert_status,
         subject=f"{lead_type_name} ({lead_type_id})",
         headline=headline,
         groups=groups,
