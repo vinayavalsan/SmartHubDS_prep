@@ -294,6 +294,7 @@ def test_display_status_does_not_change_failure_routing(capture_slack, monkeypat
     ],
 )
 def test_training_title_status(monkeypatch, result_flags, status, headline):
+    pytest.importorskip("prefect")  # flow.py imports prefect; skip in base CI env
     from smarthub.train_and_predict import flow
 
     monkeypatch.setattr(
