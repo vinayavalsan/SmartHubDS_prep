@@ -1,24 +1,22 @@
 schema_version: 1
 lead_type_id: 6
-parameter_version: params_b1ee5affdeccc60d89cf1a94
+parameter_version: params_7f8016acc74cec3e557c064e
 model_settings:
   model_type: lightgbm
   model_parameters:
     verbosity: -1
     n_jobs: 1
     subsample_freq: 1
-    num_leaves: 102
-    max_depth: 6
-    learning_rate: 0.02816612639771406
-    min_child_samples: 35
-    subsample: 0.9077744952992656
-    colsample_bytree: 0.6010261853723655
-    reg_alpha: 0.0005580560706517769
-    reg_lambda: 0.00038991489561787304
+    num_leaves: 111
+    max_depth: 11
+    learning_rate: 0.017302242135306158
+    min_child_samples: 10
+    subsample: 0.9720940289066522
+    colsample_bytree: 0.8910950214684843
+    reg_alpha: 7.679169247944639e-05
+    reg_lambda: 7.690500467907368e-06
   calibration:
-    enabled: true
-    method: isotonic
-    cv: 3
+    enabled: false
 created_at: null
 code_version: null
 hpo_run_id: null

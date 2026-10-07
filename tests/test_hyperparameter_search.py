@@ -814,7 +814,13 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     defaults["search"].update(n_trials=2, cv_folds=2)
     defaults["early_stopping"].update(max_estimators=8, stopping_rounds=2)
     defaults["finalists"].update(probability_shortlist_top_n=2, optimizer_top_n=2)
-    defaults["parallelism"]["optimizer_jobs"] = 2
+    # Use a small, explicit test configuration instead of production worker counts.
+    expected_parallelism = {
+        "cv_jobs": 2,
+        "probability_jobs": 2,
+        "optimizer_jobs": 2,
+    }
+    defaults["parallelism"].update(expected_parallelism)
     defaults["calibration"]["methods"] = ["none", "sigmoid"]
     defaults["output"]["root"] = str(tmp_path / "outputs")
     defaults["mlflow"]["tracking_db_path"] = str(tmp_path / "mlflow.db")
@@ -843,11 +849,7 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     assert result["hpo_run_id"] in disable_slack_delivery[-1]["text"]
     saved = json.loads(Path(result["summary_path"]).read_text())
     assert saved["training_table_version"] == "snapshot-test"
-    assert saved["parallelism"] == {
-        "cv_jobs": 2,
-        "probability_jobs": 2,
-        "optimizer_jobs": 2,
-    }
+    assert saved["parallelism"] == expected_parallelism
     assert saved["timings"] == result["timings"]
     assert all(value >= 0 for value in saved["timings"].values())
     assert result["optimizer_metrics"]["evaluated_rows"] > 0
