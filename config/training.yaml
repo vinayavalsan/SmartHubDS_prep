@@ -58,7 +58,7 @@ training:
       name: auto
       model_type: lightgbm
       calibration:
-        enabled: true
+        enabled: false
         method: isotonic
         cv: 3
       models:
@@ -66,19 +66,19 @@ training:
           verbosity: -1
           n_jobs: 1
           subsample_freq: 1
-          num_leaves: 102
-          max_depth: 6
-          learning_rate: 0.02816612639771406
-          min_child_samples: 35
-          subsample: 0.9077744952992656
-          colsample_bytree: 0.6010261853723655
-          reg_alpha: 0.0005580560706517769
-          reg_lambda: 0.00038991489561787304
+          num_leaves: 111
+          max_depth: 11
+          learning_rate: 0.017302242135306158
+          min_child_samples: 10
+          subsample: 0.9720940289066522
+          colsample_bytree: 0.8910950214684843
+          reg_alpha: 7.679169247944639e-05
+          reg_lambda: 7.690500467907368e-06
     1:
       name: home
       model_type: lightgbm
       calibration:
-        enabled: true
+        enabled: false
         method: isotonic
         cv: 3
       models:
@@ -86,11 +86,11 @@ training:
           verbosity: -1
           n_jobs: 1
           subsample_freq: 1
-          num_leaves: 85
-          max_depth: 8
-          learning_rate: 0.007995122776833112
-          min_child_samples: 19
-          subsample: 0.9214235974277101
-          colsample_bytree: 0.8384631038813102
-          reg_alpha: 7.1813813673666054e-06
-          reg_lambda: 0.0013513952834439506
+          num_leaves: 98
+          max_depth: 6
+          learning_rate: 0.04502215590015161
+          min_child_samples: 77
+          subsample: 0.9045809768629978
+          colsample_bytree: 0.6034166825746311
+          reg_alpha: 0.000823948019049902
+          reg_lambda: 0.00029305965020131757
