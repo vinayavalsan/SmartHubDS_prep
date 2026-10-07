@@ -36,6 +36,24 @@ export IMAGE_TAG="$TAG"
 IMAGE_REPO="$(envval IMAGE_REPO)"; [ -z "$IMAGE_REPO" ] && IMAGE_REPO="smarthub/smarthub"
 export IMAGE_REPO
 
+# ---- 2b. sync repo files for the current branch ---------------------------
+# deploy pulls IMAGES; docker-compose.yaml + .env templates live in THIS checkout,
+# so fast-forward the branch first or compose changes (e.g. the per-env DB/S3/data
+# routing driven by SLACK_ENV_LABEL) are silently missed. A DETACHED HEAD is the
+# trap that strands the box on an old tag -- make it loud instead of silent.
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  if git symbolic-ref -q HEAD >/dev/null 2>&1; then
+    DEPLOY_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+    echo ">> syncing repo files: git pull --ff-only (branch ${DEPLOY_BRANCH})"
+    git pull --ff-only \
+      || echo "WARN: 'git pull --ff-only' failed; using the current checkout of ${COMPOSE_FILE}." >&2
+  else
+    echo "WARN: git HEAD is DETACHED -- NOT syncing repo files. The box is likely"   >&2
+    echo "      pinned to an old tag and will ignore compose/.env changes. Fix with:" >&2
+    echo "        git checkout smarthub.etl.pipeline && git reset --hard origin/smarthub.etl.pipeline" >&2
+  fi
+fi
+
 # ---- Slack helper: slack <good|danger> <title> <detail> -------------------
 slack() {
   local level="$1" title="$2" detail="$3" hook color when
