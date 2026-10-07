@@ -116,6 +116,11 @@ services:
       # Structured JSON logs (see core/logging_utils.py); the collector merges by container.
       SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: worker
+      # Raw-leads storage namespaced by SLACK_ENV_LABEL so the Leads/Performance
+      # tabs (and prediction_monitoring.parquet, which sits beside PARQUET_DIR)
+      # isolate per environment: staging -> data/staging/..., prod -> data/prod/...
+      DUCKDB_PATH: ${DUCKDB_PATH:-data/${SLACK_ENV_LABEL:-staging}/raw_datasets/leads.duckdb}
+      PARQUET_DIR: ${PARQUET_DIR:-data/${SLACK_ENV_LABEL:-staging}/raw_datasets/leads}
       # Redshift access: tunnel via SSH bastion by default. Set SSH_TUNNEL=false in
       # .env when the host reaches Redshift directly (same-VPC EC2) -- then no key
       # is mounted or required.
@@ -124,12 +129,18 @@ services:
       # MLflow backend store -> shared Postgres `mlflow` database. Created lazily
       # on the first training run (mlflow_utils._ensure_database_exists). The UI
       # below tolerates its absence until then.
-      SMARTHUB_MLFLOW_TRACKING_URI: postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
+      SMARTHUB_MLFLOW_TRACKING_URI: ${SMARTHUB_MLFLOW_TRACKING_URI:-postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow_${SLACK_ENV_LABEL:-staging}}
       SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
       SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
       SMARTHUB_S3_BUCKET: ${SMARTHUB_S3_BUCKET:-smarthub-models}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      # Model-registry prefix is namespaced by SLACK_ENV_LABEL, so prod gets a fresh
+      # registry (versions restart at v1.0.0). staging -> staging-models, prod -> prod-models.
+      SMARTHUB_S3_PREFIX: ${SMARTHUB_S3_PREFIX:-${SLACK_ENV_LABEL:-staging}-models}
+      # Default EMPTY (not minioadmin): with no AWS_* in .env the vars resolve to
+      # "" -> botocore ignores them and falls back to the EC2 IAM instance role.
+      # Local MinIO sets AWS_ACCESS_KEY_ID=minioadmin explicitly in .env.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data
@@ -254,13 +265,17 @@ services:
       STORAGE_BACKEND: parquet
       SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: dashboard
+      # Must match the worker's env-namespaced paths so the Leads/Performance tabs
+      # read the same per-environment data the pipeline writes.
+      DUCKDB_PATH: ${DUCKDB_PATH:-data/${SLACK_ENV_LABEL:-staging}/raw_datasets/leads.duckdb}
+      PARQUET_DIR: ${PARQUET_DIR:-data/${SLACK_ENV_LABEL:-staging}/raw_datasets/leads}
       # Version tag of the built image, so the dashboard's "Repo version"
       # reflects the deployed Docker image rather than stale package metadata.
       SMARTHUB_IMAGE_TAG: ${IMAGE_TAG:-}
-      SMARTHUB_CONFIG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_CONFIG_DB_URL: ${SMARTHUB_CONFIG_DB_URL:-postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_${SLACK_ENV_LABEL:-staging}}
       # Hardcoded (not ${...}) so a stray export can't repoint the prediction log
       # at a per-container sqlite file -- the stack always shares this Postgres.
-      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_PREDICTION_LOG_DB_URL: ${SMARTHUB_PREDICTION_LOG_DB_URL:-postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_${SLACK_ENV_LABEL:-staging}}
     command:
       - streamlit
       - run
@@ -338,14 +353,20 @@ services:
       # SHAP enrichment: `offload` keeps the ~1.5s SHAP work off the bid path
       # (good TAT); the shap-worker backfills it.
       SMARTHUB_SHAP_MODE: ${SMARTHUB_SHAP_MODE:-offload}
-      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_PREDICTION_LOG_DB_URL: ${SMARTHUB_PREDICTION_LOG_DB_URL:-postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_${SLACK_ENV_LABEL:-staging}}
       SMARTHUB_OLLAMA_HOST: http://ollama:11434
       SMARTHUB_LLM_MODEL: ${SMARTHUB_LLM_MODEL:-qwen2.5:1.5b-instruct}
       SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
       SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
       SMARTHUB_S3_BUCKET: ${SMARTHUB_S3_BUCKET:-smarthub-models}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      # Model-registry prefix is namespaced by SLACK_ENV_LABEL, so prod gets a fresh
+      # registry (versions restart at v1.0.0). staging -> staging-models, prod -> prod-models.
+      SMARTHUB_S3_PREFIX: ${SMARTHUB_S3_PREFIX:-${SLACK_ENV_LABEL:-staging}-models}
+      # Default EMPTY (not minioadmin): with no AWS_* in .env the vars resolve to
+      # "" -> botocore ignores them and falls back to the EC2 IAM instance role.
+      # Local MinIO sets AWS_ACCESS_KEY_ID=minioadmin explicitly in .env.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data
@@ -369,7 +390,7 @@ services:
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
-      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_PREDICTION_LOG_DB_URL: ${SMARTHUB_PREDICTION_LOG_DB_URL:-postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_${SLACK_ENV_LABEL:-staging}}
       SMARTHUB_SHAP_WORKER_POLL_SECS: ${SMARTHUB_SHAP_WORKER_POLL_SECS:-1.0}
       SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: shap-worker
@@ -377,8 +398,14 @@ services:
       SMARTHUB_PRODUCTION_STORAGE_BACKEND: ${SMARTHUB_PRODUCTION_STORAGE_BACKEND:-s3}
       SMARTHUB_S3_ENDPOINT_URL: ${SMARTHUB_S3_ENDPOINT_URL-http://minio:9000}
       SMARTHUB_S3_BUCKET: ${SMARTHUB_S3_BUCKET:-smarthub-models}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      # Model-registry prefix is namespaced by SLACK_ENV_LABEL, so prod gets a fresh
+      # registry (versions restart at v1.0.0). staging -> staging-models, prod -> prod-models.
+      SMARTHUB_S3_PREFIX: ${SMARTHUB_S3_PREFIX:-${SLACK_ENV_LABEL:-staging}-models}
+      # Default EMPTY (not minioadmin): with no AWS_* in .env the vars resolve to
+      # "" -> botocore ignores them and falls back to the EC2 IAM instance role.
+      # Local MinIO sets AWS_ACCESS_KEY_ID=minioadmin explicitly in .env.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - ./data:/app/data
@@ -404,7 +431,7 @@ services:
     env_file: .env
     environment:
       SMARTHUB_ROOT: /app
-      SMARTHUB_PREDICTION_LOG_DB_URL: postgresql+psycopg2://prefect:prefect@postgres:5432/prefect
+      SMARTHUB_PREDICTION_LOG_DB_URL: ${SMARTHUB_PREDICTION_LOG_DB_URL:-postgresql+psycopg2://prefect:prefect@postgres:5432/smarthub_${SLACK_ENV_LABEL:-staging}}
       SMARTHUB_SLO_WINDOW_MINUTES: ${SMARTHUB_SLO_WINDOW_MINUTES:-15}
       SMARTHUB_LOG_JSON_DIR: ${SMARTHUB_LOG_JSON_DIR:-/app/logs/app}
       SMARTHUB_SERVICE: slo-alerts
