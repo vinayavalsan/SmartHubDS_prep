@@ -228,7 +228,7 @@ services:
     # tighten via MLFLOW_ALLOWED_HOSTS / MLFLOW_CORS_ORIGINS in .env if desired.
     command: >
       mlflow ui
-      --backend-store-uri postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow
+      --backend-store-uri postgresql+psycopg2://prefect:prefect@postgres:5432/mlflow_${SLACK_ENV_LABEL:-staging}
       --default-artifact-root file:///app/data/mlruns
       --host 0.0.0.0 --port 5000
       --allowed-hosts ${MLFLOW_ALLOWED_HOSTS:-*}
