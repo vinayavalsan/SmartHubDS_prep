@@ -246,7 +246,7 @@ def test_candidate_alerts_include_rejection_retry_and_fixed_schedule(
     _, outcome, hpo, training = runners()
     hpo_flow.run_daily_cycle(6, now=at(5), hpo_runner=hpo, training_runner=training)
     text = slack_payloads[-1]["text"]
-    assert "WARNING" in text
+    assert "completed (not promoted)" in text
     assert "HPO candidate not promoted" in text
     assert "new_hpo" in text and "new_run" in text
     assert "2026-10-06" in text and "2026-10-19" in text

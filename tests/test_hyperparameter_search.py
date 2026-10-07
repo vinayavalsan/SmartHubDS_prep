@@ -953,7 +953,7 @@ def test_search_reports_started_and_completed_without_claiming_promotion(
 
     assert search(6, version="dataset_v1") is result
     assert len(disable_slack_delivery) == 2
-    assert "STARTED" in disable_slack_delivery[0]["text"]
+    assert "started" in disable_slack_delivery[0]["text"]
     assert "auto (6)" in disable_slack_delivery[0]["text"]
     text = disable_slack_delivery[1]["text"]
     assert "HPO completed; parameters saved" in text
@@ -1004,3 +1004,46 @@ def test_slack_delivery_error_never_masks_search_exception(monkeypatch):
 
     with pytest.raises(ValueError, match="search failed"):
         search(6)
+
+
+@pytest.mark.parametrize(
+    "status,headline,category,display_status",
+    [
+        ("started", "HPO started", "updates", "started"),
+        ("success", "HPO completed; parameters saved", "updates", "completed"),
+        ("success", "HPO candidate promoted", "updates", "promoted"),
+        (
+            "success",
+            "HPO candidate not promoted",
+            "updates",
+            "completed (not promoted)",
+        ),
+        ("failure", "HPO failed; retry scheduled", "failures", "FAILED"),
+        ("failure", "HPO candidate training failed", "failures", "FAILED"),
+    ],
+)
+def test_hpo_notification_uses_shared_format_and_category(
+    monkeypatch, status, headline, category, display_status
+):
+    delivered = []
+
+    def capture(payload, channel=None):
+        delivered.append((payload, channel))
+        return True
+
+    monkeypatch.setattr(notifications, "_post", capture)
+    hpo._send_notification(
+        status,
+        {"Lead type": "auto (6)", "Status": headline, "HPO run": "hpo_test"},
+        error="test error" if status == "failure" else None,
+    )
+    payload, channel = delivered[0]
+    assert channel == category
+    title = payload["blocks"][0]["text"]["text"].splitlines()[0]
+    assert f"· hpo · {display_status} · auto (6)" in title
+    assert headline in payload["text"]
+    assert "```" in payload["blocks"][0]["text"]["text"]
+    assert payload["blocks"][1]["type"] == "context"
+    assert ("<!here>" in title) == (status == "failure")
+    if status == "failure":
+        assert "Error: test error" in payload["text"]

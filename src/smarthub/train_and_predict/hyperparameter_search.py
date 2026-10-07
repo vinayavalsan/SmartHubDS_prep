@@ -53,7 +53,30 @@ def _notification_fields(lead_type_id):
 
 def _send_notification(status, fields, error=None):
     try:
-        delivered = notifications.notify(status, "hpo", fields, error=error)
+        fields = dict(fields)
+        subject = fields.pop("Lead type", None)
+        headline = fields.pop("Status", None)
+        severity = "success" if status == "started" else status
+        display_status = {
+            "started": "started",
+            "success": "completed",
+            "warning": "WARNING",
+            "failure": "FAILED",
+        }.get(status, status)
+        if headline == "HPO candidate promoted":
+            display_status = "promoted"
+        elif headline == "HPO candidate not promoted":
+            display_status = "completed (not promoted)"
+        if error:
+            fields["Error"] = str(error).strip()[:1500]
+        delivered = notifications.notify_grouped(
+            severity,
+            "hpo",
+            subject=subject,
+            status=display_status,
+            headline=headline,
+            groups=[("HPO", fields)],
+        )
         if not delivered:
             logger.info("HPO Slack alert was not delivered or Slack is disabled.")
     except Exception:
@@ -113,7 +136,7 @@ def notify_candidate_result(lead_type_id, hpo_result, training_result, state=Non
     promoted = training_result.get("promoted") is True
     state = state or {}
     _send_notification(
-        "success" if promoted else "warning",
+        "success",
         {
             **_notification_fields(lead_type_id),
             "Status": (
@@ -136,7 +159,7 @@ def notify_candidate_error(lead_type_id, hpo_result, state, error):
     """Report execution errors and the persistent next-day retry decision."""
     phase = state["status"]
     _send_notification(
-        "failure" if phase == "training_failed" else "warning",
+        "failure",
         {
             **_notification_fields(lead_type_id),
             "Status": (
