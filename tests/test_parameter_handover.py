@@ -1,4 +1,6 @@
-"""Parameter adoption, exact HPO partitions, and fixed calendar retry behavior."""
+"""Parameter adoption, reproducible splits, and fixed-calendar HPO retries."""
+
+from __future__ import annotations
 
 from datetime import datetime, timezone
 from importlib import import_module
@@ -7,12 +9,18 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 import yaml
+from sklearn.model_selection import train_test_split
 
 from smarthub.core import notifications
 from smarthub.train_and_predict import config, model_parameters, registry
 
-pytest.importorskip("prefect")
-hpo_flow = import_module("smarthub.train_and_predict.hpo_flow")
+
+@pytest.fixture
+def hpo_flow():
+    """Only scheduling tests require the optional Prefect dependency."""
+    pytest.importorskip("prefect")
+    return import_module("smarthub.train_and_predict.hpo_flow")
+
 
 SETTINGS = {
     "model_type": "lightgbm",
@@ -97,7 +105,6 @@ def test_rejected_candidate_keeps_current_then_promotion_adopts_it(policy):
     assert path.read_bytes() == initial_bytes
     candidate = save_candidate(SETTINGS)
     registry.promote("auto", candidate["training_run_id"])
-    # Simulate a crash before writing current_params: startup repairs from serving.
     resolved = model_parameters.resolve_training_parameters(policy, 6)
     assert resolved["model_settings"] == SETTINGS
     assert resolved["hpo_run_id"] == "hpo_test"
@@ -167,10 +174,10 @@ def runners():
         calls.append(("training", kwargs))
         return {**outcome, "training_run_id": "new_run", "promotion_reason": "test"}
 
-    return calls, outcome, hpo, train
+    return (calls, outcome, hpo, train)
 
 
-def test_thursday_retry_promotion_preserves_every_other_monday(policy):
+def test_thursday_retry_promotion_preserves_every_other_monday(policy, hpo_flow):
     calls, outcome, hpo, train = runners()
     kwargs = {"hpo_runner": hpo, "training_runner": train}
     for day in (5, 6, 7):
@@ -191,11 +198,11 @@ def test_thursday_retry_promotion_preserves_every_other_monday(policy):
     next_monday = hpo_flow.run_daily_cycle(6, now=at(19), **kwargs)
     assert next_monday["action"] == "hpo_candidate"
     assert next_monday["hpo_state"]["next_scheduled_date"] == "2026-11-02"
-    assert sum(call[0] == "hpo" for call in calls) == 5
+    assert sum((call[0] == "hpo" for call in calls)) == 5
 
 
 @pytest.mark.parametrize("phase", ["hpo", "training"])
-def test_error_is_persisted_then_fresh_hpo_is_retried_next_day(policy, phase):
+def test_error_is_persisted_then_fresh_hpo_is_retried_next_day(policy, phase, hpo_flow):
     calls, _, hpo, train = runners()
 
     def failing(*args, **kwargs):
@@ -219,7 +226,7 @@ def test_error_is_persisted_then_fresh_hpo_is_retried_next_day(policy, phase):
     assert calls[-2][0] == "hpo"
 
 
-def test_crash_after_promotion_recovers_retry_journal_without_hpo(policy):
+def test_crash_after_promotion_recovers_retry_journal_without_hpo(policy, hpo_flow):
     _, _, hpo, train = runners()
     hpo_flow.run_daily_cycle(6, now=at(5), hpo_runner=hpo, training_runner=train)
     candidate = save_candidate(SETTINGS, hpo_id="new_hpo")
@@ -232,7 +239,7 @@ def test_crash_after_promotion_recovers_retry_journal_without_hpo(policy):
     assert result["hpo_state"]["next_scheduled_date"] == "2026-10-19"
 
 
-def test_schedule_missed_during_downtime_keeps_calendar_anchor(policy):
+def test_schedule_missed_during_downtime_keeps_calendar_anchor(policy, hpo_flow):
     _, _, hpo, train = runners()
     result = hpo_flow.run_daily_cycle(
         6, now=at(21), hpo_runner=hpo, training_runner=train
@@ -241,7 +248,7 @@ def test_schedule_missed_during_downtime_keeps_calendar_anchor(policy):
 
 
 def test_candidate_alerts_include_rejection_retry_and_fixed_schedule(
-    policy, slack_payloads
+    policy, slack_payloads, hpo_flow
 ):
     _, outcome, hpo, training = runners()
     hpo_flow.run_daily_cycle(6, now=at(5), hpo_runner=hpo, training_runner=training)
@@ -263,7 +270,7 @@ def test_candidate_alerts_include_rejection_retry_and_fixed_schedule(
 
 
 def test_training_error_alert_reports_retry_without_claiming_promotion(
-    policy, slack_payloads
+    policy, slack_payloads, hpo_flow
 ):
     _, _, hpo, _ = runners()
 
@@ -280,7 +287,7 @@ def test_training_error_alert_reports_retry_without_claiming_promotion(
 
 
 def test_daily_prefect_entrypoint_uses_local_cycle_without_starting_prefect(
-    monkeypatch,
+    monkeypatch, hpo_flow
 ):
     calls = []
 
@@ -343,3 +350,85 @@ def test_manual_and_legacy_artifacts_are_normalized_to_same_schema(policy):
     legacy = {**manual, "models": {"unused_duplicate": {}}, "calibration": {}}
     model_parameters.atomic_write_yaml(file, legacy)
     assert model_parameters.load_artifact(file, 6) == loaded
+
+
+@pytest.mark.parametrize(
+    "strategy,stratify", [("time", False), ("random", False), ("random", True)]
+)
+def test_candidate_split_matches_original_hpo_algorithm(strategy, stratify):
+    frame = (
+        pd.DataFrame(
+            {
+                "created_at": pd.to_datetime(["2026-10-01"] * 10 + ["2026-10-02"] * 10),
+                "won_flag": [0, 1] * 10,
+                "row_id": range(20),
+            }
+        )
+        .sample(frac=1, random_state=5)
+        .reset_index(drop=True)
+    )
+    settings = {"strategy": strategy, "test_size": 0.25, "stratify": stratify}
+    if strategy == "time":
+        ordered = frame.sort_values("created_at", kind="stable")
+        expected_fit, expected_test = (ordered.iloc[:-5], ordered.iloc[-5:])
+    else:
+        expected_fit, expected_test = train_test_split(
+            frame,
+            test_size=0.25,
+            random_state=17,
+            shuffle=True,
+            stratify=frame["won_flag"] if stratify else None,
+        )
+    data = {
+        "frame_fingerprint": model_parameters.dataset_fingerprint(frame),
+        "split_version": 1,
+        "split_settings": settings,
+        "random_seed": 17,
+    }
+    fit, test = model_parameters.candidate_partitions(frame, data, "won_flag")
+    pd.testing.assert_frame_equal(fit, expected_fit)
+    pd.testing.assert_frame_equal(test, expected_test)
+    daily_fit, daily_test = model_parameters.split_training_data(
+        frame, "won_flag", settings, 17
+    )
+    pd.testing.assert_frame_equal(fit, daily_fit)
+    pd.testing.assert_frame_equal(test, daily_test)
+    with pytest.raises(ValueError, match="changed"):
+        model_parameters.candidate_partitions(frame.iloc[::-1], data, "won_flag")
+    with pytest.raises(ValueError, match="split_version"):
+        model_parameters.candidate_partitions(
+            frame, {**data, "split_version": 99}, "won_flag"
+        )
+
+
+def test_legacy_partition_artifacts_remain_readable():
+    frame = pd.DataFrame({"row_id": range(4)})
+    data = {
+        "frame_fingerprint": model_parameters.dataset_fingerprint(frame),
+        "training_positions": [2, 0, 1],
+        "test_positions": [3],
+    }
+    fit, test = model_parameters.candidate_partitions(frame, data)
+    assert fit.index.tolist() == [2, 0, 1]
+    assert test.index.tolist() == [3]
+    with pytest.raises(ValueError, match="overlap"):
+        model_parameters.candidate_partitions(frame, {**data, "test_positions": [1]})
+
+
+@pytest.mark.parametrize("test_size", [0, 1, -0.1, 1.1])
+def test_invalid_split_fraction_is_rejected(test_size):
+    with pytest.raises(ValueError, match="test_size"):
+        model_parameters.split_training_data(
+            pd.DataFrame({"row_id": range(4)}),
+            "won_flag",
+            {"strategy": "time", "test_size": test_size},
+            17,
+        )
+
+
+def test_split_cannot_leave_empty_training_partition():
+    frame = pd.DataFrame({"created_at": pd.to_datetime(["2026-10-01"])})
+    with pytest.raises(ValueError, match="empty"):
+        model_parameters.split_training_data(
+            frame, "won_flag", {"strategy": "time", "test_size": 0.2}, 17
+        )
