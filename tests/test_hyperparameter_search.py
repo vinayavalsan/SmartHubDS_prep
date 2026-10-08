@@ -166,7 +166,7 @@ def test_reserve_final_test_random_is_reproducible():
 
 
 def test_reserve_final_test_rejects_unknown_strategy():
-    with pytest.raises(ValueError, match="Unsupported HPO split strategy"):
+    with pytest.raises(ValueError, match="Unsupported split strategy"):
         hpo._reserve_final_test(
             _frame(10),
             split_settings={"strategy": "future", "test_size": 0.2},
@@ -897,8 +897,13 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
         model_parameters.settings_from_config(ctx.training_config)
         == artifact["model_settings"]
     )
-    assert ctx.test_df.index.tolist() == artifact["data"]["test_positions"]
-    assert ctx.train_df.index.tolist() == artifact["data"]["training_positions"]
+    expected_fit, expected_test = model_parameters.candidate_partitions(
+        frame, artifact["data"], target_column=hpo.config.TARGET_COL
+    )
+    pd.testing.assert_frame_equal(ctx.test_df, expected_test)
+    pd.testing.assert_frame_equal(ctx.train_df, expected_fit)
+    assert "training_positions" not in artifact["data"]
+    assert "test_positions" not in artifact["data"]
     assert not (tmp_path / "current.yaml").exists()
 
     model_parameters.write_current_parameters(

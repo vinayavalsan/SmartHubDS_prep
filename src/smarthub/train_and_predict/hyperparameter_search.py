@@ -23,7 +23,7 @@ import yaml
 from joblib import Parallel, delayed, parallel_config
 from sklearn.base import clone
 from sklearn.metrics import brier_score_loss, get_scorer, log_loss
-from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, train_test_split
+from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit
 
 from smarthub.core import notifications
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
@@ -361,50 +361,10 @@ def _reserve_final_test(
     tuple[pandas.DataFrame, pandas.DataFrame]
         HPO-eligible rows followed by the untouched final HPO test rows.
     """
-    strategy = str(split_settings["strategy"]).strip().lower()
-    test_size = float(split_settings["test_size"])
-
-    if not 0.0 < test_size < 1.0:
-        raise ValueError("HPO split test_size must be between 0 and 1.")
-
-    if strategy == "time":
-        if "created_at" not in frame.columns:
-            raise ValueError(
-                "Time-based final test reservation requires a 'created_at' column."
-            )
-        ordered = frame.sort_values("created_at", kind="stable")
-        n_test = max(1, int(round(len(ordered) * test_size)))
-        split_index = len(ordered) - n_test
-        hpo_pool = ordered.iloc[:split_index].copy()
-        final_test = ordered.iloc[split_index:].copy()
-    elif strategy == "random":
-        stratify = None
-        if bool(split_settings.get("stratify", False)):
-            stratify = frame[config.TARGET_COL]
-        hpo_pool, final_test = train_test_split(
-            frame,
-            test_size=test_size,
-            random_state=random_seed,
-            shuffle=True,
-            stratify=stratify,
-        )
-        hpo_pool = hpo_pool.copy()
-        final_test = final_test.copy()
-    else:
-        raise ValueError(f"Unsupported HPO split strategy: {strategy!r}.")
-
-    if hpo_pool.empty or final_test.empty:
-        raise ValueError(
-            "HPO split produced an empty HPO pool or final test partition."
-        )
-
-    fit_positions = frame.index.get_indexer(hpo_pool.index).tolist()
-    test_positions = frame.index.get_indexer(final_test.index).tolist()
-    hpo_pool = hpo_pool.reset_index(drop=True)
-    final_test = final_test.reset_index(drop=True)
-    hpo_pool.attrs["row_positions"] = fit_positions
-    final_test.attrs["row_positions"] = test_positions
-    return hpo_pool, final_test
+    hpo_pool, final_test = model_parameters.split_training_data(
+        frame, config.TARGET_COL, split_settings, random_seed
+    )
+    return hpo_pool.reset_index(drop=True), final_test.reset_index(drop=True)
 
 
 def _split_development_and_holdout(
@@ -1327,10 +1287,9 @@ def run_hyperparameter_search(
     settings["candidate_data"] = {
         "training_table_version": prep_summary["training_table_version"],
         "frame_fingerprint": model_parameters.dataset_fingerprint(frame),
-        "training_positions": hpo_pool.attrs["row_positions"],
-        "test_positions": final_training_test.attrs["row_positions"],
-        "split_strategy": search_config.split["strategy"],
-        "stratify": search_config.split.get("stratify", False),
+        "split_version": 1,
+        "split_settings": dict(search_config.split),
+        "random_seed": search_config.random_seed,
         "data_min_created_at": prep_summary.get("data_min_created_at"),
         "data_max_created_at": prep_summary.get("data_max_created_at"),
     }
@@ -1592,6 +1551,7 @@ def run_hyperparameter_search(
                 run_output_dir=summary_path.parent,
                 settings=mlflow_settings,
                 lead_type_name=lead_type_name,
+                resolved_search_config=search_config.as_dict(),
             )
         except Exception:
             logger.exception("HPO MLflow logging failed; parameter artifact retained.")

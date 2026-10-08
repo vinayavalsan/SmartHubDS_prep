@@ -20,7 +20,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
 from smarthub.core import notifications
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
@@ -70,48 +69,9 @@ def split_training_data(
     ValueError
         If split settings are invalid or produce an empty dataset.
     """
-    strategy = str(split_settings["strategy"]).strip().lower()
-    test_size = float(split_settings["test_size"])
-
-    if not 0.0 < test_size < 1.0:
-        raise ValueError("Split test_size must be between 0 and 1.")
-
-    if strategy == "time":
-        n_test = max(1, int(round(len(frame) * test_size)))
-        split_index = len(frame) - n_test
-        train_df = frame.iloc[:split_index].copy()
-        test_df = frame.iloc[split_index:].copy()
-    elif strategy == "random":
-        use_stratification = split_settings["stratify"]
-        stratify = None
-
-        if use_stratification:
-            if target_column not in frame.columns:
-                raise ValueError(
-                    f"Cannot stratify because target column "
-                    f"{target_column!r} is missing."
-                )
-            stratify = frame[target_column]
-
-        train_df, test_df = train_test_split(
-            frame,
-            test_size=test_size,
-            random_state=random_seed,
-            shuffle=True,
-            stratify=stratify,
-        )
-        train_df = train_df.copy()
-        test_df = test_df.copy()
-    else:
-        raise ValueError(f"Unsupported split strategy: {strategy!r}.")
-
-    if train_df.empty or test_df.empty:
-        raise ValueError(
-            "Configured train/test split produced an empty dataset. "
-            "Adjust split.test_size."
-        )
-
-    return train_df, test_df
+    return model_parameters.split_training_data(
+        frame, target_column, split_settings, random_seed
+    )
 
 
 def _optimizer_metrics_for_mlflow(
@@ -422,15 +382,19 @@ def stage_split_and_diagnostics(ctx: TrainingContext) -> TrainingContext:
         and not ctx.parameter_info.get("approved_training_run_id")
     ):
         data = ctx.parameter_info["data"]
-        train_df, test_df = model_parameters.candidate_partitions(frame, data)
-        split_settings = {
-            "strategy": data["split_strategy"],
-            "test_size": len(test_df) / len(frame),
-            "stratify": data.get("stratify", False),
-        }
-        logger.info(
-            "Using exact HPO-reserved final test rows for candidate evaluation."
+        train_df, test_df = model_parameters.candidate_partitions(
+            frame, data, target_column=config.TARGET_COL
         )
+        split_settings = {
+            "strategy": (data.get("split_settings") or {}).get(
+                "strategy", data.get("split_strategy")
+            ),
+            "test_size": len(test_df) / len(frame),
+            "stratify": (data.get("split_settings") or {}).get(
+                "stratify", data.get("stratify", False)
+            ),
+        }
+        logger.info("Using HPO final test partition for candidate evaluation.")
     else:
         train_df, test_df = split_training_data(
             frame=frame,
@@ -1393,7 +1357,7 @@ def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
             manifest = registry.update_manifest(
                 lead_type_name,
                 manifest["training_run_id"],
-                comparison_artifact_path="comparison",
+                comparison_artifact_path="data/comparison",
             )
         if promoted:
             promotion_mlflow_metadata = mlflow_utils.promote_training_run(

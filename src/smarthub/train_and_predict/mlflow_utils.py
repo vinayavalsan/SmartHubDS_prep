@@ -191,9 +191,10 @@ def log_training_run(
             if _is_loggable_number(metric_value):
                 mlflow.log_metric(metric_name, metric_value)
 
-        mlflow.log_artifacts(report_dir, artifact_path="reports")
+        _log_training_artifacts(Path(report_dir))
+        mlflow.set_tag("run_type", "training")
         if comparison_artifact_dir:
-            comparison_artifact_path = "comparison"
+            comparison_artifact_path = "data/comparison"
             mlflow.log_artifacts(
                 comparison_artifact_dir,
                 artifact_path=comparison_artifact_path,
@@ -224,9 +225,7 @@ def log_training_run(
             artifact_path="config",
         )
         if resolved_training_config is not None:
-            mlflow.log_dict(
-                resolved_training_config, "config/resolved_training_config.json"
-            )
+            mlflow.log_dict(resolved_training_config, "config/resolved_config.json")
         mlflow.log_params(dict(model_params))
         mlflow.sklearn.log_model(
             sk_model=model,
@@ -248,7 +247,7 @@ def log_training_run(
         }
 
 
-def log_hpo_run(run_output_dir, settings, lead_type_name):
+def log_hpo_run(run_output_dir, settings, lead_type_name, resolved_search_config=None):
     """Record a completed HPO search and its immutable parameter artifact."""
     import yaml
 
@@ -296,9 +295,59 @@ def log_hpo_run(run_output_dir, settings, lead_type_name):
             for key, value in (summary.get(group) or {}).items():
                 if isinstance(value, (int, float)) and math.isfinite(float(value)):
                     mlflow.log_metric(f"{group}_{key}", value)
-        mlflow.log_artifacts(str(folder), artifact_path="hpo")
+        _log_hpo_artifacts(folder)
+        if resolved_search_config is not None:
+            mlflow.log_dict(resolved_search_config, "config/resolved_config.json")
+        if artifact.get("data") is not None:
+            mlflow.log_dict(artifact["data"], "data/dataset.json")
         mlflow.set_tag("run_type", "hpo")
         return metadata
+
+
+_PLOT_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".pdf", ".html"}
+_TABLE_SUFFIXES = {".csv", ".parquet", ".tsv", ".npz"}
+
+
+def _log_training_artifacts(folder: Path) -> None:
+    """Organize existing local reports without changing their local layout."""
+    for file in sorted(folder.rglob("*")):
+        if not file.is_file():
+            continue
+        relative = file.relative_to(folder)
+        if file.suffix.lower() in _PLOT_SUFFIXES:
+            destination = "plots"
+        elif file.suffix.lower() in _TABLE_SUFFIXES:
+            destination = "data"
+        else:
+            destination = "results"
+        if relative.parent != Path("."):
+            destination += "/" + relative.parent.as_posix()
+        if relative == Path("model_evaluation_summary.json"):
+            mlflow.log_dict(
+                json.loads(file.read_text(encoding="utf-8")), "results/summary.json"
+            )
+        else:
+            mlflow.log_artifact(str(file), artifact_path=destination)
+
+
+def _log_hpo_artifacts(folder: Path) -> None:
+    """Use the same artifact categories as model-training runs."""
+    for file in sorted(folder.iterdir()):
+        if not file.is_file():
+            continue
+        if file.name == "hyperparameter_search.yaml":
+            destination = "config"
+        elif file.suffix.lower() in _TABLE_SUFFIXES:
+            destination = "data"
+        else:
+            destination = "results"
+        mlflow.log_artifact(str(file), artifact_path=destination)
+    plots_dir = folder / "plots"
+    plot_files = sorted(plots_dir.glob("*.html"))
+    for file in plot_files:
+        mlflow.log_artifact(str(file), artifact_path="plots")
+    if not plot_files:
+        logger.warning("No HPO HTML plots found for MLflow upload: %s", plots_dir)
 
 
 def _find_training_run(client, experiment_id, training_run_id):

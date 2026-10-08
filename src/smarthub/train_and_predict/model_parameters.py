@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from sklearn.model_selection import train_test_split
 
 from smarthub.core import paths
 
@@ -243,10 +244,59 @@ def resolve_training_parameters(cfg, lead_type_id: int, parameter_file=None) -> 
     }
 
 
-def candidate_partitions(frame: pd.DataFrame, data: dict):
+def split_training_data(frame, target_column, split_settings, random_seed):
+    """Reproduce a train/test partition from compact settings and ordered data."""
+    strategy = str(split_settings["strategy"]).strip().lower()
+    test_size = float(split_settings["test_size"])
+    if not 0.0 < test_size < 1.0:
+        raise ValueError("Split test_size must be between 0 and 1.")
+    if strategy == "time":
+        if "created_at" not in frame.columns:
+            raise ValueError("Time-based splitting requires a 'created_at' column.")
+        ordered = frame.sort_values("created_at", kind="stable")
+        n_test = max(1, int(round(len(ordered) * test_size)))
+        train_df = ordered.iloc[:-n_test].copy()
+        test_df = ordered.iloc[-n_test:].copy()
+    elif strategy == "random":
+        stratify = None
+        if split_settings.get("stratify", False):
+            if target_column not in frame.columns:
+                raise ValueError(
+                    "Cannot stratify because target column "
+                    f"{target_column!r} is missing."
+                )
+            stratify = frame[target_column]
+        train_df, test_df = train_test_split(
+            frame,
+            test_size=test_size,
+            random_state=random_seed,
+            shuffle=True,
+            stratify=stratify,
+        )
+        train_df, test_df = train_df.copy(), test_df.copy()
+    else:
+        raise ValueError(f"Unsupported split strategy: {strategy!r}.")
+    if train_df.empty or test_df.empty:
+        raise ValueError(
+            "Configured train/test split produced an empty dataset. "
+            "Adjust split.test_size."
+        )
+    return train_df, test_df
+
+
+def candidate_partitions(frame: pd.DataFrame, data: dict, target_column=None):
     """Validate and recover the exact HPO fitting and final-test partitions."""
     if dataset_fingerprint(frame) != data.get("frame_fingerprint"):
         raise ValueError("Pinned HPO dataset changed; refusing candidate training.")
+    if "split_settings" in data:
+        if data.get("split_version") != 1:
+            raise ValueError("Unsupported HPO split_version.")
+        settings = data["split_settings"]
+        seed = data.get("random_seed")
+        if not isinstance(settings, dict) or type(seed) is not int:
+            raise ValueError("HPO result is missing its reproducible split settings.")
+        return split_training_data(frame, target_column, settings, seed)
+    # Read previously generated HPO artifacts without rewriting their partitions.
     fit = data.get("training_positions")
     test = data.get("test_positions")
     if not isinstance(fit, list) or not isinstance(test, list) or not fit or not test:
