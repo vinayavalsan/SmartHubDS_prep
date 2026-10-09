@@ -267,11 +267,18 @@ def stage_prepare_data(ctx: TrainingContext) -> TrainingContext:
             raise ValueError("Requested dataset version differs from the HPO dataset.")
         ctx.version = pinned_version
     logger.info(
-        "Training parameter handoff: source=%s parameter_version=%s hpo_run_id=%s",
-        ctx.parameter_info["parameter_source"],
+        "Training parameter handoff: source=%s file=%s "
+        "parameter_version=%s hpo_run_id=%s",
+        ctx.parameter_info["parameter_source_label"],
+        ctx.parameter_info.get("parameter_file"),
         ctx.parameter_info["parameter_version"],
         ctx.parameter_info.get("hpo_run_id"),
     )
+    if ctx.parameter_info.get("bootstrap_parameter_file"):
+        logger.info(
+            "Bootstrap parameter origin: %s",
+            ctx.parameter_info["bootstrap_parameter_file"],
+        )
     logger.info("Resolved model settings: %s", ctx.parameter_info["model_settings"])
     ctx.lead_type_name = resolve_lead_type_name(ctx.lead_type_id)
     np.random.seed(ctx.training_config.random_seed)
@@ -1403,6 +1410,9 @@ def build_result(ctx: TrainingContext) -> dict[str, Any]:
         "parameter_version": ctx.parameter_info.get("parameter_version"),
         "hpo_run_id": ctx.parameter_info.get("hpo_run_id"),
         "parameter_source": ctx.parameter_info.get("parameter_source"),
+        "parameter_source_label": ctx.parameter_info.get("parameter_source_label"),
+        "parameter_file": ctx.parameter_info.get("parameter_file"),
+        "bootstrap_parameter_file": ctx.parameter_info.get("bootstrap_parameter_file"),
         "lead_type_id": ctx.lead_type_id,
         "lead_type_name": ctx.lead_type_name,
         "model_path": ctx.model_path,

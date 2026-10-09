@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -432,3 +433,283 @@ def test_split_cannot_leave_empty_training_partition():
         model_parameters.split_training_data(
             frame, "won_flag", {"strategy": "time", "test_size": 0.2}, 17
         )
+
+
+@pytest.mark.parametrize(
+    "metadata,label",
+    [
+        ({}, "Manual"),
+        ({"hpo_run_id": "hpo_new"}, "HPO candidate"),
+        (
+            {"hpo_run_id": "hpo_old", "approved_training_run_id": "approved_run"},
+            "Current (explicit file)",
+        ),
+    ],
+)
+def test_explicit_parameter_source_is_described_without_changing_artifact(
+    policy, metadata, label
+):
+    cfg = policy
+    path = Path(cfg.raw["parameters"]["current_file"])
+    candidate = path.parent / "candidate.yaml"
+    model_parameters.atomic_write_yaml(
+        candidate, model_parameters.make_artifact(SETTINGS, 6, **metadata)
+    )
+    before = candidate.read_bytes()
+    info = model_parameters.resolve_training_parameters(cfg, 6, candidate)
+    assert info["parameter_source"] == "parameter_file"
+    assert info["parameter_source_label"] == label
+    assert info["parameter_file"] == str(candidate)
+    assert candidate.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "bootstrap,label", [(False, "Current"), (True, "Bootstrap (current copy)")]
+)
+def test_current_parameter_source_does_not_mislabel_inherited_hpo_provenance(
+    policy, bootstrap, label
+):
+    cfg = policy
+    path = Path(cfg.raw["parameters"]["current_file"])
+    bootstrap_file = path.parent / "bootstrap.yaml"
+    cfg.raw["parameters"]["bootstrap_file"] = str(bootstrap_file)
+    model_parameters.atomic_write_yaml(
+        path,
+        model_parameters.make_artifact(
+            SETTINGS, 6, hpo_run_id="earlier_hpo", initialized_from_bootstrap=bootstrap
+        ),
+    )
+    info = model_parameters.resolve_training_parameters(cfg, 6)
+    assert info["parameter_source"] == "current_file"
+    assert info["parameter_source_label"] == label
+    assert info["parameter_file"] == str(path)
+    assert info["bootstrap_parameter_file"] == (
+        str(bootstrap_file) if bootstrap else None
+    )
+
+
+def test_bootstrap_initialization_reports_current_copy_and_origin(policy):
+    cfg = policy
+    path = Path(cfg.raw["parameters"]["current_file"])
+    bootstrap_file = path.parent / "bootstrap.yaml"
+    cfg.raw["parameters"]["bootstrap_file"] = str(bootstrap_file)
+    info = model_parameters.resolve_training_parameters(cfg, 6)
+    assert info["parameter_source_label"] == "Bootstrap (current copy)"
+    assert info["parameter_file"] == str(path)
+    assert info["bootstrap_parameter_file"] == str(bootstrap_file)
+    assert "parameter_source_label" not in yaml.safe_load(path.read_text())
+
+
+def test_training_alert_includes_parameter_source_and_file(monkeypatch):
+    pytest.importorskip("prefect")
+    training_flow = import_module("smarthub.train_and_predict.flow")
+    alerts = []
+    monkeypatch.setattr(
+        training_flow.notifications,
+        "notify_success_grouped",
+        lambda *args, **kwargs: alerts.append(kwargs),
+    )
+    monkeypatch.setattr(
+        training_flow,
+        "_feature_breakdown",
+        lambda *args: {"total": 2, "n_registered": 2, "n_registered_used": 2},
+    )
+    training_flow._notify_success(
+        "auto",
+        6,
+        {
+            "parameter_source_label": "Bootstrap (current copy)",
+            "parameter_file": "/data/model_parameters/auto/current_params.yaml",
+            "bootstrap_parameter_file": "/config/model_parameters_auto.yaml",
+            "model_path": "/data/models/auto/run/model.pkl",
+            "training_run_id": "run_test",
+        },
+        {},
+        {},
+    )
+    fields = dict(alerts[0]["groups"])["Model"]
+    assert fields["Parameters"] == "Bootstrap (current copy)"
+    assert fields["Parameter file"] == "/data/model_parameters/auto/current_params.yaml"
+    assert fields["Bootstrap file"] == "/config/model_parameters_auto.yaml"
+
+
+def test_search_reports_started_and_completed_without_claiming_promotion(
+    slack_payloads,
+    hpo_flow,
+):
+    result = {
+        "hpo_run_id": "hpo_selected",
+        "parameter_version": "params_selected",
+        "hpo_mlflow_run_id": "mlflow_selected",
+        "model_type": "lightgbm",
+        "selected_trial": 0,
+        "selected_calibration_method": "none",
+        "holdout_probability_metrics": {"log_loss": 0.4},
+        "parameters_path": "/data/hpo/best_parameters.yaml",
+    }
+
+    @hpo_flow._report_search
+    def search(lead_type_id, version, config_path):
+        assert lead_type_id == 6 and version == "dataset_v1" and config_path is None
+        return result
+
+    assert search(6, version="dataset_v1") is result
+    assert len(slack_payloads) == 2
+    assert "started" in slack_payloads[0]["text"]
+    assert "auto (6)" in slack_payloads[0]["text"]
+    text = slack_payloads[1]["text"]
+    assert "HPO completed; parameters saved" in text
+    assert "hpo_selected" in text and "mlflow_selected" in text
+    assert "params_selected" in text and "0.4" in text
+    assert "promoted" not in text.lower()
+
+
+def test_search_failure_alert_preserves_original_exception(slack_payloads, hpo_flow):
+    error = ValueError("insufficient data")
+
+    @hpo_flow._report_flow_failure
+    @hpo_flow._report_search
+    def search(*args):
+        raise error
+
+    with pytest.raises(ValueError) as caught:
+        search(1)
+    assert caught.value is error
+    assert len(slack_payloads) == 2
+    text = slack_payloads[-1]["text"]
+    assert "FAILED" in text and "HPO flow failed" in text
+    assert "home (1)" in text and "ValueError: insufficient data" in text
+
+
+def test_slack_delivery_error_never_changes_search_result(monkeypatch, hpo_flow):
+    def broken(*args, **kwargs):
+        raise OSError("Slack unavailable")
+
+    monkeypatch.setattr(notifications, "_post", broken)
+    result = {"hpo_run_id": "completed"}
+
+    @hpo_flow._report_search
+    def search(*args):
+        return result
+
+    assert search(6) is result
+
+
+def test_slack_delivery_error_never_masks_search_exception(monkeypatch, hpo_flow):
+    def broken(*args, **kwargs):
+        raise OSError("Slack unavailable")
+
+    monkeypatch.setattr(notifications, "_post", broken)
+
+    @hpo_flow._report_search
+    def search(*args):
+        raise ValueError("search failed")
+
+    with pytest.raises(ValueError, match="search failed"):
+        search(6)
+
+
+@pytest.mark.parametrize(
+    "status,headline,category,display_status",
+    [
+        ("started", "HPO started", "updates", "started"),
+        ("success", "HPO completed; parameters saved", "updates", "completed"),
+        ("success", "HPO candidate promoted", "updates", "promoted"),
+        (
+            "success",
+            "HPO candidate not promoted",
+            "updates",
+            "completed (not promoted)",
+        ),
+        ("failure", "HPO failed; retry scheduled", "failures", "FAILED"),
+        ("failure", "HPO candidate training failed", "failures", "FAILED"),
+    ],
+)
+def test_hpo_notification_uses_shared_format_and_category(
+    monkeypatch, status, headline, category, display_status, hpo_flow
+):
+    delivered = []
+
+    def capture(payload, channel=None):
+        delivered.append((payload, channel))
+        return True
+
+    monkeypatch.setattr(notifications, "_post", capture)
+    hpo_flow._send_notification(
+        status,
+        {"Lead type": "auto (6)", "Status": headline, "HPO run": "hpo_test"},
+        error="test error" if status == "failure" else None,
+    )
+    payload, channel = delivered[0]
+    assert channel == category
+    title = payload["blocks"][0]["text"]["text"].splitlines()[0]
+    assert f"· hpo · {display_status} · auto (6)" in title
+    assert headline in payload["text"]
+    assert "```" in payload["blocks"][0]["text"]["text"]
+    assert payload["blocks"][1]["type"] == "context"
+    assert ("<!here>" in title) == (status == "failure")
+    if status == "failure":
+        assert "Error: test error" in payload["text"]
+
+
+@pytest.mark.parametrize("phase", ["hpo", "training"])
+def test_candidate_failure_is_reported_once_by_parent_flow(
+    policy, slack_payloads, hpo_flow, phase
+):
+    _, _, hpo, training = runners()
+    error = RuntimeError("candidate failed")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    wrapped = hpo_flow._report_flow_failure(hpo_flow.run_daily_cycle)
+    with pytest.raises(RuntimeError) as caught:
+        wrapped(
+            6,
+            now=at(5),
+            hpo_runner=fail if phase == "hpo" else hpo,
+            training_runner=fail if phase == "training" else training,
+        )
+    assert caught.value is error
+    failures = [p for p in slack_payloads if "FAILED" in p["text"]]
+    assert len(failures) == 1
+    assert "2026-10-06" in failures[0]["text"]
+    assert "2026-10-19" in failures[0]["text"]
+
+
+def test_flow_preflight_failure_is_reported(slack_payloads, hpo_flow):
+    error = ValueError("invalid schedule")
+
+    @hpo_flow._report_flow_failure
+    def fail(lead_type_id):
+        raise error
+
+    with pytest.raises(ValueError) as caught:
+        fail(6)
+    assert caught.value is error
+    assert len(slack_payloads) == 1
+    assert "invalid schedule" in slack_payloads[0]["text"]
+
+
+def test_hpo_candidate_uses_parent_failure_notification(
+    monkeypatch, slack_payloads, hpo_flow
+):
+    result = {"hpo_run_id": "hpo_test", "parameters_path": "/tmp/candidate.yaml"}
+    monkeypatch.setattr(hpo_flow, "_hpo_task", lambda *args: result)
+    options = []
+
+    def fail(**kwargs):
+        raise ValueError("training failed")
+
+    def with_options(**kwargs):
+        options.append(kwargs)
+        return fail
+
+    monkeypatch.setattr(
+        hpo_flow, "train_flow", SimpleNamespace(with_options=with_options)
+    )
+    with pytest.raises(ValueError, match="training failed"):
+        hpo_flow.hpo_flow.fn(6, train_candidate=True)
+    assert options == [{"on_failure": []}]
+    assert len(slack_payloads) == 1
+    assert "HPO candidate training failed" in slack_payloads[0]["text"]

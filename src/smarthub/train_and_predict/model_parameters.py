@@ -188,12 +188,48 @@ def settings_from_manifest(manifest: dict) -> dict:
     )
 
 
+def _with_parameter_details(result, cfg, explicit_file=None):
+    """Describe the file consumed without changing selection or provenance."""
+    policy = cfg.raw.get("parameters") or {}
+    training_file = (cfg.raw.get("resolved") or {}).get("config_path")
+    if explicit_file is not None:
+        file = explicit_file
+        if result.get("approved_training_run_id"):
+            label = "Current (explicit file)"
+        elif result.get("hpo_run_id"):
+            label = "HPO candidate"
+        else:
+            label = "Manual"
+    elif result.get("parameter_source") == "current_file":
+        file = policy.get("current_file")
+        label = (
+            "Bootstrap (current copy)"
+            if result.get("initialized_from_bootstrap")
+            else "Current"
+        )
+    elif policy.get("bootstrap_file"):
+        file = policy["bootstrap_file"]
+        label = "Bootstrap"
+    else:
+        file = training_file
+        label = "Training YAML"
+    result["parameter_source_label"] = label
+    result["parameter_file"] = str(paths.resolve(file)) if file else None
+    result["bootstrap_parameter_file"] = None
+    if explicit_file is None and result.get("initialized_from_bootstrap"):
+        origin = policy.get("bootstrap_file") or training_file
+        result["bootstrap_parameter_file"] = (
+            str(paths.resolve(origin)) if origin else None
+        )
+    return result
+
+
 def resolve_training_parameters(cfg, lead_type_id: int, parameter_file=None) -> dict:
     """Choose an explicit candidate or the lead type's current parameter file."""
     if parameter_file is not None:
         result = load_artifact(parameter_file, lead_type_id)
         result["parameter_source"] = "parameter_file"
-        return result
+        return _with_parameter_details(result, cfg, parameter_file)
     policy = cfg.raw.get("parameters") or {}
     current_file = policy.get("current_file")
     if current_file:
@@ -232,16 +268,19 @@ def resolve_training_parameters(cfg, lead_type_id: int, parameter_file=None) -> 
         current["parameter_parent_training_run_id"] = current.get(
             "approved_training_run_id"
         )
-        return current
+        return _with_parameter_details(current, cfg)
     logger.info("model_parameters.resolve_training_parameters: using YAML settings.")
     settings = settings_from_config(cfg)
-    return {
-        "model_settings": settings,
-        "parameter_version": parameter_version(settings),
-        "parameter_source": "yaml",
-        "hpo_run_id": None,
-        "hpo_mlflow_run_id": None,
-    }
+    return _with_parameter_details(
+        {
+            "model_settings": settings,
+            "parameter_version": parameter_version(settings),
+            "parameter_source": "yaml",
+            "hpo_run_id": None,
+            "hpo_mlflow_run_id": None,
+        },
+        cfg,
+    )
 
 
 def split_training_data(frame, target_column, split_settings, random_seed):

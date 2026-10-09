@@ -11,7 +11,6 @@ import argparse
 import json
 import time
 from datetime import datetime, timezone
-from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
@@ -25,7 +24,6 @@ from sklearn.base import clone
 from sklearn.metrics import brier_score_loss, get_scorer, log_loss
 from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit
 
-from smarthub.core import notifications
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.core.logging_utils import get_logger
 
@@ -41,144 +39,6 @@ from . import (
 logger = get_logger(__name__)
 
 _PROBABILITY_SCORERS = {"neg_log_loss", "neg_brier_score"}
-
-
-def _notification_fields(lead_type_id):
-    try:
-        label = f"{resolve_lead_type_name(lead_type_id)} ({lead_type_id})"
-    except (ValueError, KeyError, TypeError):
-        label = str(lead_type_id)
-    return {"Lead type": label}
-
-
-def _send_notification(status, fields, error=None):
-    try:
-        fields = dict(fields)
-        subject = fields.pop("Lead type", None)
-        headline = fields.pop("Status", None)
-        severity = "success" if status == "started" else status
-        display_status = {
-            "started": "started",
-            "success": "completed",
-            "warning": "WARNING",
-            "failure": "FAILED",
-        }.get(status, status)
-        if headline == "HPO candidate promoted":
-            display_status = "promoted"
-        elif headline == "HPO candidate not promoted":
-            display_status = "completed (not promoted)"
-        if error:
-            fields["Error"] = str(error).strip()[:1500]
-        delivered = notifications.notify_grouped(
-            severity,
-            "hpo",
-            subject=subject,
-            status=display_status,
-            headline=headline,
-            groups=[("HPO", fields)],
-        )
-        if not delivered:
-            logger.info("HPO Slack alert was not delivered or Slack is disabled.")
-    except Exception:
-        logger.warning("HPO Slack notification failed; run continues.", exc_info=True)
-
-
-def _report_search(function):
-    """Report the public search entrypoint, including CLI and Prefect calls."""
-
-    @wraps(function)
-    def wrapped(lead_type_id, version=None, config_path=None):
-        started = time.perf_counter()
-        fields = {
-            **_notification_fields(lead_type_id),
-            "Status": "HPO started",
-            "Requested dataset": version or "latest",
-        }
-        _send_notification("started", fields)
-        try:
-            result = function(lead_type_id, version, config_path)
-        except Exception as exc:
-            _send_notification(
-                "failure",
-                {
-                    **fields,
-                    "Status": "HPO failed",
-                    "Duration (seconds)": round(time.perf_counter() - started, 1),
-                },
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            raise
-        _send_notification(
-            "success",
-            {
-                **fields,
-                "Status": "HPO completed; parameters saved",
-                "HPO run": result.get("hpo_run_id"),
-                "Parameter version": result.get("parameter_version"),
-                "HPO MLflow run": result.get("hpo_mlflow_run_id"),
-                "Model": result.get("model_type"),
-                "Selected trial": result.get("selected_trial"),
-                "Calibration": result.get("selected_calibration_method"),
-                "Holdout log loss": (
-                    result.get("holdout_probability_metrics") or {}
-                ).get("log_loss"),
-                "Parameter file": result.get("parameters_path"),
-                "Duration (seconds)": round(time.perf_counter() - started, 1),
-            },
-        )
-        return result
-
-    return wrapped
-
-
-def notify_candidate_result(lead_type_id, hpo_result, training_result, state=None):
-    """Keep successful search separate from acceptance of its trained candidate."""
-    promoted = training_result.get("promoted") is True
-    state = state or {}
-    _send_notification(
-        "success",
-        {
-            **_notification_fields(lead_type_id),
-            "Status": (
-                "HPO candidate promoted" if promoted else "HPO candidate not promoted"
-            ),
-            "HPO run": hpo_result.get("hpo_run_id"),
-            "Parameter version": hpo_result.get("parameter_version"),
-            "Training run": training_result.get("training_run_id"),
-            "Promotion status": training_result.get("promotion_status"),
-            "Reason": training_result.get("promotion_reason"),
-            "Current parameters": "Updated" if promoted else "Unchanged",
-            "Next HPO retry": state.get("retry_date") if not promoted else None,
-            "Next scheduled HPO": state.get("next_scheduled_date"),
-            "Timezone": (state.get("schedule") or {}).get("timezone"),
-        },
-    )
-
-
-def notify_candidate_error(lead_type_id, hpo_result, state, error):
-    """Report execution errors and the persistent next-day retry decision."""
-    phase = state["status"]
-    _send_notification(
-        "failure",
-        {
-            **_notification_fields(lead_type_id),
-            "Status": (
-                "HPO candidate training failed"
-                if phase == "training_failed"
-                else "HPO failed; retry scheduled"
-            ),
-            "HPO run": (hpo_result or {}).get("hpo_run_id"),
-            "Promotion": (
-                "Outcome not confirmed"
-                if phase == "training_failed"
-                else "Candidate training not reached"
-            ),
-            "Next HPO retry": state.get("retry_date"),
-            "Next scheduled HPO": state.get("next_scheduled_date"),
-            "Timezone": (state.get("schedule") or {}).get("timezone"),
-        },
-        error=f"{type(error).__name__}: {error}",
-    )
 
 
 def _suggest_parameter(
@@ -1222,7 +1082,6 @@ def _write_outputs(
     return summary_path, parameters_path, finalist_path, plot_paths
 
 
-@_report_search
 def run_hyperparameter_search(
     lead_type_id: int,
     version: str | None = None,

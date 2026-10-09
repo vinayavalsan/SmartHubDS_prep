@@ -412,6 +412,14 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
                 "Run ID": result.get("training_run_id"),
                 "Status": f"{eligibility_status} → {promotion_status}",
                 "Trained on": f"`{lineage.get('training_table_version')}`",
+                "Parameters": result.get("parameter_source_label")
+                or result.get("parameter_source"),
+                "Parameter file": result.get("parameter_file"),
+                **(
+                    {"Bootstrap file": result["bootstrap_parameter_file"]}
+                    if result.get("bootstrap_parameter_file")
+                    else {}
+                ),
             },
         ),
         (
