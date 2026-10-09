@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ from . import (
     feature_diagnostics,
     model_parameters,
     models,
+    optimizer,
     optimizer_evaluation,
     preprocessing,
 )
@@ -576,6 +578,7 @@ def _evaluate_optimizer_and_monotonicity(
     holdout: pd.DataFrame,
     feature_cols: list[str],
     settings: dict[str, Any],
+    candidate_chunk_paths=None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Evaluate optimizer performance and monotonicity in one shared pass.
 
@@ -615,6 +618,7 @@ def _evaluate_optimizer_and_monotonicity(
         monotonicity_tolerance=monotonicity_settings["tolerance"],
         monotonicity_max_violation_rate=(monotonicity_settings["max_violation_rate"]),
         log_summary_result=False,
+        candidate_chunk_paths=candidate_chunk_paths,
     )
 
     if result is None:
@@ -845,11 +849,31 @@ def _evaluate_optimizer_shortlist(
         )
         for result in shortlist
     ]
-    evaluated = _parallel_map(
-        _evaluate_optimizer_and_monotonicity,
-        jobs,
-        settings.get("optimizer_jobs", 1),
-    )
+    with tempfile.TemporaryDirectory(prefix="smarthub_hpo_candidates_") as directory:
+        evaluation_frame = optimizer_evaluation._prepare_frame(holdout)
+        if len(shortlist) > 1 and evaluation_frame is not None:
+            options = settings["optimizer"]
+            chunk_paths = optimizer.cache_candidate_chunks(
+                evaluation_frame,
+                feature_cols,
+                options["target_cm"],
+                options["minimum_bid"],
+                options["bid_step"],
+                options["chunk_size"],
+                directory,
+            )
+            logger.info(
+                "Prepared %s candidate chunks once for %s finalists",
+                len(chunk_paths),
+                len(shortlist),
+            )
+            for job in jobs:
+                job["candidate_chunk_paths"] = chunk_paths
+        evaluated = _parallel_map(
+            _evaluate_optimizer_and_monotonicity,
+            jobs,
+            settings.get("optimizer_jobs", 1),
+        )
     for result, (optimizer_metrics, monotonicity) in zip(shortlist, evaluated):
         result["optimizer_metrics"] = optimizer_metrics
         result["monotonicity"] = monotonicity

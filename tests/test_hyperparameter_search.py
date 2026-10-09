@@ -935,3 +935,63 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     train.stage_split_and_diagnostics(daily)
     assert versions == [None]
     assert daily.parameter_info["approved_training_run_id"] == "approved_candidate"
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_finalists_share_filtered_candidate_cache_and_cleanup(monkeypatch, fail):
+    from pathlib import Path
+
+    holdout = pd.DataFrame(
+        {
+            "bid": [1.0, 1.0, np.nan, 1.0],
+            "expected_revenue": [2.0, 3.0, 4.0, 0.0],
+        },
+        index=[10, 20, 30, 40],
+    )
+    shortlist = [
+        {
+            "_model": label,
+            "trial_number": i,
+            "calibration_method": "none",
+            "probability_metrics": {"log_loss": 0.5},
+        }
+        for i, label in enumerate(["a", "b"])
+    ]
+    observed_paths = []
+    builds = []
+    original = hpo.optimizer.prepare_candidate_chunk
+
+    def build(frame, *args):
+        builds.append(frame.index.tolist())
+        return original(frame, *args)
+
+    def evaluate(function, jobs, n_jobs):
+        paths = jobs[0]["candidate_chunk_paths"]
+        observed_paths.extend(paths)
+        assert jobs[1]["candidate_chunk_paths"] == paths
+        assert all(Path(path).exists() for path in paths)
+        candidates, _ = pd.read_pickle(paths[0])
+        assert candidates["_source_index"].unique().tolist() == [10, 20]
+        if fail:
+            raise RuntimeError("worker failed")
+        return [({"total_expected_profit": 1.0}, {"passed": True})] * 2
+
+    monkeypatch.setattr(hpo.optimizer, "prepare_candidate_chunk", build)
+    monkeypatch.setattr(hpo, "_parallel_map", evaluate)
+    settings = {
+        "optimizer_jobs": 2,
+        "optimizer": {
+            "target_cm": 0.25,
+            "minimum_bid": 0.25,
+            "bid_step": 0.25,
+            "chunk_size": 2,
+        },
+    }
+    if fail:
+        with pytest.raises(RuntimeError, match="worker failed"):
+            hpo._evaluate_optimizer_shortlist(shortlist, holdout, ["bid"], settings)
+    else:
+        hpo._evaluate_optimizer_shortlist(shortlist, holdout, ["bid"], settings)
+    assert builds == [[10, 20]]
+    assert observed_paths
+    assert all(not Path(path).parent.exists() for path in observed_paths)

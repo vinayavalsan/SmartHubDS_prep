@@ -420,3 +420,89 @@ def test_run_bid_optimizer_evaluation_returns_none_if_optimizer_fails(
     )
 
     assert result is None
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 20])
+@pytest.mark.parametrize("zero_probability", [False, True])
+def test_batched_candidates_match_single_lead_optimizer(chunk_size, zero_probability):
+    frame = pd.DataFrame(
+        {
+            "bid": [1.0, 2.0, 1.0, 0.0, 0.0],
+            "feature": [3, 4, 5, 6, 7],
+            "state": ["CA", "TX", None, "WA", "NY"],
+            "expected_revenue": [2.3, 4.0, 0.1, np.nan, -1.0],
+        },
+        index=[30, 10, 20, 40, 50],
+    )
+    features = ["bid", "feature", "state"]
+
+    class Model(_BidModel):
+        def predict_proba(self, inputs):
+            if zero_probability:
+                return np.column_stack([np.ones(len(inputs)), np.zeros(len(inputs))])
+            return super().predict_proba(inputs)
+
+    model = Model()
+    expected = pd.DataFrame(
+        [
+            oe.optimizer.optimize_bid_for_row(
+                row[features],
+                model,
+                row["expected_revenue"],
+                0.25,
+                0.25,
+                0.25,
+            )
+            for _, row in frame.iterrows()
+        ],
+        index=frame.index,
+    )
+    expected = expected.loc[expected["recommended_bid"].notna()]
+    actual = oe.optimizer.score_recommended_bids(
+        frame,
+        model,
+        features,
+        0.25,
+        0.25,
+        0.25,
+        chunk_size,
+        monotonicity_tolerance=1e-8,
+    )
+    pd.testing.assert_frame_equal(actual[expected.columns], expected)
+    if zero_probability:
+        assert actual["recommended_bid"].tolist() == [0.25, 0.25]
+
+
+def test_cached_chunks_match_fresh_scoring_without_rebuilding(tmp_path, monkeypatch):
+    frame = _eval_frame()
+    features = ["bid", "feature"]
+    options = dict(
+        target_cm=0.25,
+        min_bid=0.25,
+        bid_step=0.25,
+        chunk_size=2,
+        monotonicity_enabled=True,
+        monotonicity_tolerance=1e-8,
+        monotonicity_max_violation_rate=0.0,
+        log_summary_result=False,
+    )
+    expected, expected_summary = oe.run_bid_optimizer_evaluation(
+        frame, _BidModel(), features, **options
+    )
+    paths = oe.optimizer.cache_candidate_chunks(
+        frame, features, 0.25, 0.25, 0.25, 2, tmp_path
+    )
+    before = [open(path, "rb").read() for path in paths]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("Cached candidate inputs were rebuilt")
+
+    monkeypatch.setattr(oe.optimizer, "prepare_candidate_chunk", fail)
+    for _ in range(2):
+        actual, summary = oe.run_bid_optimizer_evaluation(
+            frame, _BidModel(), features, candidate_chunk_paths=paths, **options
+        )
+        pd.testing.assert_frame_equal(actual, expected)
+        assert actual.attrs == expected.attrs
+        assert summary.to_dict() == expected_summary.to_dict()
+    assert [open(path, "rb").read() for path in paths] == before
