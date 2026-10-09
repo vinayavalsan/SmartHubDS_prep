@@ -9,23 +9,34 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from uuid import uuid4
 
 import numpy as np
 import optuna
 import pandas as pd
 import yaml
+from joblib import Parallel, delayed, parallel_config
 from sklearn.base import clone
 from sklearn.metrics import brier_score_loss, get_scorer, log_loss
-from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, train_test_split
+from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit
 
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.core.logging_utils import get_logger
 
-from . import config, feature_diagnostics, models, optimizer_evaluation, preprocessing
+from . import (
+    config,
+    feature_diagnostics,
+    model_parameters,
+    models,
+    optimizer,
+    optimizer_evaluation,
+    preprocessing,
+)
 
 logger = get_logger(__name__)
 
@@ -165,6 +176,9 @@ def _hpo_settings(
 ) -> dict[str, Any]:
     """Return normalized SmartHub-specific HPO settings."""
     return {
+        "cv_jobs": search_config.cv_jobs,
+        "probability_jobs": search_config.probability_jobs,
+        "optimizer_jobs": search_config.optimizer_jobs,
         "validation_strategy": search_config.validation_strategy,
         "split": dict(search_config.split),
         "early_stopping": search_config.early_stopping.as_dict(),
@@ -180,6 +194,7 @@ def _hpo_settings(
             search_config.optimizer.as_dict() if search_config.optimizer else None
         ),
         "monotonicity": search_config.monotonicity.as_dict(),
+        "mlflow": search_config.raw.get("mlflow") or {"enabled": False},
     }
 
 
@@ -208,43 +223,9 @@ def _reserve_final_test(
     tuple[pandas.DataFrame, pandas.DataFrame]
         HPO-eligible rows followed by the untouched final HPO test rows.
     """
-    strategy = str(split_settings["strategy"]).strip().lower()
-    test_size = float(split_settings["test_size"])
-
-    if not 0.0 < test_size < 1.0:
-        raise ValueError("HPO split test_size must be between 0 and 1.")
-
-    if strategy == "time":
-        if "created_at" not in frame.columns:
-            raise ValueError(
-                "Time-based final test reservation requires a 'created_at' column."
-            )
-        ordered = frame.sort_values("created_at").reset_index(drop=True)
-        n_test = max(1, int(round(len(ordered) * test_size)))
-        split_index = len(ordered) - n_test
-        hpo_pool = ordered.iloc[:split_index].copy()
-        final_test = ordered.iloc[split_index:].copy()
-    elif strategy == "random":
-        stratify = None
-        if bool(split_settings.get("stratify", False)):
-            stratify = frame[config.TARGET_COL]
-        hpo_pool, final_test = train_test_split(
-            frame,
-            test_size=test_size,
-            random_state=random_seed,
-            shuffle=True,
-            stratify=stratify,
-        )
-        hpo_pool = hpo_pool.copy()
-        final_test = final_test.copy()
-    else:
-        raise ValueError(f"Unsupported HPO split strategy: {strategy!r}.")
-
-    if hpo_pool.empty or final_test.empty:
-        raise ValueError(
-            "HPO split produced an empty HPO pool or final test partition."
-        )
-
+    hpo_pool, final_test = model_parameters.split_training_data(
+        frame, config.TARGET_COL, split_settings, random_seed
+    )
     return hpo_pool.reset_index(drop=True), final_test.reset_index(drop=True)
 
 
@@ -416,6 +397,97 @@ def _log_hpo_coverage_diagnostics(diagnostics: list[dict[str, Any]]) -> None:
     )
 
 
+def _parallel_map(function, jobs: list[dict[str, Any]], n_jobs: int):
+    """Evaluate independent jobs in input order with bounded native threads."""
+    workers = min(n_jobs, len(jobs))
+    if workers <= 1:
+        return [function(**job) for job in jobs]
+    with parallel_config(backend="loky", inner_max_num_threads=1):
+        return Parallel(n_jobs=workers, pre_dispatch=workers)(
+            delayed(function)(**job) for job in jobs
+        )
+
+
+def _score_trial_fold(
+    estimator,
+    X,
+    y,
+    scoring,
+    train_idx,
+    valid_idx,
+    fold_number,
+    trial_number,
+    total_folds,
+    early_stopping_settings,
+):
+    """Fit an isolated estimator on one fold and return its diagnostics."""
+    scorer = get_scorer(scoring)
+    best_iteration = None
+    y_train = y.iloc[train_idx]
+    y_valid = y.iloc[valid_idx]
+    if y_train.nunique() < 2 or y_valid.nunique() < 2:
+        raise ValueError(
+            "Cross-validation fold contains only one target class. "
+            f"fold={fold_number}. Increase the dataset/window size or "
+            "reduce search.cv_folds."
+        )
+
+    logger.info(
+        "Trial %s | fold %s/%s | fitting | train=%s valid=%s",
+        trial_number,
+        fold_number,
+        total_folds,
+        f"{len(train_idx):,}",
+        f"{len(valid_idx):,}",
+    )
+    fold_started = time.perf_counter()
+    fitted = clone(estimator)
+    if early_stopping_settings["enabled"]:
+        early_stopping_result = models.fit_lightgbm_with_early_stopping(
+            fitted,
+            X.iloc[train_idx],
+            y_train,
+            X.iloc[valid_idx],
+            y_valid,
+            stopping_rounds=early_stopping_settings["stopping_rounds"],
+            eval_metric=early_stopping_settings["metric"],
+        )
+        best_iteration = early_stopping_result["best_iteration"]
+    else:
+        fitted.fit(X.iloc[train_idx], y_train)
+
+    score = float(scorer(fitted, X.iloc[valid_idx], y_valid))
+    fold_elapsed = time.perf_counter() - fold_started
+
+    if early_stopping_settings["enabled"]:
+        best_score = early_stopping_result["best_score"]
+        logger.info(
+            "Trial %s | fold %s/%s | complete | score=%.6f | "
+            "best_iteration=%s | stopped_at=%s | best_%s=%s | "
+            "early_stop=%s | elapsed=%.1fs",
+            trial_number,
+            fold_number,
+            total_folds,
+            score,
+            best_iteration,
+            early_stopping_result["stopped_iteration"],
+            early_stopping_settings["metric"],
+            f"{best_score:.6f}" if best_score is not None else "n/a",
+            "yes" if early_stopping_result["stopped_early"] else "no",
+            fold_elapsed,
+        )
+    else:
+        logger.info(
+            "Trial %s | fold %s/%s | complete | score=%.6f | " "elapsed=%.1fs",
+            trial_number,
+            fold_number,
+            total_folds,
+            score,
+            fold_elapsed,
+        )
+    return score, best_iteration
+
+
 def _score_trial_folds(
     estimator,
     X: pd.DataFrame,
@@ -425,82 +497,31 @@ def _score_trial_folds(
     trial_number: int,
     total_folds: int,
     early_stopping_settings: dict[str, Any],
+    n_jobs: int = 1,
 ) -> tuple[list[float], list[int]]:
-    """Fit and score one estimator independently on every CV fold."""
-    scorer = get_scorer(scoring)
-    scores: list[float] = []
-    best_iterations: list[int] = []
-
-    for fold_number, (train_idx, valid_idx) in enumerate(
-        _iter_splits(cross_validation, X, y),
-        start=1,
-    ):
-        y_train = y.iloc[train_idx]
-        y_valid = y.iloc[valid_idx]
-        if y_train.nunique() < 2 or y_valid.nunique() < 2:
-            raise ValueError(
-                "Cross-validation fold contains only one target class. "
-                f"fold={fold_number}. Increase the dataset/window size or "
-                "reduce search.cv_folds."
-            )
-
-        logger.info(
-            "Trial %s | fold %s/%s | fitting | train=%s valid=%s",
-            trial_number,
-            fold_number,
-            total_folds,
-            f"{len(train_idx):,}",
-            f"{len(valid_idx):,}",
+    """Fit independent CV folds and collect results in fold order."""
+    jobs = [
+        dict(
+            estimator=estimator,
+            X=X,
+            y=y,
+            scoring=scoring,
+            train_idx=train_idx,
+            valid_idx=valid_idx,
+            fold_number=fold_number,
+            trial_number=trial_number,
+            total_folds=total_folds,
+            early_stopping_settings=early_stopping_settings,
         )
-        fold_started = time.perf_counter()
-        fitted = clone(estimator)
-        if early_stopping_settings["enabled"]:
-            early_stopping_result = models.fit_lightgbm_with_early_stopping(
-                fitted,
-                X.iloc[train_idx],
-                y_train,
-                X.iloc[valid_idx],
-                y_valid,
-                stopping_rounds=early_stopping_settings["stopping_rounds"],
-                eval_metric=early_stopping_settings["metric"],
-            )
-            best_iteration = early_stopping_result["best_iteration"]
-            best_iterations.append(best_iteration)
-        else:
-            fitted.fit(X.iloc[train_idx], y_train)
-
-        score = float(scorer(fitted, X.iloc[valid_idx], y_valid))
-        fold_elapsed = time.perf_counter() - fold_started
-        scores.append(score)
-
-        if early_stopping_settings["enabled"]:
-            best_score = early_stopping_result["best_score"]
-            logger.info(
-                "Trial %s | fold %s/%s | complete | score=%.6f | "
-                "best_iteration=%s | stopped_at=%s | best_%s=%s | "
-                "early_stop=%s | elapsed=%.1fs",
-                trial_number,
-                fold_number,
-                total_folds,
-                score,
-                best_iteration,
-                early_stopping_result["stopped_iteration"],
-                early_stopping_settings["metric"],
-                f"{best_score:.6f}" if best_score is not None else "n/a",
-                "yes" if early_stopping_result["stopped_early"] else "no",
-                fold_elapsed,
-            )
-        else:
-            logger.info(
-                "Trial %s | fold %s/%s | complete | score=%.6f | " "elapsed=%.1fs",
-                trial_number,
-                fold_number,
-                total_folds,
-                score,
-                fold_elapsed,
-            )
-
-    return scores, best_iterations
+        for fold_number, (train_idx, valid_idx) in enumerate(
+            _iter_splits(cross_validation, X, y), start=1
+        )
+    ]
+    results = _parallel_map(_score_trial_fold, jobs, n_jobs)
+    return (
+        [score for score, _ in results],
+        [iteration for _, iteration in results if iteration is not None],
+    )
 
 
 def _trial_stability(
@@ -557,6 +578,7 @@ def _evaluate_optimizer_and_monotonicity(
     holdout: pd.DataFrame,
     feature_cols: list[str],
     settings: dict[str, Any],
+    candidate_chunk_paths=None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Evaluate optimizer performance and monotonicity in one shared pass.
 
@@ -596,6 +618,7 @@ def _evaluate_optimizer_and_monotonicity(
         monotonicity_tolerance=monotonicity_settings["tolerance"],
         monotonicity_max_violation_rate=(monotonicity_settings["max_violation_rate"]),
         log_summary_result=False,
+        candidate_chunk_paths=candidate_chunk_paths,
     )
 
     if result is None:
@@ -692,6 +715,31 @@ def _evaluate_probability_candidate(
     }
 
 
+def _evaluate_probability_candidate_safely(**kwargs):
+    """Keep the existing per-candidate failure policy inside each worker."""
+    trial = kwargs["trial"]
+    method = kwargs["calibration_method"]
+    logger.info("Probability finalist: trial=%s calibration=%s", trial.number, method)
+    try:
+        result = _evaluate_probability_candidate(**kwargs)
+    except (RuntimeError, ValueError) as exc:
+        logger.warning(
+            "Skipping probability finalist trial=%s calibration=%s: %s",
+            trial.number,
+            method,
+            exc,
+        )
+        return None
+    logger.info(
+        "Trial=%s calibration=%s | log loss=%.6f | Brier=%.6f",
+        trial.number,
+        method,
+        result["probability_metrics"]["log_loss"],
+        result["probability_metrics"]["brier_score"],
+    )
+    return result
+
+
 def _evaluate_probability_candidates(
     study: optuna.Study,
     fixed_parameters: dict[str, Any],
@@ -712,38 +760,27 @@ def _evaluate_probability_candidates(
     top_trials = completed[: settings["probability_shortlist_top_n"]]
     results: list[dict[str, Any]] = []
 
-    for trial in top_trials:
-        for calibration_method in settings["calibration_methods"]:
-            logger.info(
-                "Probability finalist: trial=%s calibration=%s",
-                trial.number,
-                calibration_method,
-            )
-            try:
-                result = _evaluate_probability_candidate(
-                    trial=trial,
-                    calibration_method=calibration_method,
-                    fixed_parameters=fixed_parameters,
-                    model_type=model_type,
-                    numeric=numeric,
-                    categorical=categorical,
-                    development=development,
-                    holdout=holdout,
-                    settings=settings,
-                )
-                results.append(result)
-                logger.info(
-                    "  Holdout log loss=%.6f | Brier=%.6f",
-                    result["probability_metrics"]["log_loss"],
-                    result["probability_metrics"]["brier_score"],
-                )
-            except (RuntimeError, ValueError) as exc:
-                logger.warning(
-                    "Skipping probability finalist trial=%s calibration=%s: %s",
-                    trial.number,
-                    calibration_method,
-                    exc,
-                )
+    jobs = [
+        dict(
+            trial=trial,
+            calibration_method=method,
+            fixed_parameters=fixed_parameters,
+            model_type=model_type,
+            numeric=numeric,
+            categorical=categorical,
+            development=development,
+            holdout=holdout,
+            settings=settings,
+        )
+        for trial in top_trials
+        for method in settings["calibration_methods"]
+    ]
+    evaluated = _parallel_map(
+        _evaluate_probability_candidate_safely,
+        jobs,
+        settings.get("probability_jobs", 1),
+    )
+    results = [result for result in evaluated if result is not None]
 
     if not results:
         raise RuntimeError("No probability finalist completed evaluation successfully.")
@@ -803,12 +840,41 @@ def _evaluate_optimizer_shortlist(
             result["calibration_method"],
             result["probability_metrics"]["log_loss"],
         )
-        optimizer_metrics, monotonicity = _evaluate_optimizer_and_monotonicity(
+    jobs = [
+        dict(
             model=result["_model"],
             holdout=holdout,
             feature_cols=feature_cols,
             settings=settings,
         )
+        for result in shortlist
+    ]
+    with tempfile.TemporaryDirectory(prefix="smarthub_hpo_candidates_") as directory:
+        evaluation_frame = optimizer_evaluation._prepare_frame(holdout)
+        if len(shortlist) > 1 and evaluation_frame is not None:
+            options = settings["optimizer"]
+            chunk_paths = optimizer.cache_candidate_chunks(
+                evaluation_frame,
+                feature_cols,
+                options["target_cm"],
+                options["minimum_bid"],
+                options["bid_step"],
+                options["chunk_size"],
+                directory,
+            )
+            logger.info(
+                "Prepared %s candidate chunks once for %s finalists",
+                len(chunk_paths),
+                len(shortlist),
+            )
+            for job in jobs:
+                job["candidate_chunk_paths"] = chunk_paths
+        evaluated = _parallel_map(
+            _evaluate_optimizer_and_monotonicity,
+            jobs,
+            settings.get("optimizer_jobs", 1),
+        )
+    for result, (optimizer_metrics, monotonicity) in zip(shortlist, evaluated):
         result["optimizer_metrics"] = optimizer_metrics
         result["monotonicity"] = monotonicity
 
@@ -922,7 +988,9 @@ def _write_outputs(
     settings: dict[str, Any],
 ) -> tuple[Path, Path, Path, dict[str, Path]]:
     """Write tuning summary, finalist details, YAML, and Optuna plots."""
-    run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_timestamp = (
+        datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
+    )
     run_output_dir = output_dir / run_timestamp
     run_output_dir.mkdir(parents=True, exist_ok=False)
 
@@ -981,26 +1049,32 @@ def _write_outputs(
     )
 
     calibration_method = selected["calibration_method"]
-    yaml_payload = {
-        "calibration": {
-            "enabled": calibration_method != "none",
-        },
-        "models": {
-            # random_state is derived from the active workflow seed by config.py.
-            # Do not write a second seed option into the generated YAML.
-            model_type: {
-                key: value
-                for key, value in selected["parameters"].items()
-                if key not in {"random_state", "n_estimators"}
-            },
-        },
-        "hpo_diagnostics": {
-            "selected_cv_median_best_iteration": selected.get("best_iteration"),
-        },
+    selected_model_parameters = {
+        key: value
+        for key, value in selected["parameters"].items()
+        if key != "random_state"
+        and (key != "n_estimators" or not settings["early_stopping"]["enabled"])
     }
+    calibration = {"enabled": calibration_method != "none"}
     if calibration_method != "none":
-        yaml_payload["calibration"]["method"] = calibration_method
-        yaml_payload["calibration"]["cv"] = selected["calibration_cv"]
+        calibration.update(method=calibration_method, cv=selected["calibration_cv"])
+    model_settings = model_parameters.normalize_settings(
+        {
+            "model_type": model_type,
+            "model_parameters": selected_model_parameters,
+            "calibration": calibration,
+        }
+    )
+    hpo_run_id = f"hpo_{lead_type_name}_{run_timestamp}"
+    yaml_payload = model_parameters.make_artifact(
+        model_settings,
+        lead_type_id,
+        hpo_run_id=hpo_run_id,
+        created_at=summary["created_at"],
+        code_version=model_parameters.code_version(),
+        data=settings.get("candidate_data"),
+    )
+    summary["selected_cv_median_best_iteration"] = selected.get("best_iteration")
 
     parameters_path = run_output_dir / "best_parameters.yaml"
     parameters_path.write_text(
@@ -1011,6 +1085,17 @@ def _write_outputs(
     source_config_path = Path(search_config.raw["resolved"]["config_path"])
     config_copy_path = run_output_dir / "hyperparameter_search.yaml"
     config_copy_path.write_bytes(source_config_path.read_bytes())
+    summary.update(
+        {
+            "hpo_run_id": hpo_run_id,
+            "parameter_version": yaml_payload["parameter_version"],
+            "code_version": yaml_payload["code_version"],
+            "data": yaml_payload["data"],
+        }
+    )
+    summary_path.write_text(
+        json.dumps(summary, indent=2, default=str), encoding="utf-8"
+    )
 
     plot_paths = _write_optuna_plots(
         run_output_dir=run_output_dir,
@@ -1027,12 +1112,19 @@ def run_hyperparameter_search(
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run SmartHub-aware hyperparameter search for one model family."""
+    run_started = time.perf_counter()
     search_config = config.load_hyperparameter_search_config(
         lead_type_id,
         config_path,
     )
     _validate_probability_scoring(search_config.scoring)
     settings = _hpo_settings(search_config)
+    logger.info(
+        "HPO workers: CV=%s probability=%s optimizer=%s",
+        settings["cv_jobs"],
+        settings["probability_jobs"],
+        settings["optimizer_jobs"],
+    )
 
     normalized_model_type = search_config.model_type.strip().lower()
     model_config = search_config.model_config(normalized_model_type)
@@ -1075,6 +1167,15 @@ def run_hyperparameter_search(
         split_settings=search_config.split,
         random_seed=search_config.random_seed,
     )
+    settings["candidate_data"] = {
+        "training_table_version": prep_summary["training_table_version"],
+        "frame_fingerprint": model_parameters.dataset_fingerprint(frame),
+        "split_version": 1,
+        "split_settings": dict(search_config.split),
+        "random_seed": search_config.random_seed,
+        "data_min_created_at": prep_summary.get("data_min_created_at"),
+        "data_max_created_at": prep_summary.get("data_max_created_at"),
+    }
     preprocessing.assert_trainable(hpo_pool, lead_type_name)
 
     development, holdout = _split_development_and_holdout(
@@ -1172,6 +1273,7 @@ def run_hyperparameter_search(
             trial_number=trial.number + 1,
             total_folds=search_config.cv_folds,
             early_stopping_settings=settings["early_stopping"],
+            n_jobs=settings["cv_jobs"],
         )
         stability = _trial_stability(scores, best_iterations)
         for name, value in stability.items():
@@ -1250,6 +1352,7 @@ def run_hyperparameter_search(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=search_config.random_seed),
     )
+    stage_started = time.perf_counter()
     study.optimize(
         objective,
         n_trials=search_config.n_trials,
@@ -1257,6 +1360,8 @@ def run_hyperparameter_search(
         n_jobs=search_config.n_jobs,
     )
 
+    timings = {"search_seconds": time.perf_counter() - stage_started}
+    stage_started = time.perf_counter()
     finalist_results = _evaluate_probability_candidates(
         study=study,
         fixed_parameters=fixed_parameters,
@@ -1267,6 +1372,8 @@ def run_hyperparameter_search(
         holdout=holdout,
         settings=settings,
     )
+    timings["probability_seconds"] = time.perf_counter() - stage_started
+    stage_started = time.perf_counter()
     if settings["optimizer_enabled"]:
         optimizer_shortlist = _optimizer_shortlist(finalist_results, settings)
         _evaluate_optimizer_shortlist(
@@ -1282,6 +1389,7 @@ def run_hyperparameter_search(
             search_config.scoring,
         )
 
+    timings["optimizer_and_selection_seconds"] = time.perf_counter() - stage_started
     output_dir = Path(
         search_config.output_dir(
             lead_type_name,
@@ -1310,6 +1418,34 @@ def run_hyperparameter_search(
         settings=settings,
     )
 
+    timings["total_seconds"] = time.perf_counter() - run_started
+    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary_payload["timings"] = timings
+    summary_payload["parallelism"] = {
+        key: settings[key] for key in ("cv_jobs", "probability_jobs", "optimizer_jobs")
+    }
+    summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+    mlflow_settings = settings["mlflow"]
+    if mlflow_settings.get("enabled"):
+        try:
+            from . import mlflow_utils
+
+            mlflow_metadata = mlflow_utils.log_hpo_run(
+                run_output_dir=summary_path.parent,
+                settings=mlflow_settings,
+                lead_type_name=lead_type_name,
+                resolved_search_config=search_config.as_dict(),
+            )
+        except Exception:
+            logger.exception("HPO MLflow logging failed; parameter artifact retained.")
+            if mlflow_settings.get("required", True):
+                raise
+        else:
+            summary_payload.update(mlflow_metadata)
+            summary_path.write_text(
+                json.dumps(summary_payload, indent=2), encoding="utf-8"
+            )
+    logger.info("HPO stage timings (seconds): %s", timings)
     yaml_text = parameters_path.read_text(encoding="utf-8").rstrip()
     logger.info("Optuna best score: %.6f", study.best_value)
     logger.info("Selected finalist trial: %s", selected["trial_number"])
@@ -1329,10 +1465,19 @@ def run_hyperparameter_search(
     logger.info("Saved summary: %s", summary_path)
     logger.info("Saved finalist results: %s", finalist_path)
     logger.info("Saved parameters: %s", parameters_path)
+    logger.info(
+        "Candidate training command: smarthub-train --lead-type-id %s "
+        "--parameter-file %s",
+        lead_type_id,
+        parameters_path,
+    )
     for plot_name, plot_path in plot_paths.items():
         logger.info("Saved %s plot: %s", plot_name, plot_path)
 
     return {
+        "hpo_run_id": summary_payload["hpo_run_id"],
+        "parameter_version": summary_payload["parameter_version"],
+        "hpo_mlflow_run_id": summary_payload.get("hpo_mlflow_run_id"),
         "lead_type_id": lead_type_id,
         "lead_type_name": lead_type_name,
         "model_type": normalized_model_type,
@@ -1355,6 +1500,8 @@ def run_hyperparameter_search(
         "summary_path": str(summary_path),
         "parameters_path": str(parameters_path),
         "finalist_results_path": str(finalist_path),
+        "timings": timings,
+        "parallelism": summary_payload["parallelism"],
         "plot_paths": {
             plot_name: str(plot_path) for plot_name, plot_path in plot_paths.items()
         },

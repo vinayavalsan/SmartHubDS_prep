@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import warnings
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -198,6 +199,69 @@ def optimize_bid_for_row(
     return result
 
 
+def prepare_candidate_chunk(chunk_df, feature_cols, target_cm, min_bid, bid_step):
+    """Build one candidate table without allocating a DataFrame per lead."""
+    columns = feature_cols + [config.REVENUE_COL]
+    # Match iterrows' common row dtype and the old dict-based frame inference.
+    values = chunk_df[columns].to_numpy()
+    source = pd.DataFrame(values, columns=columns).infer_objects()
+    counts = []
+    bids = []
+    maxima = []
+    empty_results = []
+    for row_index, revenue in zip(chunk_df.index, values[:, -1]):
+        candidate_bids, max_bid = candidate_bids_for_revenue(
+            revenue, target_cm, min_bid, bid_step
+        )
+        counts.append(len(candidate_bids))
+        maxima.append(max_bid)
+        if len(candidate_bids):
+            bids.append(candidate_bids)
+        else:
+            result = empty_result(max_bid)
+            result["_source_index"] = row_index
+            empty_results.append(result)
+    if not bids:
+        return None, empty_results
+    positions = np.repeat(np.arange(len(chunk_df)), counts)
+    candidates = source[feature_cols].iloc[positions].reset_index(drop=True)
+    candidate_bids = np.concatenate(bids)
+    metadata = pd.DataFrame(
+        {
+            "_source_index": chunk_df.index.to_numpy()[positions],
+            "_candidate_bid": candidate_bids,
+            "_expected_revenue": source[config.REVENUE_COL].to_numpy()[positions],
+            "_max_bid": np.asarray(maxima)[positions],
+            "_n_candidate_bids": np.asarray(counts)[positions],
+        }
+    )
+    candidates["bid"] = candidate_bids
+    return pd.concat([candidates, metadata], axis=1), empty_results
+
+
+def cache_candidate_chunks(
+    eval_df, feature_cols, target_cm, min_bid, bid_step, chunk_size, directory
+):
+    """Cache chunks locally for worker reuse, holding only one chunk in RAM.
+
+    The containing HPO run owns and removes the temporary directory. Workers
+    read their own copies and never write predictions into the cached inputs.
+    """
+    chunk_paths = []
+    for start in range(0, len(eval_df), chunk_size):
+        path = Path(directory) / f"chunk_{start}.pkl"
+        prepared = prepare_candidate_chunk(
+            eval_df.iloc[start : start + chunk_size],
+            feature_cols,
+            target_cm,
+            min_bid,
+            bid_step,
+        )
+        pd.to_pickle(prepared, path)
+        chunk_paths.append(str(path))
+    return chunk_paths
+
+
 def _score_chunk(
     chunk_df: pd.DataFrame,
     model,
@@ -206,6 +270,7 @@ def _score_chunk(
     min_bid: float,
     bid_step: float,
     monotonicity_tolerance: float | None = None,
+    prepared_candidates=None,
 ) -> tuple[pd.DataFrame, dict]:
     """Optimize one chunk using a single batched model call.
 
@@ -233,41 +298,18 @@ def _score_chunk(
     tuple[pandas.DataFrame, dict]
         Recommended-bid results followed by monotonicity diagnostics.
     """
-    candidate_frames = []
-    empty_results = []
-
-    columns = feature_cols + [config.REVENUE_COL]
-    for row_index, row in chunk_df[columns].iterrows():
-        expected_revenue = row[config.REVENUE_COL]
-        candidate_bids, max_bid = candidate_bids_for_revenue(
-            expected_revenue,
-            target_cm,
-            min_bid,
-            bid_step,
+    if prepared_candidates is None:
+        candidates, empty_results = prepare_candidate_chunk(
+            chunk_df, feature_cols, target_cm, min_bid, bid_step
         )
-        if len(candidate_bids) == 0:
-            result = empty_result(max_bid)
-            result["_source_index"] = row_index
-            empty_results.append(result)
-            continue
-
-        candidate_rows = pd.DataFrame(
-            [row[feature_cols].to_dict()] * len(candidate_bids)
-        )
-        candidate_rows["bid"] = candidate_bids
-        candidate_rows["_source_index"] = row_index
-        candidate_rows["_candidate_bid"] = candidate_bids
-        candidate_rows["_expected_revenue"] = expected_revenue
-        candidate_rows["_max_bid"] = max_bid
-        candidate_rows["_n_candidate_bids"] = len(candidate_bids)
-        candidate_frames.append(candidate_rows)
-
+    else:
+        cached, empty_results = prepared_candidates
+        candidates = None if cached is None else cached.copy()
     diagnostics = _empty_monotonicity_diagnostics()
-    if not candidate_frames:
+    if candidates is None:
         result = pd.DataFrame(empty_results).set_index("_source_index")
         return result, diagnostics
 
-    candidates = pd.concat(candidate_frames, ignore_index=True)
     with quiet_feature_name_warning():
         candidates["_predicted_win_rate"] = model.predict_proba(
             candidates[feature_cols]
@@ -333,6 +375,7 @@ def score_recommended_bids(
     bid_step: float,
     chunk_size: int,
     monotonicity_tolerance: float | None = None,
+    candidate_chunk_paths=None,
 ) -> pd.DataFrame | None:
     """Attach recommended-bid outputs using chunked scoring.
 
@@ -357,6 +400,10 @@ def score_recommended_bids(
         monotonicity is measured from the same candidate predictions used for
         bid optimization.
 
+    candidate_chunk_paths : list[str] | None
+        Internal HPO cache for this exact filtered dataset and optimizer
+        settings. Each worker loads one prepared chunk at a time.
+
     Returns
     -------
     pandas.DataFrame | None
@@ -370,7 +417,10 @@ def score_recommended_bids(
     )
     result_chunks = []
     monotonicity = _empty_monotonicity_diagnostics()
-    for start in range(0, n_rows, chunk_size):
+    starts = range(0, n_rows, chunk_size)
+    if candidate_chunk_paths is not None and len(candidate_chunk_paths) != len(starts):
+        raise ValueError("Candidate cache does not match the evaluation chunks.")
+    for chunk_number, start in enumerate(starts):
         stop = min(start + chunk_size, n_rows)
         chunk_result, chunk_monotonicity = _score_chunk(
             eval_df.iloc[start:stop],
@@ -380,6 +430,11 @@ def score_recommended_bids(
             min_bid,
             bid_step,
             monotonicity_tolerance=monotonicity_tolerance,
+            prepared_candidates=(
+                pd.read_pickle(candidate_chunk_paths[chunk_number])
+                if candidate_chunk_paths is not None
+                else None
+            ),
         )
         result_chunks.append(chunk_result)
         _merge_monotonicity_diagnostics(

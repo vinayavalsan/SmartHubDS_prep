@@ -320,6 +320,8 @@ def save_version(
         "lineage": lineage,
         "model_params": model_params,
         "training_config": training_config,
+        "model_settings": training_config.get("model_settings"),
+        **(training_config.get("parameter_provenance") or {}),
         "promotion_mode": promotion_mode,
         "eligibility_status": eligibility_status,
         "promotion_status": promotion_status,

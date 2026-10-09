@@ -123,6 +123,7 @@ def train_flow(
     lead_type_id: int,
     version: str | None = None,
     register_mlflow: bool = True,
+    parameter_file: str | None = None,
 ) -> dict:
     """Run the Prefect model-training flow for one lead type.
 
@@ -154,6 +155,7 @@ def train_flow(
         lead_type_id=lead_type_id,
         version=version,
         register_mlflow=register_mlflow,
+        parameter_file=parameter_file,
     )
     ctx = _prepare_data_task(ctx)
     ctx = _split_and_diagnostics_task(ctx)
@@ -185,6 +187,12 @@ def train_flow(
         "log_loss": m.get("log_loss"),
         "rows_trained": result["prep_summary"]["training_rows"],
         "model_path": result["model_path"],
+        "training_run_id": result["training_run_id"],
+        "parameter_version": result["parameter_version"],
+        "hpo_run_id": result["hpo_run_id"],
+        "promoted": result["promoted"],
+        "promotion_status": result["promotion_status"],
+        "promotion_reason": result["promotion_reason"],
     }
 
 
@@ -404,6 +412,14 @@ def _notify_success(lead_type_name, lead_type_id, result, m, opt) -> None:
                 "Run ID": result.get("training_run_id"),
                 "Status": f"{eligibility_status} → {promotion_status}",
                 "Trained on": f"`{lineage.get('training_table_version')}`",
+                "Parameters": result.get("parameter_source_label")
+                or result.get("parameter_source"),
+                "Parameter file": result.get("parameter_file"),
+                **(
+                    {"Bootstrap file": result["bootstrap_parameter_file"]}
+                    if result.get("bootstrap_parameter_file")
+                    else {}
+                ),
             },
         ),
         (

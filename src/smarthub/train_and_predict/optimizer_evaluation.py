@@ -497,6 +497,7 @@ def run_bid_optimizer_evaluation(
     monotonicity_tolerance,
     monotonicity_max_violation_rate,
     log_summary_result=True,
+    candidate_chunk_paths=None,
 ):
     """Run offline bid optimization on held-out rows.
 
@@ -525,6 +526,10 @@ def run_bid_optimizer_evaluation(
     log_summary_result : bool
         Whether to log the aggregate optimizer summary.
 
+    candidate_chunk_paths : list[str] | None
+        Internal HPO cache for this exact filtered dataset and optimizer
+        settings. Each worker loads one prepared chunk at a time.
+
     Returns
     -------
     tuple[pandas.DataFrame, OptimizerSummary] | None
@@ -542,6 +547,11 @@ def run_bid_optimizer_evaluation(
         min_bid,
         bid_step,
         chunk_size,
+        **(
+            {"candidate_chunk_paths": candidate_chunk_paths}
+            if candidate_chunk_paths is not None
+            else {}
+        ),
         monotonicity_tolerance=(
             monotonicity_tolerance if monotonicity_enabled else None
         ),
