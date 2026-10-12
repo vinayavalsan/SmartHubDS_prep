@@ -79,8 +79,6 @@ def _report_search(function):
                 **fields,
                 "Status": "HPO completed; parameters saved",
                 "HPO run": result.get("hpo_run_id"),
-                "Parameter version": result.get("parameter_version"),
-                "HPO MLflow run": result.get("hpo_mlflow_run_id"),
                 "Model": result.get("model_type"),
                 "Selected trial": result.get("selected_trial"),
                 "Calibration": result.get("selected_calibration_method"),
@@ -108,7 +106,6 @@ def notify_candidate_result(lead_type_id, hpo_result, training_result, state=Non
                 "HPO candidate promoted" if promoted else "HPO candidate not promoted"
             ),
             "HPO run": hpo_result.get("hpo_run_id"),
-            "Parameter version": hpo_result.get("parameter_version"),
             "Training run": training_result.get("training_run_id"),
             "Promotion status": training_result.get("promotion_status"),
             "Reason": training_result.get("promotion_reason"),

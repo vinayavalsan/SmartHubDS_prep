@@ -31,11 +31,34 @@ _ARTIFACT_METADATA_DEFAULTS = {
     "approved_training_run_id": None,
     "production_model_version": None,
     "initialized_from_bootstrap": False,
+    "training_settings": None,
 }
 
 
+def parameter_file_payload(artifact: dict, *, current=False) -> dict:
+    """Keep operational settings in YAML and tracking metadata in manifests.
+
+    Current parameters never pin data or training policy. Candidate parameters
+    retain the dataset and fitting settings needed to repeat candidate training.
+    """
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "lead_type_id": artifact["lead_type_id"],
+        "model_settings": normalize_settings(artifact["model_settings"]),
+        "hpo_run_id": artifact.get("hpo_run_id"),
+        "approved_training_run_id": artifact.get("approved_training_run_id"),
+    }
+    if artifact.get("initialized_from_bootstrap"):
+        payload["initialized_from_bootstrap"] = True
+    if not current:
+        for key in ("data", "training_settings"):
+            if artifact.get(key) is not None:
+                payload[key] = copy.deepcopy(artifact[key])
+    return payload
+
+
 def make_artifact(settings, lead_type_id, **metadata) -> dict:
-    """Use one persisted format for HPO, current, and manual parameters."""
+    """Build internal provenance; parameter_file_payload selects YAML fields."""
     unknown = set(metadata) - set(_ARTIFACT_METADATA_DEFAULTS)
     if unknown:
         raise ValueError(f"Unsupported parameter artifact metadata: {sorted(unknown)}")
@@ -262,8 +285,15 @@ def resolve_training_parameters(cfg, lead_type_id: int, parameter_file=None) -> 
                 created_at=datetime.now(timezone.utc).isoformat(),
                 initialized_from_bootstrap=True,
             )
-            atomic_write_yaml(path, current)
+            atomic_write_yaml(path, parameter_file_payload(current, current=True))
             logger.info("Initialized current parameters from bootstrap: %s", path)
+        # Legacy current files may still contain the candidate's old dataset.
+        # Daily training must always use its own dataset and training policy.
+        current["data"] = None
+        current["training_settings"] = None
+        compact = parameter_file_payload(current, current=True)
+        if yaml.safe_load(path.read_text(encoding="utf-8")) != compact:
+            atomic_write_yaml(path, compact)
         current["parameter_source"] = "current_file"
         current["parameter_parent_training_run_id"] = current.get(
             "approved_training_run_id"
@@ -387,5 +417,5 @@ def write_current_parameters(cfg, lead_type_id: int, manifest: dict) -> dict:
     )
     current_file = (cfg.raw.get("parameters") or {}).get("current_file")
     if current_file:
-        atomic_write_yaml(current_file, artifact)
+        atomic_write_yaml(current_file, parameter_file_payload(artifact, current=True))
     return artifact

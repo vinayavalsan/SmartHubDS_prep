@@ -129,6 +129,7 @@ def test_hpo_logging_records_resolved_config_and_dataset_metadata(
         },
     }
     (tmp_path / "best_parameters.yaml").write_text(yaml.safe_dump(artifact))
+    parameter_bytes = (tmp_path / "best_parameters.yaml").read_bytes()
     (tmp_path / "summary.json").write_text(json.dumps({"hpo_run_id": "hpo_test"}))
     monkeypatch.setattr(
         mlflow_utils, "_configure_tracking", lambda *args: ("sqlite:///local", "1")
@@ -163,9 +164,6 @@ def test_hpo_logging_records_resolved_config_and_dataset_metadata(
     assert logged["config/resolved_config.json"] == resolved
     assert logged["data/dataset.json"] == artifact["data"]
     assert result["hpo_mlflow_run_id"] == "mlflow_test"
-    assert (
-        yaml.safe_load((tmp_path / "best_parameters.yaml").read_text())[
-            "hpo_mlflow_run_id"
-        ]
-        == "mlflow_test"
-    )
+    assert (tmp_path / "best_parameters.yaml").read_bytes() == parameter_bytes
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["hpo_mlflow_run_id"] == "mlflow_test"

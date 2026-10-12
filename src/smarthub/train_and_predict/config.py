@@ -457,6 +457,7 @@ def load_training_config(
     lead_type_id: int,
     config_path: str | Path | None = None,
     model_settings: dict | None = None,
+    training_settings: dict | None = None,
 ) -> TrainingConfig:
     """Load and validate the complete training configuration.
 
@@ -505,6 +506,14 @@ def load_training_config(
         lead_type_root,
         f"training.lead_types.{lead_type_id}",
     )
+    if training_settings is not None:
+        snapshot = _mapping(training_settings, "parameter training_settings")
+        if set(snapshot) != {"random_seed", "early_stopping"}:
+            raise ValueError("Invalid candidate training_settings fields.")
+        if type(snapshot["random_seed"]) is not int:
+            raise ValueError("Candidate training random_seed must be an integer.")
+        training_root["random_seed"] = snapshot["random_seed"]
+        training_root["early_stopping"] = copy.deepcopy(snapshot["early_stopping"])
     if model_settings is None:
         parameter_policy = training_root.get("parameters") or {}
         current_file = parameter_policy.get("current_file")

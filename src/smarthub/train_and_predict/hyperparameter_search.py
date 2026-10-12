@@ -1074,11 +1074,22 @@ def _write_outputs(
         code_version=model_parameters.code_version(),
         data=settings.get("candidate_data"),
     )
+    # Save the fitting policy that candidate training will use. Search scoring
+    # still uses HPO configuration only; this snapshot is for the later fit.
+    candidate_config = config.load_training_config(
+        lead_type_id, model_settings=model_settings
+    )
+    yaml_payload["training_settings"] = {
+        "random_seed": candidate_config.random_seed,
+        "early_stopping": candidate_config.early_stopping.as_dict(),
+    }
     summary["selected_cv_median_best_iteration"] = selected.get("best_iteration")
 
     parameters_path = run_output_dir / "best_parameters.yaml"
     parameters_path.write_text(
-        yaml.safe_dump(yaml_payload, sort_keys=False),
+        yaml.safe_dump(
+            model_parameters.parameter_file_payload(yaml_payload), sort_keys=False
+        ),
         encoding="utf-8",
     )
 
@@ -1091,6 +1102,7 @@ def _write_outputs(
             "parameter_version": yaml_payload["parameter_version"],
             "code_version": yaml_payload["code_version"],
             "data": yaml_payload["data"],
+            "training_settings": yaml_payload["training_settings"],
         }
     )
     summary_path.write_text(

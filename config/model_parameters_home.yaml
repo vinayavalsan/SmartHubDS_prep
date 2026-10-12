@@ -1,6 +1,5 @@
 schema_version: 1
 lead_type_id: 1
-parameter_version: params_774d2073728679328538335f
 model_settings:
   model_type: lightgbm
   model_parameters:
@@ -17,12 +16,5 @@ model_settings:
     reg_lambda: 0.00029305965020131757
   calibration:
     enabled: false
-created_at: null
-code_version: null
 hpo_run_id: null
-hpo_mlflow_run_id: null
-hpo_mlflow_tracking_uri: null
-data: null
 approved_training_run_id: null
-production_model_version: null
-initialized_from_bootstrap: false

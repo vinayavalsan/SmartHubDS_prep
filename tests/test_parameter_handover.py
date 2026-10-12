@@ -309,7 +309,7 @@ def test_daily_prefect_entrypoint_uses_local_cycle_without_starting_prefect(
     assert calls == [{"lead_type_id": 6, "register_mlflow": False}]
 
 
-def test_bootstrap_hpo_and_promoted_current_files_use_identical_schema(policy):
+def test_candidate_keeps_dataset_and_current_keeps_only_approved_settings(policy):
     bootstrap = model_parameters.resolve_training_parameters(policy, 6)
     current_path = model_parameters.paths.resolve(
         policy.raw["parameters"]["current_file"]
@@ -323,13 +323,26 @@ def test_bootstrap_hpo_and_promoted_current_files_use_identical_schema(policy):
         data={"training_table_version": "dataset_v1"},
     )
     candidate_path = current_path.parent / "best_parameters.yaml"
-    model_parameters.atomic_write_yaml(candidate_path, hpo_artifact)
+    model_parameters.atomic_write_yaml(
+        candidate_path, model_parameters.parameter_file_payload(hpo_artifact)
+    )
     manifest = save_candidate(SETTINGS)
     registry.promote("auto", manifest["training_run_id"])
     current = model_parameters.resolve_training_parameters(policy, 6)
     current_yaml = yaml.safe_load(current_path.read_text())
     candidate_yaml = yaml.safe_load(candidate_path.read_text())
-    assert bootstrap_yaml.keys() == candidate_yaml.keys() == current_yaml.keys()
+    common = {
+        "schema_version",
+        "lead_type_id",
+        "model_settings",
+        "hpo_run_id",
+        "approved_training_run_id",
+    }
+    assert set(current_yaml) == common
+    assert set(candidate_yaml) == common | {"data"}
+    assert set(bootstrap_yaml) == common | {"initialized_from_bootstrap"}
+    assert "parameter_version" not in candidate_yaml
+    assert "hpo_mlflow_run_id" not in current_yaml
     assert (
         candidate_yaml["model_settings"] == current_yaml["model_settings"] == SETTINGS
     )
@@ -338,7 +351,7 @@ def test_bootstrap_hpo_and_promoted_current_files_use_identical_schema(policy):
     assert current_yaml["approved_training_run_id"] == manifest["training_run_id"]
     assert current_yaml["hpo_run_id"] == candidate_yaml["hpo_run_id"]
     assert bootstrap["hpo_run_id"] is None
-    assert current["parameter_version"] == candidate_yaml["parameter_version"]
+    assert current["parameter_version"] == model_parameters.parameter_version(SETTINGS)
 
 
 def test_manual_and_legacy_artifacts_are_normalized_to_same_schema(policy):
@@ -351,6 +364,53 @@ def test_manual_and_legacy_artifacts_are_normalized_to_same_schema(policy):
     legacy = {**manual, "models": {"unused_duplicate": {}}, "calibration": {}}
     model_parameters.atomic_write_yaml(file, legacy)
     assert model_parameters.load_artifact(file, 6) == loaded
+
+
+def test_legacy_current_file_is_compacted_without_retaining_pinned_data(policy):
+    path = Path(policy.raw["parameters"]["current_file"])
+    legacy = model_parameters.make_artifact(
+        SETTINGS,
+        6,
+        hpo_run_id="old_hpo",
+        approved_training_run_id="approved_run",
+        hpo_mlflow_run_id="internal_mlflow_id",
+        data={"training_table_version": "old_dataset"},
+        training_settings={"random_seed": 123},
+    )
+    model_parameters.atomic_write_yaml(path, legacy)
+    current = model_parameters.resolve_training_parameters(policy, 6)
+    saved = yaml.safe_load(path.read_text())
+    assert current["data"] is None and current["training_settings"] is None
+    assert saved == {
+        "schema_version": 1,
+        "lead_type_id": 6,
+        "model_settings": SETTINGS,
+        "hpo_run_id": "old_hpo",
+        "approved_training_run_id": "approved_run",
+    }
+
+
+def test_candidate_training_policy_overrides_changed_daily_fitting_settings():
+    daily = config.load_training_config(6, model_settings=SETTINGS)
+    snapshot = {
+        "random_seed": 17,
+        "early_stopping": {
+            **daily.early_stopping.as_dict(),
+            "max_estimators": 12,
+            "stopping_rounds": 2,
+        },
+    }
+    candidate = config.load_training_config(
+        6, model_settings=SETTINGS, training_settings=snapshot
+    )
+    assert candidate.random_seed == candidate.model_parameters["random_state"] == 17
+    assert candidate.early_stopping.max_estimators == 12
+    assert candidate.early_stopping.stopping_rounds == 2
+    assert config.load_training_config(6, model_settings=SETTINGS) == daily
+    with pytest.raises(ValueError, match="fields"):
+        config.load_training_config(
+            6, model_settings=SETTINGS, training_settings={"random_seed": 17}
+        )
 
 
 @pytest.mark.parametrize(
@@ -559,8 +619,8 @@ def test_search_reports_started_and_completed_without_claiming_promotion(
     assert "auto (6)" in slack_payloads[0]["text"]
     text = slack_payloads[1]["text"]
     assert "HPO completed; parameters saved" in text
-    assert "hpo_selected" in text and "mlflow_selected" in text
-    assert "params_selected" in text and "0.4" in text
+    assert "hpo_selected" in text and "0.4" in text
+    assert "mlflow_selected" not in text and "params_selected" not in text
     assert "promoted" not in text.lower()
 
 

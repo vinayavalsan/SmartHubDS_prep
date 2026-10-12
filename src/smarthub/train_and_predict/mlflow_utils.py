@@ -267,10 +267,7 @@ def log_hpo_run(run_output_dir, settings, lead_type_name, resolved_search_config
             "hpo_mlflow_run_id": run.info.run_id,
             "hpo_mlflow_tracking_uri": tracking_uri,
         }
-        artifact.update(metadata)
-        parameter_path.write_text(
-            yaml.safe_dump(artifact, sort_keys=False), encoding="utf-8"
-        )
+        # Tracking IDs belong in the summary, not the reusable parameter YAML.
         summary.update(metadata)
         (folder / "summary.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"

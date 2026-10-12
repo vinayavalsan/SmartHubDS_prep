@@ -860,8 +860,9 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     artifact = model_parameters.load_artifact(result["parameters_path"], 6)
     assert artifact["parameter_version"] == result["parameter_version"]
     assert artifact["hpo_run_id"] == result["hpo_run_id"]
-    assert artifact["hpo_mlflow_run_id"] == result["hpo_mlflow_run_id"]
-    assert artifact["hpo_mlflow_run_id"]
+    assert artifact["hpo_mlflow_run_id"] is None
+    assert saved["hpo_mlflow_run_id"] == result["hpo_mlflow_run_id"]
+    assert result["hpo_mlflow_run_id"]
     training_payload = yaml.safe_load(
         hpo.config.paths.resolve("config/training.yaml").read_text()
     )
@@ -871,17 +872,25 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     training_payload["training"]["defaults"]["early_stopping"].update(
         max_estimators=8, stopping_rounds=2
     )
+    training_payload["training"]["defaults"]["random_seed"] = 99
     training_path = tmp_path / "training.yaml"
     training_path.write_text(yaml.safe_dump(training_payload))
     original_load = hpo.config.load_training_config
-    monkeypatch.setattr(
-        hpo.config,
-        "load_training_config",
-        lambda lead_type_id, config_path=None, model_settings=None: original_load(
+
+    def load_test_training(
+        lead_type_id, config_path=None, model_settings=None, **kwargs
+    ):
+        return original_load(
             lead_type_id,
             config_path=config_path or training_path,
             model_settings=model_settings,
-        ),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        hpo.config,
+        "load_training_config",
+        load_test_training,
     )
     summary.update(dropped_rows=0, win_rate=0.5, missing_feature_columns=[])
     ctx = train.TrainingContext(
@@ -890,6 +899,13 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     train.stage_prepare_data(ctx)
     train.stage_split_and_diagnostics(ctx)
     train.stage_fit_model(ctx)
+    assert (
+        ctx.training_config.random_seed == artifact["training_settings"]["random_seed"]
+    )
+    assert (
+        ctx.training_config.early_stopping.as_dict()
+        == artifact["training_settings"]["early_stopping"]
+    )
     assert ctx.version == "snapshot-test"
     assert (
         model_parameters.settings_from_config(ctx.training_config)
@@ -903,6 +919,21 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     assert "training_positions" not in artifact["data"]
     assert "test_positions" not in artifact["data"]
     assert not (tmp_path / "current.yaml").exists()
+
+    replay = train.TrainingContext(
+        lead_type_id=6, parameter_file=result["parameters_path"]
+    )
+    train.stage_prepare_data(replay)
+    train.stage_split_and_diagnostics(replay)
+    train.stage_fit_model(replay)
+    pd.testing.assert_frame_equal(replay.train_df, ctx.train_df)
+    pd.testing.assert_frame_equal(replay.test_df, ctx.test_df)
+    np.testing.assert_allclose(
+        replay.model.predict_proba(replay.X_test),
+        ctx.model.predict_proba(ctx.X_test),
+        rtol=0,
+        atol=0,
+    )
 
     model_parameters.write_current_parameters(
         ctx.training_config,
@@ -918,7 +949,10 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     current_path = tmp_path / "current.yaml"
     current_yaml = yaml.safe_load(current_path.read_text())
     hpo_yaml = yaml.safe_load(Path(result["parameters_path"]).read_text())
-    assert current_yaml.keys() == hpo_yaml.keys()
+    assert "data" in hpo_yaml and "training_settings" in hpo_yaml
+    assert "data" not in current_yaml and "training_settings" not in current_yaml
+    assert "parameter_version" not in hpo_yaml
+    assert "hpo_mlflow_run_id" not in hpo_yaml
     assert current_yaml["model_settings"] == hpo_yaml["model_settings"]
     assert "models" not in hpo_yaml and "calibration" not in hpo_yaml
     # The approved current artifact is also accepted explicitly, using fresh
@@ -934,6 +968,8 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     train.stage_prepare_data(daily)
     train.stage_split_and_diagnostics(daily)
     assert versions == [None]
+    assert daily.training_config.random_seed == 99
+    assert daily.training_config.early_stopping.max_estimators == 8
     assert daily.parameter_info["approved_training_run_id"] == "approved_candidate"
 
 

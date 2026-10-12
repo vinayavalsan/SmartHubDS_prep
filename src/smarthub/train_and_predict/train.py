@@ -247,10 +247,18 @@ def stage_prepare_data(ctx: TrainingContext) -> TrainingContext:
     ctx.parameter_info = model_parameters.resolve_training_parameters(
         base_config, ctx.lead_type_id, ctx.parameter_file
     )
+    candidate = (
+        ctx.parameter_file
+        and ctx.parameter_info.get("hpo_run_id")
+        and not ctx.parameter_info.get("approved_training_run_id")
+    )
+    saved_training = ctx.parameter_info.get("training_settings") if candidate else None
+    config_options = {"training_settings": saved_training} if saved_training else {}
     ctx.training_config = config.load_training_config(
         ctx.lead_type_id,
         config_path=base_config.raw["resolved"]["config_path"],
         model_settings=ctx.parameter_info["model_settings"],
+        **config_options,
     )
     artifact_data = ctx.parameter_info.get("data")
     if (
@@ -268,11 +276,11 @@ def stage_prepare_data(ctx: TrainingContext) -> TrainingContext:
         ctx.version = pinned_version
     logger.info(
         "Training parameter handoff: source=%s file=%s "
-        "parameter_version=%s hpo_run_id=%s",
+        "hpo_run_id=%s approved_training_run_id=%s",
         ctx.parameter_info["parameter_source_label"],
         ctx.parameter_info.get("parameter_file"),
-        ctx.parameter_info["parameter_version"],
         ctx.parameter_info.get("hpo_run_id"),
+        ctx.parameter_info.get("approved_training_run_id"),
     )
     if ctx.parameter_info.get("bootstrap_parameter_file"):
         logger.info(

@@ -647,6 +647,7 @@ def test_per_lead_bootstrap_uses_shared_parameter_schema(lead_type_id, lead_name
     from smarthub.train_and_predict.model_parameters import (
         load_artifact,
         make_artifact,
+        parameter_file_payload,
         settings_from_config,
     )
 
@@ -655,7 +656,9 @@ def test_per_lead_bootstrap_uses_shared_parameter_schema(lead_type_id, lead_name
     assert cfg.raw["parameters"]["bootstrap_file"] == expected_path
     persisted = yaml.safe_load(paths.resolve(expected_path).read_text())
     artifact = load_artifact(expected_path, lead_type_id)
-    assert persisted == make_artifact(artifact["model_settings"], lead_type_id)
+    assert persisted == parameter_file_payload(
+        make_artifact(artifact["model_settings"], lead_type_id), current=True
+    )
     assert settings_from_config(cfg) == artifact["model_settings"]
     assert artifact["hpo_run_id"] is None
     with pytest.raises(ValueError, match="lead_type_id"):
