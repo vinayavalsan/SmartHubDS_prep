@@ -713,6 +713,26 @@ training:
         lightgbm: { num_leaves: 102, max_depth: 6, learning_rate: 0.028, ... }
 ```
 
+### Daily model scheduling
+
+Daily training and HPO timing are both configured in `prefect.yaml`, in the
+deployment whose entrypoint is `hpo_flow.py:daily_model_cycle`. Its `schedules`
+set the daily cron/timezone for auto and home. Its `parameters.hpo_schedule`
+sets `interval_days`, `retry_days`, `anchor_date` and the HPO policy timezone.
+Per-schedule parameters may override the complete HPO policy for a lead type.
+Only the per-lead HPO `state_file` path remains in `config/training.yaml`.
+
+Prefect supplies this policy to deployed daily runs. Direct local calls to
+`daily_model_cycle` or `run_daily_cycle` without an explicit `hpo_schedule`
+read the matching policy from the repository's `prefect.yaml`; there are no
+duplicated timing defaults in Python or `training.yaml`. Direct `hpo_flow`
+calls still run immediately and do not use the daily/HPO schedule.
+
+Reapply the deployment after changing either the daily cron or HPO timing
+parameters. Moving the unchanged policy preserves existing HPO state files.
+An actual policy change retains the existing state-validation requirement:
+reconcile the saved state before continuing with a different cadence.
+
 ### 4.3 `config/hyperparameter_search.yaml`
 
 Read by `train_and_predict/config.py` and consumed by `hyperparameter_search.py`; path

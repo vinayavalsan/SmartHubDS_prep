@@ -82,6 +82,13 @@ deployments:
       work_queue_name: training
     parameters:
       register_mlflow: true
+      # HPO timing policy shared by auto and home. Per-schedule parameters can
+      # override this mapping when a lead type needs a different cadence.
+      hpo_schedule:
+        interval_days: 14
+        retry_days: 1
+        anchor_date: "2026-10-05"
+        timezone: "UTC"
     schedules:
       - cron: "0 5 * * *"
         timezone: "UTC"

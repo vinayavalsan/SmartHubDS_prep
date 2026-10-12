@@ -61,10 +61,6 @@ training:
         current_file: data/model_parameters/auto/current_params.yaml
       hpo_schedule:
         state_file: data/model_parameters/auto/hpo_state.yaml
-        interval_days: 14
-        retry_days: 1
-        anchor_date: '2026-10-05'
-        timezone: UTC
     1:
       name: home
       parameters:
@@ -72,7 +68,3 @@ training:
         current_file: data/model_parameters/home/current_params.yaml
       hpo_schedule:
         state_file: data/model_parameters/home/hpo_state.yaml
-        interval_days: 14
-        retry_days: 1
-        anchor_date: '2026-10-05'
-        timezone: UTC

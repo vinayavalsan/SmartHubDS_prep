@@ -204,7 +204,31 @@ def hpo_flow(
         raise
 
 
-def run_daily_cycle(lead_type_id, *, now=None, hpo_runner, training_runner):
+def _deployment_hpo_schedule(lead_type_id):
+    """Use the deployment policy for direct local calls without duplicating it."""
+    with paths.resolve("prefect.yaml").open(encoding="utf-8") as stream:
+        deployment_config = yaml.safe_load(stream) or {}
+    matches = []
+    for deployment in deployment_config.get("deployments", []):
+        if not str(deployment.get("entrypoint", "")).endswith(":daily_model_cycle"):
+            continue
+        defaults = deployment.get("parameters") or {}
+        for schedule in deployment.get("schedules") or []:
+            parameters = {**defaults, **(schedule.get("parameters") or {})}
+            if parameters.get("lead_type_id") == lead_type_id:
+                matches.append(parameters.get("hpo_schedule"))
+    if len(matches) != 1 or not isinstance(matches[0], dict):
+        raise ValueError(
+            "Expected one daily model schedule with hpo_schedule for "
+            f"lead_type_id={lead_type_id} in prefect.yaml. "
+            "Alternatively pass hpo_schedule explicitly."
+        )
+    return dict(matches[0])
+
+
+def run_daily_cycle(
+    lead_type_id, *, hpo_schedule=None, now=None, hpo_runner, training_runner
+):
     """Run HPO when scheduled/pending, otherwise run ordinary daily training.
 
     Deploy one serialized daily cycle per lead type on a shared persistent
@@ -215,7 +239,17 @@ def run_daily_cycle(lead_type_id, *, now=None, hpo_runner, training_runner):
     if now.tzinfo is None:
         raise ValueError("Scheduling requires a timezone-aware timestamp.")
     cfg = config.load_training_config(lead_type_id)
-    policy = cfg.raw.get("hpo_schedule") or {}
+    timing = (
+        _deployment_hpo_schedule(lead_type_id) if hpo_schedule is None else hpo_schedule
+    )
+    required = {"interval_days", "retry_days", "anchor_date", "timezone"}
+    if not isinstance(timing, dict) or set(timing) != required:
+        raise ValueError(f"HPO schedule must contain exactly {sorted(required)}.")
+    state_file = (cfg.raw.get("hpo_schedule") or {}).get("state_file")
+    if not isinstance(state_file, str) or not state_file.strip():
+        raise ValueError("Training configuration must specify HPO state_file.")
+    # Preserve the state journal's existing policy shape during this move.
+    policy = {**timing, "state_file": state_file}
     interval = policy.get("interval_days")
     retry = policy.get("retry_days")
     if any(type(value) is not int or value < 1 for value in (interval, retry)):
@@ -335,7 +369,11 @@ def run_daily_cycle(lead_type_id, *, now=None, hpo_runner, training_runner):
     log_prints=True,
 )
 @_report_flow_failure
-def daily_model_cycle(lead_type_id: int, register_mlflow: bool = True) -> dict:
+def daily_model_cycle(
+    lead_type_id: int,
+    register_mlflow: bool = True,
+    hpo_schedule: dict | None = None,
+) -> dict:
     """Deploy daily per lead type with concurrency one and persistent shared data."""
 
     def training_runner(**kwargs):
@@ -356,6 +394,7 @@ def daily_model_cycle(lead_type_id: int, register_mlflow: bool = True) -> dict:
 
     return run_daily_cycle(
         lead_type_id,
+        hpo_schedule=hpo_schedule,
         hpo_runner=_hpo_task,
         training_runner=training_runner,
     )

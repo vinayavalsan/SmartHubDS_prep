@@ -49,10 +49,6 @@ def policy(tmp_path, monkeypatch):
             "parameters": {"current_file": str(tmp_path / "current.yaml")},
             "hpo_schedule": {
                 "state_file": str(tmp_path / "state.yaml"),
-                "anchor_date": "2026-10-05",
-                "timezone": "UTC",
-                "interval_days": 14,
-                "retry_days": 1,
             },
         },
         model_type=bootstrap.model_type,
@@ -161,6 +157,139 @@ def test_hpo_partition_handover_rejects_dataset_changes_and_overlap():
 
 def at(day):
     return datetime(2026, 10, day, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("lead_type_id", [6, 1])
+def test_local_cycle_reads_hpo_policy_from_prefect_yaml(hpo_flow, lead_type_id):
+    assert hpo_flow._deployment_hpo_schedule(lead_type_id) == {
+        "interval_days": 14,
+        "retry_days": 1,
+        "anchor_date": "2026-10-05",
+        "timezone": "UTC",
+    }
+    training = yaml.safe_load(config.paths.resolve("config/training.yaml").read_text())
+    location = training["training"]["lead_types"][lead_type_id]["hpo_schedule"]
+    assert set(location) == {"state_file"}
+
+
+def test_prefect_accepts_deployment_schedules_and_hpo_parameters(hpo_flow):
+    from prefect.client.schemas.actions import DeploymentScheduleCreate
+
+    payload = yaml.safe_load(config.paths.resolve("prefect.yaml").read_text())
+    deployment = next(
+        item
+        for item in payload["deployments"]
+        if item["entrypoint"].endswith(":daily_model_cycle")
+    )
+    for schedule in deployment["schedules"]:
+        # Prefect deployment YAML turns cron/timezone into the API schedule.
+        request = {
+            "schedule": {
+                "cron": schedule["cron"],
+                "timezone": schedule["timezone"],
+            },
+            "parameters": schedule["parameters"],
+            "active": True,
+        }
+        DeploymentScheduleCreate.model_validate(request)
+        parameters = {**deployment["parameters"], **schedule["parameters"]}
+        validated = hpo_flow.daily_model_cycle.validate_parameters(parameters)
+        assert validated["hpo_schedule"] == deployment["parameters"]["hpo_schedule"]
+        assert validated["lead_type_id"] in {6, 1}
+
+
+def test_per_schedule_hpo_policy_overrides_deployment_defaults(
+    hpo_flow, tmp_path, monkeypatch
+):
+    source = config.paths.resolve("prefect.yaml")
+    payload = yaml.safe_load(source.read_text())
+    deployment = next(
+        item
+        for item in payload["deployments"]
+        if item["entrypoint"].endswith(":daily_model_cycle")
+    )
+    override = {
+        "interval_days": 7,
+        "retry_days": 2,
+        "anchor_date": "2026-10-12",
+        "timezone": "America/Chicago",
+    }
+    home = next(
+        item
+        for item in deployment["schedules"]
+        if item["parameters"]["lead_type_id"] == 1
+    )
+    home["parameters"]["hpo_schedule"] = override
+    local = tmp_path / "prefect.yaml"
+    local.write_text(yaml.safe_dump(payload))
+    resolve = hpo_flow.paths.resolve
+    monkeypatch.setattr(
+        hpo_flow.paths,
+        "resolve",
+        lambda path: local if path == "prefect.yaml" else resolve(path),
+    )
+    assert hpo_flow._deployment_hpo_schedule(1) == override
+    assert hpo_flow._deployment_hpo_schedule(6)["interval_days"] == 14
+
+
+def test_deployment_policy_controls_cadence_and_preserves_existing_state(
+    policy, hpo_flow
+):
+    _, _, hpo, training = runners()
+    timing = {
+        "interval_days": 7,
+        "retry_days": 2,
+        "anchor_date": "2026-10-05",
+        "timezone": "UTC",
+    }
+    result = hpo_flow.run_daily_cycle(
+        6,
+        hpo_schedule=timing,
+        now=at(5),
+        hpo_runner=hpo,
+        training_runner=training,
+    )
+    state = result["hpo_state"]
+    assert state["retry_date"] == "2026-10-07"
+    assert state["next_scheduled_date"] == "2026-10-12"
+    # The persisted combined policy is unchanged by moving its source.
+    assert state["schedule"] == {
+        **timing,
+        "state_file": policy.raw["hpo_schedule"]["state_file"],
+    }
+    resumed = hpo_flow.run_daily_cycle(
+        6,
+        hpo_schedule=timing,
+        now=at(6),
+        hpo_runner=hpo,
+        training_runner=training,
+    )
+    assert resumed["action"] == "daily_training"
+    with pytest.raises(ValueError, match="changed HPO schedule"):
+        hpo_flow.run_daily_cycle(
+            6,
+            hpo_schedule={**timing, "interval_days": 14},
+            now=at(6),
+            hpo_runner=hpo,
+            training_runner=training,
+        )
+
+
+@pytest.mark.parametrize("schedule", [{}, {"interval_days": 7}, "invalid"])
+def test_invalid_deployment_policy_fails_before_running_models(
+    policy, hpo_flow, schedule
+):
+    def unexpected(*args, **kwargs):
+        pytest.fail("No model work should start for an invalid schedule")
+
+    with pytest.raises(ValueError, match="exactly"):
+        hpo_flow.run_daily_cycle(
+            6,
+            hpo_schedule=schedule,
+            now=at(5),
+            hpo_runner=unexpected,
+            training_runner=unexpected,
+        )
 
 
 def runners():
@@ -296,16 +425,24 @@ def test_daily_prefect_entrypoint_uses_local_cycle_without_starting_prefect(
         calls.append(kwargs)
         return {"promoted": False}
 
-    def cycle(lead_type_id, *, hpo_runner, training_runner):
+    schedule = {
+        "interval_days": 7,
+        "retry_days": 2,
+        "anchor_date": "2026-10-05",
+        "timezone": "UTC",
+    }
+
+    def cycle(lead_type_id, *, hpo_schedule, hpo_runner, training_runner):
         assert lead_type_id == 6
+        assert hpo_schedule == schedule
         assert hpo_runner is hpo_flow._hpo_task
         return training_runner(lead_type_id=lead_type_id)
 
     monkeypatch.setattr(hpo_flow, "train_flow", training)
     monkeypatch.setattr(hpo_flow, "run_daily_cycle", cycle)
-    assert hpo_flow.daily_model_cycle.fn(6, register_mlflow=False) == {
-        "promoted": False
-    }
+    assert hpo_flow.daily_model_cycle.fn(
+        6, register_mlflow=False, hpo_schedule=schedule
+    ) == {"promoted": False}
     assert calls == [{"lead_type_id": 6, "register_mlflow": False}]
 
 
