@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import mlflow
@@ -151,6 +152,7 @@ def log_training_run(
     extra_tags=None,
     optimizer_metrics=None,
     resolved_training_config=None,
+    run_id=None,
 ):
     """Log a complete SmartHub training run to MLflow.
 
@@ -171,7 +173,7 @@ def log_training_run(
         experiment_name,
     )
 
-    with mlflow.start_run(experiment_id=experiment_id, run_name=run_name) as run:
+    with _logging_run(experiment_id, run_name, run_id) as run:
         mlflow.log_param("feature_count", len(feature_cols))
         mlflow.log_param("features", ",".join(feature_cols))
 
@@ -247,7 +249,23 @@ def log_training_run(
         }
 
 
-def log_hpo_run(run_output_dir, settings, lead_type_name, resolved_search_config=None):
+@contextmanager
+def _logging_run(experiment_id, run_name, run_id=None):
+    """Reuse a lifecycle run without ending it before the outer workflow ends."""
+    if run_id is None:
+        with mlflow.start_run(experiment_id=experiment_id, run_name=run_name) as run:
+            yield run
+    else:
+        run = mlflow.start_run(run_id=run_id, nested=True)
+        try:
+            yield run
+        finally:
+            mlflow.end_run(status="RUNNING")
+
+
+def log_hpo_run(
+    run_output_dir, settings, lead_type_name, resolved_search_config=None, run_id=None
+):
     """Record a completed HPO search and its immutable parameter artifact."""
     import yaml
 
@@ -260,9 +278,7 @@ def log_hpo_run(run_output_dir, settings, lead_type_name, resolved_search_config
         settings["artifact_root"],
         f"{settings['experiment_name']}_{lead_type_name}",
     )
-    with mlflow.start_run(
-        experiment_id=experiment_id, run_name=artifact["hpo_run_id"]
-    ) as run:
+    with _logging_run(experiment_id, artifact["hpo_run_id"], run_id) as run:
         metadata = {
             "hpo_mlflow_run_id": run.info.run_id,
             "hpo_mlflow_tracking_uri": tracking_uri,

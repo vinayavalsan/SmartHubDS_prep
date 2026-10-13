@@ -846,6 +846,31 @@ def test_parallel_hpo_run_writes_timings_and_evaluates_optimizer(
     result = hpo.run_hyperparameter_search(6, "snapshot-test", path)
     assert disable_slack_delivery == []  # Standalone HPO does not send Slack alerts.
     saved = json.loads(Path(result["summary_path"]).read_text())
+    from mlflow import MlflowClient
+
+    client = MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}")
+    parent = client.get_run(result["hpo_mlflow_run_id"])
+    assert parent.info.status == "FINISHED"
+    assert parent.data.tags["mlflow.runName"] == result["hpo_run_id"]
+    assert parent.data.tags["tracking.degraded"] == "False"
+    assert "timing.prepare_data_seconds" in parent.data.metrics
+    assert "timing.optuna_search_seconds" in parent.data.metrics
+    assert {item.dataset.name for item in parent.inputs.dataset_inputs} == {
+        "hpo_development",
+        "hpo_finalist_holdout",
+        "hpo_reserved_test",
+    }
+    children = client.search_runs(
+        [parent.info.experiment_id],
+        filter_string=f"tags.`mlflow.parentRunId` = '{parent.info.run_id}'",
+    )
+    assert (
+        len([run for run in children if run.data.tags["run_type"] == "hpo_trial"]) == 2
+    )
+    finalists = [run for run in children if run.data.tags["run_type"] == "hpo_finalist"]
+    assert len(finalists) == 4
+    assert all(run.info.status == "FINISHED" for run in children)
+    assert sum(run.data.tags.get("selected") == "True" for run in finalists) == 1
     assert saved["training_table_version"] == "snapshot-test"
     assert saved["parallelism"] == expected_parallelism
     assert saved["timings"] == result["timings"]

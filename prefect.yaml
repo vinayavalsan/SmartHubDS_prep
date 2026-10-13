@@ -94,7 +94,7 @@ deployments:
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-      - cron: "20 5 * * *"
+      - cron: "0 8 * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 1

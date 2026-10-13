@@ -719,6 +719,8 @@ def _evaluate_probability_candidate_safely(**kwargs):
     """Keep the existing per-candidate failure policy inside each worker."""
     trial = kwargs["trial"]
     method = kwargs["calibration_method"]
+    capture_failure = kwargs.pop("capture_failure", False)
+    started = time.perf_counter()
     logger.info("Probability finalist: trial=%s calibration=%s", trial.number, method)
     try:
         result = _evaluate_probability_candidate(**kwargs)
@@ -729,6 +731,14 @@ def _evaluate_probability_candidate_safely(**kwargs):
             method,
             exc,
         )
+        if capture_failure:
+            return {
+                "_failure": True,
+                "trial_number": trial.number,
+                "calibration_method": method,
+                "error": str(exc),
+                "elapsed_seconds": time.perf_counter() - started,
+            }
         return None
     logger.info(
         "Trial=%s calibration=%s | log loss=%.6f | Brier=%.6f",
@@ -737,6 +747,7 @@ def _evaluate_probability_candidate_safely(**kwargs):
         result["probability_metrics"]["log_loss"],
         result["probability_metrics"]["brier_score"],
     )
+    result["elapsed_seconds"] = time.perf_counter() - started
     return result
 
 
@@ -749,6 +760,7 @@ def _evaluate_probability_candidates(
     development: pd.DataFrame,
     holdout: pd.DataFrame,
     settings: dict[str, Any],
+    tracker=None,
 ) -> list[dict[str, Any]]:
     """Evaluate calibration variants for a wider probability shortlist."""
     completed = [
@@ -771,16 +783,37 @@ def _evaluate_probability_candidates(
             development=development,
             holdout=holdout,
             settings=settings,
+            capture_failure=tracker is not None and bool(tracker.run_id),
         )
         for trial in top_trials
         for method in settings["calibration_methods"]
     ]
+    if tracker is not None:
+        for job in jobs:
+            tracker.child(
+                f"finalist_{job['trial'].number}_{job['calibration_method']}",
+                "hpo_finalist",
+                {
+                    "trial_number": job["trial"].number,
+                    "calibration_method": job["calibration_method"],
+                },
+                {},
+                status="RUNNING",
+            )
     evaluated = _parallel_map(
         _evaluate_probability_candidate_safely,
         jobs,
         settings.get("probability_jobs", 1),
     )
-    results = [result for result in evaluated if result is not None]
+    if tracker is not None:
+        for result in evaluated:
+            if result is not None:
+                _record_finalist(tracker, result)
+    results = [
+        result
+        for result in evaluated
+        if result is not None and not result.get("_failure")
+    ]
 
     if not results:
         raise RuntimeError("No probability finalist completed evaluation successfully.")
@@ -824,11 +857,18 @@ def _optimizer_shortlist(
     return shortlist
 
 
+def _timed_optimizer_evaluation(**kwargs):
+    started = time.perf_counter()
+    result = _evaluate_optimizer_and_monotonicity(**kwargs)
+    return (*result, time.perf_counter() - started)
+
+
 def _evaluate_optimizer_shortlist(
     shortlist: list[dict[str, Any]],
     holdout: pd.DataFrame,
     feature_cols: list[str],
     settings: dict[str, Any],
+    tracker=None,
 ) -> None:
     """Run optimizer and monotonicity only for shortlisted candidates."""
     for rank, result in enumerate(shortlist, start=1):
@@ -870,13 +910,22 @@ def _evaluate_optimizer_shortlist(
             for job in jobs:
                 job["candidate_chunk_paths"] = chunk_paths
         evaluated = _parallel_map(
-            _evaluate_optimizer_and_monotonicity,
+            (
+                _timed_optimizer_evaluation
+                if tracker is not None and tracker.run_id
+                else _evaluate_optimizer_and_monotonicity
+            ),
             jobs,
             settings.get("optimizer_jobs", 1),
         )
-    for result, (optimizer_metrics, monotonicity) in zip(shortlist, evaluated):
+    for result, evaluation in zip(shortlist, evaluated):
+        optimizer_metrics, monotonicity = evaluation[:2]
+        if len(evaluation) == 3:
+            result["optimizer_elapsed_seconds"] = evaluation[2]
         result["optimizer_metrics"] = optimizer_metrics
         result["monotonicity"] = monotonicity
+        if tracker is not None:
+            _record_finalist(tracker, result)
 
 
 def _select_probability_finalist(
@@ -988,7 +1037,7 @@ def _write_outputs(
     settings: dict[str, Any],
 ) -> tuple[Path, Path, Path, dict[str, Path]]:
     """Write tuning summary, finalist details, YAML, and Optuna plots."""
-    run_timestamp = (
+    run_timestamp = settings.get("run_timestamp") or (
         datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
     )
     run_output_dir = output_dir / run_timestamp
@@ -1118,140 +1167,281 @@ def _write_outputs(
     return summary_path, parameters_path, finalist_path, plot_paths
 
 
+def _record_trial(tracker, study, trial):
+    metrics = {
+        key: value
+        for key, value in trial.user_attrs.items()
+        if isinstance(value, (int, float))
+    }
+    metrics.update(
+        {
+            f"cv.fold_{index}_score": score
+            for index, score in enumerate(trial.user_attrs.get("fold_scores", []), 1)
+        }
+    )
+    metrics.update(
+        {
+            f"cv.fold_{index}_best_iteration": score
+            for index, score in enumerate(
+                trial.user_attrs.get("fold_best_iterations", []), 1
+            )
+        }
+    )
+    if trial.value is not None:
+        metrics["objective"] = trial.value
+    if trial.datetime_start and trial.datetime_complete:
+        metrics["elapsed_seconds"] = (
+            trial.datetime_complete - trial.datetime_start
+        ).total_seconds()
+    state = trial.state.name
+    tracker.child(
+        f"trial_{trial.number}",
+        "hpo_trial",
+        {"trial_number": trial.number, **trial.params},
+        metrics,
+        tags={"optuna.state": state},
+        status=(
+            "FINISHED"
+            if state == "COMPLETE"
+            else "KILLED" if state == "PRUNED" else "FAILED"
+        ),
+    )
+    tracker.metrics(
+        {
+            "search.completed_trials": sum(
+                item.state.name == "COMPLETE" for item in study.trials
+            )
+        },
+        step=trial.number,
+    )
+    if any(item.state.name == "COMPLETE" for item in study.trials):
+        tracker.metrics({"search.best_score": study.best_value}, step=trial.number)
+
+
+def _record_finalist(tracker, result):
+    failed = result.get("_failure", False)
+    values = {
+        "elapsed_seconds": result.get("elapsed_seconds"),
+        "optimizer_elapsed_seconds": result.get("optimizer_elapsed_seconds"),
+        "cv_score": result.get("cv_score"),
+        "cv_std": result.get("cv_std"),
+    }
+    for group in ("probability_metrics", "optimizer_metrics", "monotonicity"):
+        values.update(
+            {
+                f"{group}.{key}": value
+                for key, value in (result.get(group) or {}).items()
+            }
+        )
+    tracker.child(
+        f"finalist_{result['trial_number']}_{result['calibration_method']}",
+        "hpo_finalist",
+        {
+            "trial_number": result["trial_number"],
+            "calibration_method": result["calibration_method"],
+            **(result.get("parameters") or {}),
+        },
+        values,
+        tags={
+            "optimizer_selected": result.get("optimizer_selected", False),
+            "error": result.get("error"),
+        },
+        status="FAILED" if failed else "FINISHED",
+    )
+
+
 def run_hyperparameter_search(
     lead_type_id: int,
     version: str | None = None,
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
+    """Track the complete search while retaining the existing search policy."""
+    from .mlflow_tracking import RunTracker, tracking_settings
+
+    settings = tracking_settings(lead_type_id, "hpo", config_path)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp += "_" + uuid4().hex[:8]
+    name = f"hpo_{resolve_lead_type_name(lead_type_id)}_{timestamp}"
+    with RunTracker(settings, name, "hpo", lead_type_id) as tracker:
+        tracker.params({"requested_dataset": version or "latest"})
+        return _run_hyperparameter_search(
+            lead_type_id, version, config_path, tracker, timestamp
+        )
+
+
+def _run_hyperparameter_search(
+    lead_type_id: int,
+    version: str | None = None,
+    config_path: str | Path | None = None,
+    tracker=None,
+    run_timestamp=None,
+) -> dict[str, Any]:
     """Run SmartHub-aware hyperparameter search for one model family."""
     run_started = time.perf_counter()
-    search_config = config.load_hyperparameter_search_config(
-        lead_type_id,
-        config_path,
-    )
-    _validate_probability_scoring(search_config.scoring)
-    settings = _hpo_settings(search_config)
-    logger.info(
-        "HPO workers: CV=%s probability=%s optimizer=%s",
-        settings["cv_jobs"],
-        settings["probability_jobs"],
-        settings["optimizer_jobs"],
-    )
-
-    normalized_model_type = search_config.model_type.strip().lower()
-    model_config = search_config.model_config(normalized_model_type)
-    lead_type_name = resolve_lead_type_name(lead_type_id)
-    np.random.seed(search_config.random_seed)
-
-    logger.info(
-        "Loading training table for lead_type=%s (%s)",
-        lead_type_name,
-        lead_type_id,
-    )
-    frame, numeric, categorical, prep_summary = preprocessing.prepare_training_data(
-        lead_type_id,
-        lead_type_name,
-        version,
-    )
-    preprocessing.assert_trainable(frame, lead_type_name)
-
-    feature_target_diagnostics = feature_diagnostics.build_feature_target_association(
-        frame=frame,
-        numeric_features=numeric,
-        categorical_features=categorical,
-        target_column=config.TARGET_COL,
-        random_seed=search_config.random_seed,
-    )
-    feature_diagnostics.log_feature_target_association(
-        feature_target_diagnostics,
-    )
-
-    if settings["optimizer_enabled"] and config.REVENUE_COL not in frame.columns:
-        raise ValueError(
-            "Enabled SmartHub optimizer evaluation requires expected revenue "
-            f"column {config.REVENUE_COL!r}."
+    with tracker.stage("prepare_data"):
+        search_config = config.load_hyperparameter_search_config(
+            lead_type_id,
+            config_path,
+        )
+        _validate_probability_scoring(search_config.scoring)
+        settings = _hpo_settings(search_config)
+        settings["run_timestamp"] = run_timestamp
+        tracker.artifact(search_config.as_dict(), "config/resolved_at_start.json")
+        tracker.params(
+            {
+                "random_seed": search_config.random_seed,
+                "model_type": search_config.model_type,
+                "scoring": search_config.scoring,
+                "search.n_trials": search_config.n_trials,
+                "search.cv_folds": search_config.cv_folds,
+                "search.n_jobs": search_config.n_jobs,
+                "cv_jobs": settings["cv_jobs"],
+                "probability_jobs": settings["probability_jobs"],
+                "optimizer_jobs": settings["optimizer_jobs"],
+            }
+        )
+        logger.info(
+            "HPO workers: CV=%s probability=%s optimizer=%s",
+            settings["cv_jobs"],
+            settings["probability_jobs"],
+            settings["optimizer_jobs"],
         )
 
-    # Reserve an HPO-only final test partition using HPO configuration only.
-    # No settings are read from training.yaml.
-    hpo_pool, final_training_test = _reserve_final_test(
-        frame,
-        split_settings=search_config.split,
-        random_seed=search_config.random_seed,
-    )
-    settings["candidate_data"] = {
-        "training_table_version": prep_summary["training_table_version"],
-        "frame_fingerprint": model_parameters.dataset_fingerprint(frame),
-        "split_version": 1,
-        "split_settings": dict(search_config.split),
-        "random_seed": search_config.random_seed,
-        "data_min_created_at": prep_summary.get("data_min_created_at"),
-        "data_max_created_at": prep_summary.get("data_max_created_at"),
-    }
-    preprocessing.assert_trainable(hpo_pool, lead_type_name)
+        normalized_model_type = search_config.model_type.strip().lower()
+        model_config = search_config.model_config(normalized_model_type)
+        lead_type_name = resolve_lead_type_name(lead_type_id)
+        np.random.seed(search_config.random_seed)
 
-    development, holdout = _split_development_and_holdout(
-        hpo_pool,
-        settings["holdout_fraction"],
-    )
-    preprocessing.assert_trainable(development, lead_type_name)
+        logger.info(
+            "Loading training table for lead_type=%s (%s)",
+            lead_type_name,
+            lead_type_id,
+        )
+        frame, numeric, categorical, prep_summary = preprocessing.prepare_training_data(
+            lead_type_id,
+            lead_type_name,
+            version,
+        )
+        preprocessing.assert_trainable(frame, lead_type_name)
 
-    # Detect zero-variance features using only model-fitting rows. Keep them
-    # in the feature schema; the finalist holdout must not influence this
-    # diagnostic.
-    zero_variance_features = feature_diagnostics.find_zero_variance_features(
-        development,
-        numeric,
-        categorical,
-    )
-    logger.info("Feature Diagnostics")
-    logger.info(
-        "  Zero-variance features                : %s",
-        f"{len(zero_variance_features):,}",
-    )
-    logger.info(
-        "  Zero-variance feature names           : %s",
-        ", ".join(zero_variance_features) or "none",
-    )
-    logger.info("  Zero-variance features retained       : yes")
-
-    if len(development) <= search_config.cv_folds:
-        raise ValueError(
-            "Development rows must exceed search.cv_folds after reserving the "
-            "finalist holdout."
+        feature_target_diagnostics = (
+            feature_diagnostics.build_feature_target_association(
+                frame=frame,
+                numeric_features=numeric,
+                categorical_features=categorical,
+                target_column=config.TARGET_COL,
+                random_seed=search_config.random_seed,
+            )
+        )
+        feature_diagnostics.log_feature_target_association(
+            feature_target_diagnostics,
         )
 
-    feature_cols = numeric + categorical
-    X = development[feature_cols]
-    y = development[config.TARGET_COL]
-    cross_validation = _build_cv(
-        strategy=settings["validation_strategy"],
-        n_splits=search_config.cv_folds,
-        random_seed=search_config.random_seed,
-    )
-    feature_coverage_diagnostics = _build_hpo_coverage_diagnostics(
-        development=development,
-        holdout=holdout,
-        numeric=numeric,
-        categorical=categorical,
-        cross_validation=cross_validation,
-    )
-    _log_hpo_coverage_diagnostics(feature_coverage_diagnostics)
-    time_range_diagnostics = _build_hpo_time_range_diagnostics(
-        development=development,
-        holdout=holdout,
-        feature_cols=feature_cols,
-        cross_validation=cross_validation,
-    )
-    _log_hpo_time_range_diagnostics(time_range_diagnostics)
+        if settings["optimizer_enabled"] and config.REVENUE_COL not in frame.columns:
+            raise ValueError(
+                "Enabled SmartHub optimizer evaluation requires expected revenue "
+                f"column {config.REVENUE_COL!r}."
+            )
 
-    fixed_parameters = {
-        **model_config["fixed_parameters"],
-        "random_state": search_config.random_seed,
-    }
-    if settings["early_stopping"]["enabled"]:
-        fixed_parameters["n_estimators"] = settings["early_stopping"]["max_estimators"]
-    search_space = model_config["search_space"]
+        # Reserve an HPO-only final test partition using HPO configuration only.
+        # No settings are read from training.yaml.
+        hpo_pool, final_training_test = _reserve_final_test(
+            frame,
+            split_settings=search_config.split,
+            random_seed=search_config.random_seed,
+        )
+        settings["candidate_data"] = {
+            "training_table_version": prep_summary["training_table_version"],
+            "frame_fingerprint": model_parameters.dataset_fingerprint(frame),
+            "split_version": 1,
+            "split_settings": dict(search_config.split),
+            "random_seed": search_config.random_seed,
+            "data_min_created_at": prep_summary.get("data_min_created_at"),
+            "data_max_created_at": prep_summary.get("data_max_created_at"),
+        }
+        preprocessing.assert_trainable(hpo_pool, lead_type_name)
+
+        development, holdout = _split_development_and_holdout(
+            hpo_pool,
+            settings["holdout_fraction"],
+        )
+        preprocessing.assert_trainable(development, lead_type_name)
+
+        # Detect zero-variance features using only model-fitting rows. Keep them
+        # in the feature schema; the finalist holdout must not influence this
+        # diagnostic.
+        zero_variance_features = feature_diagnostics.find_zero_variance_features(
+            development,
+            numeric,
+            categorical,
+        )
+        logger.info("Feature Diagnostics")
+        logger.info(
+            "  Zero-variance features                : %s",
+            f"{len(zero_variance_features):,}",
+        )
+        logger.info(
+            "  Zero-variance feature names           : %s",
+            ", ".join(zero_variance_features) or "none",
+        )
+        logger.info("  Zero-variance features retained       : yes")
+
+        if len(development) <= search_config.cv_folds:
+            raise ValueError(
+                "Development rows must exceed search.cv_folds after reserving the "
+                "finalist holdout."
+            )
+
+        feature_cols = numeric + categorical
+        X = development[feature_cols]
+        y = development[config.TARGET_COL]
+        cross_validation = _build_cv(
+            strategy=settings["validation_strategy"],
+            n_splits=search_config.cv_folds,
+            random_seed=search_config.random_seed,
+        )
+        feature_coverage_diagnostics = _build_hpo_coverage_diagnostics(
+            development=development,
+            holdout=holdout,
+            numeric=numeric,
+            categorical=categorical,
+            cross_validation=cross_validation,
+        )
+        _log_hpo_coverage_diagnostics(feature_coverage_diagnostics)
+        time_range_diagnostics = _build_hpo_time_range_diagnostics(
+            development=development,
+            holdout=holdout,
+            feature_cols=feature_cols,
+            cross_validation=cross_validation,
+        )
+        _log_hpo_time_range_diagnostics(time_range_diagnostics)
+
+        fixed_parameters = {
+            **model_config["fixed_parameters"],
+            "random_state": search_config.random_seed,
+        }
+        if settings["early_stopping"]["enabled"]:
+            fixed_parameters["n_estimators"] = settings["early_stopping"][
+                "max_estimators"
+            ]
+        search_space = model_config["search_space"]
+
+        source = str(
+            config.paths.data_dir()
+            / "training_datasets"
+            / lead_type_name
+            / f"{prep_summary['training_table_version']}.parquet"
+        )
+        tracker.params(
+            {"training_table_version": prep_summary["training_table_version"]}
+        )
+        for label, dataset, context in (
+            ("hpo_development", development, "training"),
+            ("hpo_finalist_holdout", holdout, "validation"),
+            ("hpo_reserved_test", final_training_test, "reserved_test"),
+        ):
+            tracker.dataset(dataset, label, context, source, config.TARGET_COL)
+        tracker.artifact(settings["candidate_data"], "data/split.json")
 
     def objective(trial: optuna.Trial) -> float:
         trial_started = time.perf_counter()
@@ -1359,104 +1549,144 @@ def run_hyperparameter_search(
             settings["optimizer_top_n"],
         )
 
-    study = optuna.create_study(
-        study_name=f"{lead_type_name}_{normalized_model_type}",
-        direction="maximize",
-        sampler=optuna.samplers.TPESampler(seed=search_config.random_seed),
-    )
-    stage_started = time.perf_counter()
-    study.optimize(
-        objective,
-        n_trials=search_config.n_trials,
-        timeout=search_config.timeout_seconds,
-        n_jobs=search_config.n_jobs,
-    )
+    def tracked_objective(trial):
+        tracker.child(
+            f"trial_{trial.number}",
+            "hpo_trial",
+            {"trial_number": trial.number},
+            {},
+            status="RUNNING",
+        )
+        try:
+            return objective(trial)
+        except BaseException as exc:
+            try:
+                tracker.child(
+                    f"trial_{trial.number}",
+                    "hpo_trial",
+                    trial.params,
+                    {},
+                    tags={"error": str(exc)},
+                    status="FAILED",
+                )
+            except Exception:
+                logger.warning("Could not record failed HPO trial.", exc_info=True)
+            raise
+
+    with tracker.stage("optuna_search"):
+        study = optuna.create_study(
+            study_name=f"{lead_type_name}_{normalized_model_type}",
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=search_config.random_seed),
+        )
+        stage_started = time.perf_counter()
+        study.optimize(
+            tracked_objective,
+            n_trials=search_config.n_trials,
+            timeout=search_config.timeout_seconds,
+            n_jobs=search_config.n_jobs,
+            callbacks=[lambda study, trial: _record_trial(tracker, study, trial)],
+        )
 
     timings = {"search_seconds": time.perf_counter() - stage_started}
     stage_started = time.perf_counter()
-    finalist_results = _evaluate_probability_candidates(
-        study=study,
-        fixed_parameters=fixed_parameters,
-        model_type=normalized_model_type,
-        numeric=numeric,
-        categorical=categorical,
-        development=development,
-        holdout=holdout,
-        settings=settings,
-    )
+    with tracker.stage("probability_finalists"):
+        finalist_results = _evaluate_probability_candidates(
+            study=study,
+            fixed_parameters=fixed_parameters,
+            model_type=normalized_model_type,
+            numeric=numeric,
+            categorical=categorical,
+            development=development,
+            holdout=holdout,
+            settings=settings,
+            tracker=tracker,
+        )
     timings["probability_seconds"] = time.perf_counter() - stage_started
     stage_started = time.perf_counter()
-    if settings["optimizer_enabled"]:
-        optimizer_shortlist = _optimizer_shortlist(finalist_results, settings)
-        _evaluate_optimizer_shortlist(
-            shortlist=optimizer_shortlist,
-            holdout=holdout,
-            feature_cols=feature_cols,
-            settings=settings,
-        )
-        selected = _select_finalist(finalist_results, settings)
-    else:
-        selected = _select_probability_finalist(
-            finalist_results,
-            search_config.scoring,
-        )
+    with tracker.stage("optimizer_finalists"):
+        if settings["optimizer_enabled"]:
+            optimizer_shortlist = _optimizer_shortlist(finalist_results, settings)
+            _evaluate_optimizer_shortlist(
+                shortlist=optimizer_shortlist,
+                holdout=holdout,
+                feature_cols=feature_cols,
+                settings=settings,
+                tracker=tracker,
+            )
+            selected = _select_finalist(finalist_results, settings)
+        else:
+            selected = _select_probability_finalist(
+                finalist_results,
+                search_config.scoring,
+            )
 
     timings["optimizer_and_selection_seconds"] = time.perf_counter() - stage_started
-    output_dir = Path(
-        search_config.output_dir(
-            lead_type_name,
-            normalized_model_type,
+    selected_key = (
+        f"finalist_{selected['trial_number']}_{selected['calibration_method']}"
+    )
+    if selected_key in tracker.children:
+        tracker.tags({"selected": True}, run_id=tracker.children[selected_key])
+    with tracker.stage("save_artifacts"):
+        output_dir = Path(
+            search_config.output_dir(
+                lead_type_name,
+                normalized_model_type,
+            )
         )
-    )
-    summary_path, parameters_path, finalist_path, plot_paths = _write_outputs(
-        output_dir=output_dir,
-        lead_type_id=lead_type_id,
-        lead_type_name=lead_type_name,
-        model_type=normalized_model_type,
-        search_config=search_config,
-        prep_summary=prep_summary,
-        study=study,
-        selected=selected,
-        finalist_results=finalist_results,
-        parameter_names=list(search_space),
-        hpo_pool_rows=len(hpo_pool),
-        development_rows=len(development),
-        holdout_rows=len(holdout),
-        final_training_test_rows=len(final_training_test),
-        zero_variance_features=zero_variance_features,
-        feature_target_diagnostics=feature_target_diagnostics,
-        feature_coverage_diagnostics=feature_coverage_diagnostics,
-        time_range_diagnostics=time_range_diagnostics,
-        settings=settings,
-    )
+        summary_path, parameters_path, finalist_path, plot_paths = _write_outputs(
+            output_dir=output_dir,
+            lead_type_id=lead_type_id,
+            lead_type_name=lead_type_name,
+            model_type=normalized_model_type,
+            search_config=search_config,
+            prep_summary=prep_summary,
+            study=study,
+            selected=selected,
+            finalist_results=finalist_results,
+            parameter_names=list(search_space),
+            hpo_pool_rows=len(hpo_pool),
+            development_rows=len(development),
+            holdout_rows=len(holdout),
+            final_training_test_rows=len(final_training_test),
+            zero_variance_features=zero_variance_features,
+            feature_target_diagnostics=feature_target_diagnostics,
+            feature_coverage_diagnostics=feature_coverage_diagnostics,
+            time_range_diagnostics=time_range_diagnostics,
+            settings=settings,
+        )
 
-    timings["total_seconds"] = time.perf_counter() - run_started
-    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary_payload["timings"] = timings
-    summary_payload["parallelism"] = {
-        key: settings[key] for key in ("cv_jobs", "probability_jobs", "optimizer_jobs")
-    }
-    summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
-    mlflow_settings = settings["mlflow"]
-    if mlflow_settings.get("enabled"):
-        try:
-            from . import mlflow_utils
+        timings["total_seconds"] = time.perf_counter() - run_started
+        summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary_payload["timings"] = timings
+        summary_payload["parallelism"] = {
+            key: settings[key]
+            for key in ("cv_jobs", "probability_jobs", "optimizer_jobs")
+        }
+        summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+        mlflow_settings = settings["mlflow"]
+        if mlflow_settings.get("enabled") and tracker.run_id:
+            try:
+                from . import mlflow_utils
 
-            mlflow_metadata = mlflow_utils.log_hpo_run(
-                run_output_dir=summary_path.parent,
-                settings=mlflow_settings,
-                lead_type_name=lead_type_name,
-                resolved_search_config=search_config.as_dict(),
-            )
-        except Exception:
-            logger.exception("HPO MLflow logging failed; parameter artifact retained.")
-            if mlflow_settings.get("required", True):
-                raise
-        else:
-            summary_payload.update(mlflow_metadata)
-            summary_path.write_text(
-                json.dumps(summary_payload, indent=2), encoding="utf-8"
-            )
+                mlflow_metadata = mlflow_utils.log_hpo_run(
+                    run_output_dir=summary_path.parent,
+                    settings=mlflow_settings,
+                    lead_type_name=lead_type_name,
+                    resolved_search_config=search_config.as_dict(),
+                    run_id=tracker.run_id,
+                )
+            except Exception:
+                logger.exception(
+                    "HPO MLflow logging failed; parameter artifact retained."
+                )
+                if mlflow_settings.get("required", True):
+                    raise
+            else:
+                summary_payload.update(mlflow_metadata)
+                summary_path.write_text(
+                    json.dumps(summary_payload, indent=2), encoding="utf-8"
+                )
     logger.info("HPO stage timings (seconds): %s", timings)
     yaml_text = parameters_path.read_text(encoding="utf-8").rstrip()
     logger.info("Optuna best score: %.6f", study.best_value)

@@ -31,6 +31,10 @@ training:
       comparison_artifacts: true
       comparison_artifact_root: data/model_comparisons
     mlflow:
+      required: false
+      system_metrics:
+        enabled: true
+        interval_seconds: 5
       tracking_db_path: data/mlflow.db
       artifact_root: data/mlruns
       experiment_name: anton_win_probability

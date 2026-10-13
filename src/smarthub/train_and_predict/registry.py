@@ -281,6 +281,7 @@ def save_version(
     promotion_status: str,
     promotion_decision_reason: str,
     promotion_comparison: dict | None = None,
+    training_run_id: str | None = None,
 ) -> dict:
     """Save one immutable candidate artifact identified by ``training_run_id``.
 
@@ -303,8 +304,12 @@ def save_version(
 
     folder = model_dir(lead_type_name)
     folder.mkdir(parents=True, exist_ok=True)
-    training_run_id = _new_training_run_id()
+    training_run_id = training_run_id or _new_training_run_id()
+    if not re.fullmatch(r"run_[A-Za-z0-9_]+", training_run_id):
+        raise ValueError("Invalid training_run_id.")
     model_file = version_path(lead_type_name, training_run_id)
+    if model_file.exists() or manifest_path(lead_type_name, training_run_id).exists():
+        raise FileExistsError(f"Training artifacts already exist: {training_run_id}")
     joblib.dump(model, model_file)
 
     manifest = {

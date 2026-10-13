@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import tempfile
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from smarthub.core import notifications
+from smarthub.core import notifications, paths
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.core.logging_utils import get_logger
 
@@ -156,6 +157,11 @@ class TrainingContext:
     register_mlflow: bool = True
     parameter_file: str | None = None
     parameter_info: Any = None
+    training_run_id: str | None = None
+    tracker: Any = None
+    serving_model_metrics: Any = None
+    serving_optimizer_metrics: Any = None
+    serving_model_identity: Any = None
 
     # --- resolved config ---
     training_config: Any = None
@@ -721,11 +727,12 @@ def stage_evaluate(ctx: TrainingContext) -> TrainingContext:
     frame = ctx.frame
 
     logger.info("Evaluating Model")
-    pred, pred_class, model_metrics = metrics.evaluate_model(
-        model,
-        X_test,
-        y_test,
-    )
+    with ctx.tracker.stage("probability_evaluation") if ctx.tracker else nullcontext():
+        pred, pred_class, model_metrics = metrics.evaluate_model(
+            model,
+            X_test,
+            y_test,
+        )
     ctx.pred = pred
     ctx.pred_class = pred_class
 
@@ -747,18 +754,19 @@ def stage_evaluate(ctx: TrainingContext) -> TrainingContext:
     ctx.optimizer_chunk_size = optimizer_chunk_size
     ctx.monotonicity_config = monotonicity_config
 
-    optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
-        test_eval_df=test_df,
-        model=model,
-        feature_cols=feature_cols,
-        target_cm=target_cm,
-        min_bid=min_bid,
-        bid_step=bid_step,
-        chunk_size=optimizer_chunk_size,
-        monotonicity_enabled=True,
-        monotonicity_tolerance=monotonicity_config.tolerance,
-        monotonicity_max_violation_rate=(monotonicity_config.max_violation_rate),
-    )
+    with ctx.tracker.stage("bid_optimizer") if ctx.tracker else nullcontext():
+        optimizer_result = optimizer_evaluation.run_bid_optimizer_evaluation(
+            test_eval_df=test_df,
+            model=model,
+            feature_cols=feature_cols,
+            target_cm=target_cm,
+            min_bid=min_bid,
+            bid_step=bid_step,
+            chunk_size=optimizer_chunk_size,
+            monotonicity_enabled=True,
+            monotonicity_tolerance=monotonicity_config.tolerance,
+            monotonicity_max_violation_rate=(monotonicity_config.max_violation_rate),
+        )
 
     if optimizer_result is not None:
         optimizer_eval_df, optimizer_summary = optimizer_result
@@ -981,8 +989,11 @@ def stage_promotion_decision(ctx: TrainingContext) -> TrainingContext:
                     ctx.bid_step,
                     ctx.optimizer_chunk_size,
                     monotonicity_config,
+                    tracking_context=ctx,
                 )
             )
+            ctx.serving_model_metrics = serving_metrics
+            ctx.serving_optimizer_metrics = serving_optimizer_summary
             decision = registry.decide_promotion(
                 challenger_metrics=model_metrics.to_dict(),
                 challenger_optimizer=optimizer_summary_dict,
@@ -1128,6 +1139,7 @@ def stage_save_and_promote(ctx: TrainingContext) -> TrainingContext:
     manifest = registry.save_version(
         model,
         lead_type_name,
+        **({"training_run_id": ctx.training_run_id} if ctx.training_run_id else {}),
         feature_cols=feature_cols,
         metrics=model_metrics.to_dict(),
         optimizer_summary=optimizer_summary_dict,
@@ -1321,6 +1333,9 @@ def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
 
         experiment_name = f"{training_config.mlflow_experiment_name}_{lead_type_name}"
 
+        if ctx.tracker is not None and not ctx.tracker.run_id:
+            return ctx
+
         mlflow_metadata = mlflow_utils.log_training_run(
             model=model,
             model_params=model_params,
@@ -1333,6 +1348,7 @@ def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
             artifact_root=training_config.mlflow_artifact_root,
             experiment_name=experiment_name,
             run_name=manifest["training_run_id"],
+            **({"run_id": ctx.tracker.run_id} if ctx.tracker is not None else {}),
             training_config_path=Path(training_config.raw["resolved"]["config_path"]),
             resolved_training_config={
                 **training_config.as_dict(),
@@ -1401,6 +1417,10 @@ def stage_mlflow(ctx: TrainingContext) -> TrainingContext:
             training_config.mlflow_experiment_name,
         )
     except Exception as exc:  # noqa: BLE001
+        if ctx.tracker is not None and ctx.tracker.required:
+            raise
+        if ctx.tracker is not None:
+            ctx.tracker._degraded = True
         logger.warning("MLflow logging skipped: %s", exc)
     finally:
         if comparison_temp_dir is not None:
@@ -1465,6 +1485,180 @@ TRAINING_STAGES = (
 )
 
 
+def _record_training_stage(ctx, name):
+    """Publish stage outputs without changing model or promotion calculations."""
+    tracker = ctx.tracker
+    if not tracker.run_id:
+        return
+    if name == "prepare_data":
+        tracker.params(
+            {
+                "parameter_source": ctx.parameter_info["parameter_source"],
+                "hpo_run_id": ctx.parameter_info.get("hpo_run_id"),
+                "random_seed": ctx.training_config.random_seed,
+                "model_type": ctx.training_config.model_type,
+                "training_table_version": ctx.prep_summary["training_table_version"],
+            }
+        )
+        tracker.tags(
+            {"parameter_source_label": ctx.parameter_info["parameter_source_label"]}
+        )
+        tracker.artifact(
+            {
+                **ctx.training_config.as_dict(),
+                "model_settings": ctx.parameter_info["model_settings"],
+                "parameter_source": ctx.parameter_info["parameter_source_label"],
+            },
+            "config/resolved_at_start.json",
+        )
+        tracker.artifact(ctx.prep_summary, "data/preparation.json")
+        tracker.params(
+            {
+                f"configured.{key}": value
+                for key, value in ctx.parameter_info["model_settings"][
+                    "model_parameters"
+                ].items()
+            }
+        )
+        tracker.params(
+            {
+                f"calibration.{key}": value
+                for key, value in ctx.parameter_info["model_settings"][
+                    "calibration"
+                ].items()
+            }
+        )
+        tracker.tags({"parameter_file": ctx.parameter_info.get("parameter_file")})
+    elif name == "split_and_diagnostics":
+        tracker.metrics(
+            {
+                "data.training_rows": len(ctx.train_df),
+                "data.test_rows": len(ctx.test_df),
+                "data.total_rows": len(ctx.frame),
+            }
+        )
+        source = str(
+            paths.data_dir()
+            / "training_datasets"
+            / ctx.lead_type_name
+            / f"{ctx.prep_summary['training_table_version']}.parquet"
+        )
+        for label, frame, context in (
+            ("training", ctx.train_df, "training"),
+            ("reserved_test", ctx.test_df, "evaluation"),
+        ):
+            tracker.dataset(frame, label, context, source, config.TARGET_COL)
+        tracker.artifact(
+            {
+                "split": ctx.split_settings,
+                "random_seed": ctx.training_config.random_seed,
+                "early_stopping": ctx.training_config.early_stopping.as_dict(),
+            },
+            "data/split.json",
+        )
+    elif name == "evaluate":
+        tracker.metrics(ctx.model_metrics.to_dict())
+        tracker.metrics(ctx.optimizer_mlflow_metrics or {})
+        tracker.artifact(ctx.monotonicity_summary_dict, "results/monotonicity.json")
+    elif name == "promotion_decision":
+        tracker.params(
+            {
+                f"serving.{key}": value
+                for key, value in (ctx.serving_model_identity or {}).items()
+            }
+        )
+        comparison = ctx.decision.comparison if ctx.decision is not None else {}
+        tracker.metrics(
+            {f"comparison.{key}": value for key, value in comparison.items()}
+        )
+        tracker.metrics(
+            {
+                f"serving.{key}": value
+                for key, value in (ctx.serving_model_metrics or {}).items()
+            }
+        )
+        tracker.metrics(
+            {
+                f"serving_optimizer.{key}": value
+                for key, value in (ctx.serving_optimizer_metrics or {}).items()
+            }
+        )
+        tracker.artifact(
+            {
+                "comparison": comparison,
+                "test_set_id": ctx.test_set_id,
+                "candidate_metrics": ctx.model_metrics.to_dict(),
+                "candidate_optimizer": ctx.optimizer_summary_dict,
+                "serving_metrics": ctx.serving_model_metrics,
+                "serving_optimizer": ctx.serving_optimizer_metrics,
+                "serving_model": ctx.serving_model_identity,
+                "serving_comparable": ctx.serving_model_metrics is not None,
+                "promotion_reason": ctx.promotion_reason,
+            },
+            "results/promotion_comparison.json",
+        )
+    elif name == "save_and_promote":
+        tracker.tags(
+            {
+                "promoted": ctx.promoted,
+                "promotion_status": ctx.promotion_status,
+                "promotion_reason": ctx.promotion_reason,
+                "production_model_version": ctx.manifest.get(
+                    "production_model_version"
+                ),
+            }
+        )
+        ctx.manifest = registry.update_manifest(
+            ctx.lead_type_name,
+            ctx.training_run_id,
+            mlflow_run_id=tracker.run_id,
+            mlflow_experiment_id=tracker.experiment_id,
+            mlflow_tracking_uri=tracker.tracking_uri,
+        )
+
+
+def execute_training(ctx, stage_functions=None, mlflow_function=None):
+    """Shared lifecycle for CLI stages and their existing Prefect task wrappers."""
+    from .mlflow_tracking import RunTracker, tracking_settings
+
+    ctx.training_run_id = registry._new_training_run_id()
+    settings = {}
+    if ctx.register_mlflow:
+        try:
+            settings = tracking_settings(ctx.lead_type_id, "training")
+        except Exception:
+            logger.warning("Could not read training tracking policy.", exc_info=True)
+    tracker = RunTracker(
+        settings,
+        ctx.training_run_id,
+        "training",
+        ctx.lead_type_id,
+        enabled=ctx.register_mlflow and bool(settings),
+    )
+    ctx.tracker = tracker
+    with tracker:
+        tracker.params(
+            {
+                "requested_dataset": ctx.version or "latest",
+                "parameter_file": ctx.parameter_file,
+            }
+        )
+        functions = stage_functions or TRAINING_STAGES
+        if len(functions) != len(TRAINING_STAGES):
+            raise ValueError("Training executor requires all ordered stages.")
+        for original, function in zip(TRAINING_STAGES, functions):
+            name = original.__name__.removeprefix("stage_")
+            with tracker.stage(name):
+                updated = function(ctx)
+                if updated is not None:
+                    ctx = updated
+                _record_training_stage(ctx, name)
+        if ctx.register_mlflow:
+            with tracker.stage("mlflow_artifacts"):
+                (mlflow_function or stage_mlflow)(ctx)
+        return build_result(ctx)
+
+
 def run_training(
     lead_type_id: int,
     version: str | None = None,
@@ -1501,11 +1695,7 @@ def run_training(
         register_mlflow=register_mlflow,
         parameter_file=parameter_file,
     )
-    for stage in TRAINING_STAGES:
-        stage(ctx)
-    if register_mlflow:
-        stage_mlflow(ctx)
-    return build_result(ctx)
+    return execute_training(ctx)
 
 
 def _evaluate_currently_serving_model(
@@ -1517,6 +1707,7 @@ def _evaluate_currently_serving_model(
     bid_step: float,
     chunk_size: int,
     monotonicity_config,
+    tracking_context=None,
 ) -> tuple[dict | None, dict | None]:
     """Evaluate the serving model on the challenger test rows.
 
@@ -1555,6 +1746,14 @@ def _evaluate_currently_serving_model(
     serving_model, serving_manifest = registry.load_currently_serving_model(
         lead_type_name
     )
+    if tracking_context is not None and serving_manifest is not None:
+        tracking_context.serving_model_identity = {
+            "training_run_id": serving_manifest.get("training_run_id")
+            or serving_manifest.get("version"),
+            "production_model_version": serving_manifest.get(
+                "production_model_version"
+            ),
+        }
     if serving_model is None or serving_manifest is None:
         logger.warning(
             "Currently-serving model '%s' for '%s' is configured but could not "
