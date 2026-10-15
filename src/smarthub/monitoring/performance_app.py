@@ -25,6 +25,7 @@ from smarthub.monitoring import transforms
 _BIN_MAP = {"1hr": "1h", "6hr": "6h", "12hr": "12h", "day": "D", "week": "W-MON"}
 
 _FILTER_DIMENSIONS = [
+    "account_id",
     "campaign_id",
     "bidding_strategy_id",
     "traffic_tier",
