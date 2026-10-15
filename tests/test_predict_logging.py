@@ -511,3 +511,55 @@ def test_recommend_bid_non_lgbm_model_leaves_shap_explanation_null(
 
     row = log_store.get(resp.json()["prediction_id"])
     assert row["shap_explanation"] is None
+
+
+def test_parameter_provenance_stays_in_manifest_without_api_schema_changes(
+    client, log_store
+):
+    manifest = registry.save_version(
+        _ConstantWinRateModel(),
+        "auto",
+        feature_cols=["bid"],
+        metrics={},
+        optimizer_summary={},
+        lineage={"model_type": "lightgbm", "calibrated": True},
+        model_params={},
+        training_config={
+            "model_settings": {
+                "model_type": "lightgbm",
+                "model_parameters": {},
+                "calibration": {"enabled": True, "method": "sigmoid", "cv": 3},
+            },
+            "parameter_provenance": {
+                "parameter_version": "params_test",
+                "parameter_source": "parameter_file",
+                "hpo_run_id": "hpo_test",
+                "hpo_mlflow_run_id": "mlflow_test",
+            },
+        },
+        promotion_mode="manual",
+        eligibility_status="eligible",
+        promotion_status="awaiting_manual_promotion",
+        promotion_decision_reason="test",
+    )
+    registry.promote("auto", manifest["training_run_id"])
+    predict.clear_model_cache()
+    response = client.post("/recommend_bid", json={**PAYLOAD, "verbose": True})
+    assert response.status_code == 200
+    row = log_store.recent(limit=1)[0]
+    assert row["model_version"] == manifest["training_run_id"]
+    assert response.json()["model_version"] == manifest["training_run_id"]
+    serving = registry.load_manifest("auto", row["model_version"])
+    assert serving["parameter_version"] == "params_test"
+    assert serving["hpo_run_id"] == "hpo_test"
+    new_fields = {
+        "training_run_id",
+        "production_model_version",
+        "parameter_version",
+        "parameter_source",
+        "hpo_run_id",
+        "hpo_mlflow_run_id",
+        "calibration_method",
+    }
+    assert not new_fields.intersection(response.json())
+    assert not new_fields.intersection(row)

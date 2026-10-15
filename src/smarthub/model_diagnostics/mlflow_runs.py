@@ -16,9 +16,9 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-# Training logs each run's evaluation files under this artifact sub-path
-# (mlflow.log_artifacts(report_dir, artifact_path="reports") in mlflow_utils).
+# New runs store row-level tables under data; older runs used reports.
 REPORTS_ARTIFACT_PATH = "reports"
+DATA_ARTIFACT_PATH = "data"
 OPTIMIZER_CSV = "bid_optimizer_test_rows.csv"
 
 
@@ -119,7 +119,7 @@ def list_runs(
 
 
 def download_reports(run_id: str, dst_path: str | None = None) -> str:
-    """Download a run's ``reports/`` artifacts locally; return the local dir path.
+    """Download evaluation tables, accepting both new and legacy run layouts.
 
     MLflow resolves the artifact location from the run (file store or S3), so
     this works regardless of where artifacts live.
@@ -129,9 +129,14 @@ def download_reports(run_id: str, dst_path: str | None = None) -> str:
     uri = tracking_uri()
     if uri:
         mlflow.set_tracking_uri(uri)
+    root_artifacts = _client().list_artifacts(run_id)
+    folders = {item.path for item in root_artifacts if item.is_dir}
+    artifact_path = (
+        DATA_ARTIFACT_PATH if DATA_ARTIFACT_PATH in folders else REPORTS_ARTIFACT_PATH
+    )
     return mlflow.artifacts.download_artifacts(
         run_id=run_id,
-        artifact_path=REPORTS_ARTIFACT_PATH,
+        artifact_path=artifact_path,
         dst_path=dst_path,
     )
 
@@ -139,13 +144,13 @@ def download_reports(run_id: str, dst_path: str | None = None) -> str:
 def optimizer_csv_path(run_id: str, dst_path: str | None = None) -> str:
     """Return the local path to a run's ``bid_optimizer_test_rows.csv``.
 
-    Downloads the run's ``reports/`` artifacts and locates the optimizer CSV
+    Downloads the run's ``data/`` (or legacy ``reports/``) artifacts and locates the CSV
     within them.
 
     Raises
     ------
     FileNotFoundError
-        If the run has no optimizer evaluation CSV under ``reports/``.
+        If the run has no optimizer evaluation CSV in its evaluation tables.
     """
     import os.path as osp
 
@@ -158,5 +163,5 @@ def optimizer_csv_path(run_id: str, dst_path: str | None = None) -> str:
         if OPTIMIZER_CSV in files:
             return osp.join(root, OPTIMIZER_CSV)
     raise FileNotFoundError(
-        f"No {OPTIMIZER_CSV} found in the 'reports' artifacts of run {run_id}."
+        f"No {OPTIMIZER_CSV} found in the evaluation-table artifacts of run {run_id}."
     )
