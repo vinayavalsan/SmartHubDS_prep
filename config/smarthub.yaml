@@ -143,3 +143,13 @@ model_degradation:
   warning_zscore: -2.0
   critical_winrate_deviation: 0.20
   critical_zscore: -3.0
+
+# Informational account-level comparison; no warning/critical classifications.
+# Schedule lives in prefect.yaml. Reads raw leads, not prediction logs.
+strategy_comparison:
+  enabled: true
+  # UTC-aligned periods: 00-04, 04-08, 08-12, 12-16, 16-20, 20-24.
+  # Independent scheduled summary; each completed period is sent once.
+  window_hours: 4
+  # Display small samples with an asterisk rather than removing them.
+  min_opportunities: 100

@@ -105,6 +105,7 @@ _FEATURE_STYLE_MAP = {
     "measured_winrate": dict(color="#2ca02c", dash="solid"),
     "ml_predicted_winrate": dict(color="#1f77b4", dash="dash"),
     "average_bid": dict(color="#000000", dash="solid"),
+    "average_bid_on_wins": dict(color="#2ca02c", dash="dash"),
     "median_bid": dict(color="#7f7f7f", dash="dot"),
     "ml_recommended_bid": dict(color="#1f77b4", dash="dash"),
     "realized_cm": dict(color="#9467bd", dash="solid"),
@@ -167,6 +168,7 @@ _FEATURE_EXCLUDE = {
     "expected_revenue_on_wins",
     "expected_profit_on_wins",
     "bid_on_wins",
+    "avg_bid_on_wins",
     "measured_winrate",
     "p_sold_given_won",
     "profit_realization_rate",
@@ -760,6 +762,9 @@ def _build_feature_summary(
 
     total_rows = float(summary["leads"].sum())
     summary["fraction_of_filtered_rows"] = summary["leads"] / total_rows
+    summary["avg_bid_on_wins"] = summary["bid_on_wins"] / summary["wins"].where(
+        summary["wins"].gt(0)
+    )
     summary["realized_revenue_per_lead"] = (
         summary["realized_revenue"] / summary["leads"]
     )
@@ -916,7 +921,7 @@ def _feature_win_rate_chart(
 
 
 def _feature_bid_chart(summary: pd.DataFrame, feature: str, kind: str) -> go.Figure:
-    """Plot average and median actual bid by feature."""
+    """Plot actual bid averages (all leads and wins) and median by feature."""
     labels = summary["feature_bucket"].astype(str).tolist()
     fig = go.Figure()
     fig.add_trace(
@@ -937,6 +942,16 @@ def _feature_bid_chart(summary: pd.DataFrame, feature: str, kind: str) -> go.Fig
             name="Median bid",
             line=_FEATURE_STYLE_MAP["median_bid"],
             marker=dict(color=_FEATURE_STYLE_MAP["median_bid"]["color"]),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=labels,
+            y=summary["avg_bid_on_wins"],
+            mode=_feature_trace_mode(kind),
+            name="Average bid on wins",
+            line=_FEATURE_STYLE_MAP["average_bid_on_wins"],
+            marker=dict(color=_FEATURE_STYLE_MAP["average_bid_on_wins"]["color"]),
         )
     )
     if "avg_recommended_bid" in summary.columns:

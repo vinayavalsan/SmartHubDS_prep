@@ -1,4 +1,4 @@
-"""Prefect orchestration for hourly SmartHub model-degradation monitoring."""
+"""Independent SmartHub degradation and strategy-summary flows."""
 
 from __future__ import annotations
 
@@ -10,12 +10,26 @@ from prefect import flow, get_run_logger, task
 from smarthub.core import notifications
 from smarthub.core.lead_types import lead_type_name as resolve_lead_type_name
 from smarthub.monitoring.model_degradation import check_once
+from smarthub.monitoring.strategy_comparison import (
+    check_once as check_strategy_comparison,
+)
 
 
 @task(name="check-model-degradation", retries=2, retry_delay_seconds=60)
 def check_model_degradation(lead_type_id: int) -> pd.DataFrame:
     """Run one degradation check for a registered lead type."""
     return check_once(lead_type_id=lead_type_id)
+
+
+@task(name="strategy-comparison-summary", retries=2, retry_delay_seconds=60)
+def send_strategy_summary(lead_type_id: int, as_of: str | None = None) -> int:
+    """Run a summary from persisted data; no other flow is called or awaited."""
+    return len(
+        check_strategy_comparison(
+            lead_type_id=lead_type_id,
+            as_of=as_of,
+        )
+    )
 
 
 @flow(
@@ -53,6 +67,19 @@ def model_degradation_flow(lead_type_id: int) -> dict[str, object]:
     }
     logger.info("Model degradation monitoring completed: %s.", result)
     return result
+
+
+@flow(
+    name="smarthub-strategy-comparison",
+    log_prints=True,
+    on_failure=[notifications.flow_failure_hook],
+)
+def strategy_comparison_flow(lead_type_id: int, as_of: str | None = None) -> dict:
+    """Single-type summary flow, independent of data pull and degradation."""
+    return {
+        "lead_type_id": lead_type_id,
+        "strategy_rows": send_strategy_summary(lead_type_id, as_of),
+    }
 
 
 def _parse_args() -> argparse.Namespace:

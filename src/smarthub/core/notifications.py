@@ -288,6 +288,59 @@ def _build_grouped_payload(
     return _assemble(head, rows, footer_extra)
 
 
+def build_table_payload(
+    pipeline: str,
+    table: str,
+    *,
+    subject: str | None = None,
+    headline: str | None = None,
+    footer_extra: str | None = None,
+) -> dict:
+    """Build an informational table with the shared title and UTC footer.
+
+    Uses the same column-aligned code-block sections as model degradation.
+    This is formatting only: callers choose when and where to deliver it.
+    """
+    title = _title(_SUCCESS, pipeline, subject, status="SUMMARY")
+    head = title + ("\n" + headline if headline else "")
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": head}}]
+    chunk = []
+    for line in table.splitlines():
+        line = line.replace("```", "")
+        if len("\n".join(chunk + [line])) > 2800 and chunk:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "```\n" + "\n".join(chunk) + "\n```",
+                    },
+                }
+            )
+            chunk = []
+        chunk.append(line[:2800])
+    if chunk:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "```\n" + "\n".join(chunk) + "\n```",
+                },
+            }
+        )
+    footer = f"env: `{_env_label()}` · {_utc_now_str()}"
+    if footer_extra:
+        footer += f" · {footer_extra}"
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": footer}],
+        }
+    )
+    return {"text": head + "\n" + table + "\n" + footer, "blocks": blocks}
+
+
 def _category(severity: str) -> str:
     """Channel category for a severity (defaults to ``failures`` if unknown)."""
     return _SEVERITY_CATEGORY.get(severity, "failures")
