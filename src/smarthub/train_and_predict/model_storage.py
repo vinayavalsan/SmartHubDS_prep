@@ -218,11 +218,26 @@ class S3ModelStore(ModelStore):
             raise
 
     def local_path(self, key: str) -> Path:
+        import os
         import tempfile
 
         cache_root = self._cache_dir or Path(tempfile.gettempdir()) / "smarthub_models"
         dest = cache_root / key
         if not dest.exists():
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(self.read_bytes(key))
+            data = self.read_bytes(key)
+            # Atomic publish: download into a unique temp file in the same dir,
+            # then os.replace() into place. Multiple serve workers can race here on
+            # a fresh container (empty cache); each writes its own temp file and
+            # the rename is atomic, so ``dest`` is only ever seen fully-written.
+            # Without this, a worker reading ``dest`` mid-write got an empty/partial
+            # file -> joblib.load EOFError at startup.
+            fd, tmp = tempfile.mkstemp(dir=str(dest.parent), suffix=".part")
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                os.replace(tmp, dest)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
         return dest
