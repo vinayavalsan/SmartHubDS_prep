@@ -445,10 +445,12 @@ def _report(lead_type_id, min_s, max_s, df, result, prev_wm, new_wm) -> None:
 def prediction_log_refresh_flow(
     overlap_hours: float = 2.0,
     default_lookback_hours: float = 24.0,
+    lead_type_id: int | None = None,
 ) -> dict:
-    """Hourly refresh of prediction_monitoring.parquet for ALL lead types.
+    """Refresh prediction monitoring for one lead type (or all if omitted).
 
-    Independent of the 4-hourly leads pull: resolves its own incremental window
+    Each scheduled lead type has its own watermark. Independently of leads
+    pull, it resolves its own incremental window
     from a dedicated watermark, pulls the prediction logs created in that window,
     joins outcomes, and upserts the monitoring parquet. ``overlap_hours`` re-pulls
     a little before the watermark so outcomes that resolve late still get filled
@@ -459,9 +461,11 @@ def prediction_log_refresh_flow(
 
     logger = get_run_logger()
     var_name = "prediction_log_last_pull_timestamp"
+    if lead_type_id is not None:
+        var_name += "_" + resolve_lead_type_name(lead_type_id)
     min_s, max_s = resolve_window(var_name, overlap_hours, default_lookback_hours)
     logger.info("prediction-log refresh window %s -> %s", min_s, max_s)
-    result = pull_and_persist_prediction_logs(min_s, max_s)
+    result = pull_and_persist_prediction_logs(min_s, max_s, lead_type_id)
     if result.get("prediction_rows", 0):
         Variable.set(var_name, max_s, overwrite=True)
     logger.info("prediction-log refresh result: %s", result)

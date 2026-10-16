@@ -10,7 +10,9 @@ pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /app
 
-# Pipeline order (IMPORTANT): 1) data-pull -> 2) build-features -> 3) train-model.
+# Independent schedules; cron does not wait for other workflows to finish.
+# Planned order: data pull -> prediction refresh -> monitoring. Feature builds
+# read raw lead files after the planned pull window.
 # data-pull loads leads into storage; build-features reads that data to build the
 # training table; train-model trains + evaluates the model from that table. Each
 # downstream step fails with a clear "run the previous step first" message if its
@@ -18,13 +20,14 @@ pull:
 # train_and_predict via preprocessing.prepare_training_data).
 deployments:
   # STEP 1 — RUN FIRST.
-  # One deployment, two schedules — one per lead type (per-schedule parameters).
+  # Home is scheduled two minutes after auto in every workflow.
   - name: data-pull
     entrypoint: src/smarthub/data_pull/flow.py:data_pull_flow
     description: >-
       STEP 1 of 3 - RUN THIS FIRST. Pulls leads from Redshift into storage.
       build-features (STEP 2) and train-model (STEP 3) depend on it.
     tags: ["step-1-run-first", "pipeline-smarthub"]
+    concurrency_limit: 1
     work_pool:
       name: smarthub-pool
       work_queue_name: default
@@ -34,11 +37,11 @@ deployments:
       with_expected_revenue: true
       selected_only: true
     schedules:
-      - cron: "0 */4 * * *"
+      - cron: "0 * * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-      - cron: "15 */4 * * *"
+      - cron: "2 * * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 1
@@ -51,20 +54,19 @@ deployments:
       pulled leads. If no data exists yet, it fails asking you to run
       data-pull (STEP 1) first.
     tags: ["step-2-run-after-data-pull", "pipeline-smarthub"]
+    concurrency_limit: 1
     work_pool:
       name: smarthub-pool
       work_queue_name: features
     schedules:
-      - cron: "30 */4 * * *"
+      - cron: "5 */4 * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-          lead_type_name: auto
-      - cron: "45 */4 * * *"
+      - cron: "7 */4 * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 1
-          lead_type_name: home
 
   # STEP 3 — RUN AFTER build-features.
   - name: train-model
@@ -81,46 +83,44 @@ deployments:
     parameters:
       register_mlflow: true
     schedules:
-      - cron: "0 5 * * *"
+      - cron: "0 10 * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-      - cron: "20 5 * * *"
+      - cron: "2 10 * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 1
 
-  # DISABLED 2026-09-17 (worker crash-loop fix): the entrypoint below,
-  # src/smarthub/monitoring/flow.py:model_degradation_flow, does NOT exist on
-  # this branch (there is no monitoring/flow.py, and no model_degradation_flow
-  # is defined anywhere in src/smarthub). `prefect deploy` fails on it, which
-  # exits the worker's startup non-zero and Docker restart-loops prefect-worker.
-  # Re-enable once the monitoring flow is implemented and this entrypoint fixed.
-  # - name: model-degradation
-  #   entrypoint: src/smarthub/monitoring/flow.py:model_degradation_flow
-  #   description: >-
-  #     Compares realized auction wins with predicted win probabilities and
-  #     notifies Slack when a persisted warning or critical status changes.
-  #   tags: ["monitoring", "model-degradation", "pipeline-smarthub"]
-  #   work_pool:
-  #     name: smarthub-pool
-  #     work_queue_name: monitoring
-  #   schedules:
-  #     - cron: "5 * * * *"
-  #       timezone: "UTC"
-  #       parameters:
-  #         lead_type_id: 6
-  #     - cron: "10 * * * *"
-  #       timezone: "UTC"
-  #       parameters:
-  #         lead_type_id: 1
+  # Hourly predicted-versus-realized model degradation checks.
+  - name: model-degradation
+    entrypoint: src/smarthub/monitoring/flow.py:model_degradation_flow
+    description: >-
+      Compares realized auction wins with predicted win probabilities and
+      notifies Slack when a persisted warning or critical status changes.
+    tags: ["monitoring", "model-degradation", "pipeline-smarthub"]
+    concurrency_limit: 1
+    work_pool:
+      name: smarthub-pool
+      work_queue_name: monitoring
+    schedules:
+      - cron: "20 * * * *"
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 6
+      - cron: "22 * * * *"
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 1
 
   - name: prediction-log-refresh
     entrypoint: src/smarthub/data_pull/flow.py:prediction_log_refresh_flow
     description: >-
       Hourly refresh of prediction_monitoring.parquet (all lead types),
-      independent of the 4-hourly data-pull. Upserts on prediction_id.
+      independent of hourly data-pull; scoped to the scheduled lead type.
+      Upserts on prediction_id.
     tags: ["monitoring", "pipeline-smarthub"]
+    concurrency_limit: 1
     work_pool:
       name: smarthub-pool
       work_queue_name: monitoring
@@ -128,5 +128,32 @@ deployments:
       overlap_hours: 2
       default_lookback_hours: 24
     schedules:
-      - cron: "0 * * * *"
+      - cron: "15 * * * *"
         timezone: "UTC"
+        parameters:
+          lead_type_id: 6
+      - cron: "17 * * * *"
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 1
+
+  # Separate schedule and flow function in the existing monitoring flow file.
+  - name: strategy-comparison
+    entrypoint: src/smarthub/monitoring/flow.py:strategy_comparison_flow
+    description: >-
+      Informational strategy comparison for the latest completed four-hour UTC
+      window. Runs independently after the planned prediction refresh slot.
+    tags: ["monitoring", "strategy-comparison", "pipeline-smarthub"]
+    concurrency_limit: 1
+    work_pool:
+      name: smarthub-pool
+      work_queue_name: monitoring
+    schedules:
+      - cron: "25 */4 * * *"
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 6
+      - cron: "27 */4 * * *"
+        timezone: "UTC"
+        parameters:
+          lead_type_id: 1
