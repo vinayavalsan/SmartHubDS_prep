@@ -68,24 +68,33 @@ deployments:
 
   # STEP 3 — RUN AFTER build-features.
   - name: train-model
-    entrypoint: src/smarthub/train_and_predict/flow.py:train_flow
+    concurrency_limit:
+      limit: 1
+      collision_strategy: ENQUEUE
+    entrypoint: src/smarthub/train_and_predict/hpo_flow.py:daily_model_cycle
     description: >-
-      STEP 3 of 3 - RUN AFTER build-features. Trains + evaluates the Anton
-      win-probability model from the training table and runs the offline bid
-      optimizer. Fails asking you to run build-features (STEP 2) first if no
-      training table exists.
+      STEP 3 of 3 - RUN AFTER build-features. Runs the daily model cycle:
+      fixed-cadence HPO and candidate training when due, next-day HPO retries
+      until promotion, otherwise training with current approved parameters.
     tags: ["step-3-run-after-build-features", "pipeline-smarthub"]
     work_pool:
       name: smarthub-pool
       work_queue_name: training
     parameters:
       register_mlflow: true
+      # HPO timing policy shared by auto and home. Per-schedule parameters can
+      # override this mapping when a lead type needs a different cadence.
+      hpo_schedule:
+        interval_days: 14
+        retry_days: 1
+        anchor_date: "2026-10-05"
+        timezone: "UTC"
     schedules:
       - cron: "0 5 * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 6
-      - cron: "20 5 * * *"
+      - cron: "0 8 * * *"
         timezone: "UTC"
         parameters:
           lead_type_id: 1

@@ -1,10 +1,9 @@
-"""Tests for the model-diagnostics MLflow run discovery + artifact loading.
-
-The MLflow client and artifact download are mocked, so no MLflow install or
-network is needed (mlflow is imported lazily inside mlflow_runs).
-"""
+"""Model diagnostics and compatibility with historical MLflow artifacts."""
 
 from __future__ import annotations
+
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,12 +11,14 @@ from smarthub.model_diagnostics import mlflow_runs
 
 
 class _RunData:
+
     def __init__(self, tags, metrics):
         self.tags = tags
         self.metrics = metrics
 
 
 class _RunInfo:
+
     def __init__(self, run_id, exp_id, start_time, run_name):
         self.run_id = run_id
         self.experiment_id = exp_id
@@ -26,11 +27,12 @@ class _RunInfo:
 
 
 class _Run:
+
     def __init__(
         self,
         run_id,
         exp_id,
-        start_time=1_700_000_000_000,
+        start_time=1700000000000,
         run_name="run",
         tags=None,
         metrics=None,
@@ -40,12 +42,14 @@ class _Run:
 
 
 class _Exp:
+
     def __init__(self, exp_id, name):
         self.experiment_id = exp_id
         self.name = name
 
 
 class _Client:
+
     def __init__(self, experiments, runs):
         self._experiments = experiments
         self._runs = runs
@@ -69,19 +73,15 @@ def test_summarise_builds_label_and_id():
     info = mlflow_runs._summarise(run, "SmartHub Production_auto")
     assert info.run_id == "abcdef1234567890"
     assert info.lead_type == "auto"
-    assert "abcdef12" in info.label  # short id in the label
+    assert "abcdef12" in info.label
     assert "ROC 0.812" in info.label
     assert "SmartHub Production_auto" in info.label
 
 
 def test_list_runs_filters_by_prefix(monkeypatch):
-    experiments = [
-        _Exp("1", "SmartHub Production_auto"),
-        _Exp("2", "Something Else"),
-    ]
+    experiments = [_Exp("1", "SmartHub Production_auto"), _Exp("2", "Something Else")]
     runs = [_Run("r1", "1"), _Run("r2", "2")]
     monkeypatch.setattr(mlflow_runs, "_client", lambda: _Client(experiments, runs))
-
     got = mlflow_runs.list_runs(experiment_prefix="SmartHub Production")
     assert [r.run_id for r in got] == ["r1"]
 
@@ -90,7 +90,6 @@ def test_list_runs_all_experiments(monkeypatch):
     experiments = [_Exp("1", "A"), _Exp("2", "B")]
     runs = [_Run("r1", "1"), _Run("r2", "2")]
     monkeypatch.setattr(mlflow_runs, "_client", lambda: _Client(experiments, runs))
-
     got = mlflow_runs.list_runs()
     assert {r.run_id for r in got} == {"r1", "r2"}
 
@@ -135,17 +134,45 @@ def test_optimizer_csv_path_missing_raises(monkeypatch, tmp_path):
 
 
 def test_diagnostics_url_tag_helper(monkeypatch):
-    # mlflow_utils imports mlflow at module top, so gate on the ml extra.
     pytest.importorskip("mlflow")
     from smarthub.train_and_predict import mlflow_utils
 
     monkeypatch.delenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", raising=False)
     assert mlflow_utils._model_diagnostics_url("r1") is None
-
     monkeypatch.setenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", "http://host:8511")
     assert mlflow_utils._model_diagnostics_url("r1") == "http://host:8511?run_id=r1"
-
     monkeypatch.setenv("SMARTHUB_MODEL_DIAGNOSTICS_URL", "http://host:8511/d?x=1")
     assert (
         mlflow_utils._model_diagnostics_url("r1") == "http://host:8511/d?x=1&run_id=r1"
     )
+
+
+@pytest.mark.parametrize(
+    "folders,expected",
+    [(["data", "plots", "results"], "data"), (["reports", "comparison"], "reports")],
+)
+def test_diagnostics_downloads_new_or_legacy_evaluation_tables(
+    monkeypatch, folders, expected
+):
+    client = SimpleNamespace(
+        list_artifacts=lambda run_id: [
+            SimpleNamespace(path=folder, is_dir=True) for folder in folders
+        ]
+    )
+    monkeypatch.setattr(mlflow_runs, "_client", lambda: client)
+    monkeypatch.setattr(mlflow_runs, "tracking_uri", lambda: None)
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        return "/tmp/evaluation"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "mlflow",
+        SimpleNamespace(artifacts=SimpleNamespace(download_artifacts=download)),
+    )
+    assert mlflow_runs.download_reports("run_test", "/tmp") == "/tmp/evaluation"
+    assert calls == [
+        {"run_id": "run_test", "artifact_path": expected, "dst_path": "/tmp"}
+    ]
