@@ -35,17 +35,7 @@ dependencies = [
 # Code quality: black + isort (formatting/import order, enforced by
 # pre-commit and CI — see .pre-commit-config.yaml and [tool.black]/
 # [tool.isort] below) and pre-commit itself (`pre-commit install`).
-# API tests use Starlette TestClient: current versions use httpx2;
-# earlier supported FastAPI/Starlette versions use httpx.
-dev = [
-    "pytest>=8.0",
-    "flake8>=7.0",
-    "black>=24.0",
-    "isort>=5.13",
-    "pre-commit>=3.6",
-    "httpx>=0.27",
-    "httpx2",
-]
+dev = ["pytest>=8.0", "flake8>=7.0", "black>=24.0", "isort>=5.13", "pre-commit>=3.6"]
 orchestration = ["prefect>=3.0"]
 # Data validation (D1) — pandera schema/range/domain checks on the pull.
 validation = ["pandera>=0.20"]
@@ -60,7 +50,6 @@ ml = [
     # migration -- pin so the schema only moves when we bump this on purpose
     # (bump + run `mlflow db upgrade` together). See docs/SERVING notes.
     "mlflow==3.16.0",
-    "psutil>=5.9",
     "joblib>=1.3",
     "fastapi>=0.110",
     "uvicorn>=0.29",
