@@ -1,8 +1,10 @@
 """MLflow integration for SmartHub model training and promotion."""
 
+import json
 import logging
 import math
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import mlflow
@@ -149,6 +151,8 @@ def log_training_run(
     extra_params=None,
     extra_tags=None,
     optimizer_metrics=None,
+    resolved_training_config=None,
+    run_id=None,
 ):
     """Log a complete SmartHub training run to MLflow.
 
@@ -169,7 +173,7 @@ def log_training_run(
         experiment_name,
     )
 
-    with mlflow.start_run(experiment_id=experiment_id, run_name=run_name) as run:
+    with _logging_run(experiment_id, run_name, run_id) as run:
         mlflow.log_param("feature_count", len(feature_cols))
         mlflow.log_param("features", ",".join(feature_cols))
 
@@ -189,9 +193,10 @@ def log_training_run(
             if _is_loggable_number(metric_value):
                 mlflow.log_metric(metric_name, metric_value)
 
-        mlflow.log_artifacts(report_dir, artifact_path="reports")
+        _log_training_artifacts(Path(report_dir))
+        mlflow.set_tag("run_type", "training")
         if comparison_artifact_dir:
-            comparison_artifact_path = "comparison"
+            comparison_artifact_path = "data/comparison"
             mlflow.log_artifacts(
                 comparison_artifact_dir,
                 artifact_path=comparison_artifact_path,
@@ -221,6 +226,8 @@ def log_training_run(
             str(training_config_path),
             artifact_path="config",
         )
+        if resolved_training_config is not None:
+            mlflow.log_dict(resolved_training_config, "config/resolved_config.json")
         mlflow.log_params(dict(model_params))
         mlflow.sklearn.log_model(
             sk_model=model,
@@ -240,6 +247,120 @@ def log_training_run(
             "mlflow_tracking_uri": tracking_uri,
             "mlflow_model_uri": f"runs:/{run.info.run_id}/model",
         }
+
+
+@contextmanager
+def _logging_run(experiment_id, run_name, run_id=None):
+    """Reuse a lifecycle run without ending it before the outer workflow ends."""
+    if run_id is None:
+        with mlflow.start_run(experiment_id=experiment_id, run_name=run_name) as run:
+            yield run
+    else:
+        run = mlflow.start_run(run_id=run_id, nested=True)
+        try:
+            yield run
+        finally:
+            mlflow.end_run(status="RUNNING")
+
+
+def log_hpo_run(
+    run_output_dir, settings, lead_type_name, resolved_search_config=None, run_id=None
+):
+    """Record a completed HPO search and its immutable parameter artifact."""
+    import yaml
+
+    folder = Path(run_output_dir)
+    summary = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
+    parameter_path = folder / "best_parameters.yaml"
+    artifact = yaml.safe_load(parameter_path.read_text(encoding="utf-8"))
+    tracking_uri, experiment_id = _configure_tracking(
+        settings["tracking_db_path"],
+        settings["artifact_root"],
+        f"{settings['experiment_name']}_{lead_type_name}",
+    )
+    with _logging_run(experiment_id, artifact["hpo_run_id"], run_id) as run:
+        metadata = {
+            "hpo_mlflow_run_id": run.info.run_id,
+            "hpo_mlflow_tracking_uri": tracking_uri,
+        }
+        # Tracking IDs belong in the summary, not the reusable parameter YAML.
+        summary.update(metadata)
+        (folder / "summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        for key in (
+            "lead_type_id",
+            "model_type",
+            "training_table_version",
+            "parameter_version",
+            "hpo_run_id",
+            "code_version",
+        ):
+            if summary.get(key) is not None:
+                mlflow.log_param(key, summary[key])
+        mlflow.log_params(artifact["model_settings"]["model_parameters"])
+        for key, value in artifact["model_settings"]["calibration"].items():
+            mlflow.log_param(f"calibration_{key}", value)
+        for group in (
+            "selected_holdout_probability_metrics",
+            "selected_optimizer_metrics",
+        ):
+            for key, value in (summary.get(group) or {}).items():
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    mlflow.log_metric(f"{group}_{key}", value)
+        _log_hpo_artifacts(folder)
+        if resolved_search_config is not None:
+            mlflow.log_dict(resolved_search_config, "config/resolved_config.json")
+        if artifact.get("data") is not None:
+            mlflow.log_dict(artifact["data"], "data/dataset.json")
+        mlflow.set_tag("run_type", "hpo")
+        return metadata
+
+
+_PLOT_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".pdf", ".html"}
+_TABLE_SUFFIXES = {".csv", ".parquet", ".tsv", ".npz"}
+
+
+def _log_training_artifacts(folder: Path) -> None:
+    """Organize existing local reports without changing their local layout."""
+    for file in sorted(folder.rglob("*")):
+        if not file.is_file():
+            continue
+        relative = file.relative_to(folder)
+        if file.suffix.lower() in _PLOT_SUFFIXES:
+            destination = "plots"
+        elif file.suffix.lower() in _TABLE_SUFFIXES:
+            destination = "data"
+        else:
+            destination = "results"
+        if relative.parent != Path("."):
+            destination += "/" + relative.parent.as_posix()
+        if relative == Path("model_evaluation_summary.json"):
+            mlflow.log_dict(
+                json.loads(file.read_text(encoding="utf-8")), "results/summary.json"
+            )
+        else:
+            mlflow.log_artifact(str(file), artifact_path=destination)
+
+
+def _log_hpo_artifacts(folder: Path) -> None:
+    """Use the same artifact categories as model-training runs."""
+    for file in sorted(folder.iterdir()):
+        if not file.is_file():
+            continue
+        if file.name == "hyperparameter_search.yaml":
+            destination = "config"
+        elif file.suffix.lower() in _TABLE_SUFFIXES:
+            destination = "data"
+        else:
+            destination = "results"
+        mlflow.log_artifact(str(file), artifact_path=destination)
+    plots_dir = folder / "plots"
+    plot_files = sorted(plots_dir.glob("*.html"))
+    for file in plot_files:
+        mlflow.log_artifact(str(file), artifact_path="plots")
+    if not plot_files:
+        logger.warning("No HPO HTML plots found for MLflow upload: %s", plots_dir)
 
 
 def _find_training_run(client, experiment_id, training_run_id):
